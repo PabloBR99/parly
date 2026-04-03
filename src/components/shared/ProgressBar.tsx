@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 interface Props {
@@ -6,9 +6,14 @@ interface Props {
 }
 
 export function ProgressBar({ progress }: Props): React.JSX.Element {
+  const fillStyle = useMemo(
+    () => [styles.fill, { width: `${Math.min(100, Math.max(0, progress))}%` as const }],
+    [progress],
+  );
+
   return (
     <View style={styles.track}>
-      <View style={[styles.fill, { width: `${Math.min(100, Math.max(0, progress))}%` }]} />
+      <View style={fillStyle} />
     </View>
   );
 }

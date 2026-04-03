@@ -1,44 +1,69 @@
-import React, { useCallback } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Pressable,
+  StatusBar,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useModelStore } from '../store/modelStore';
-import { useSettingsStore } from '../store/settingsStore';
-import { initModels } from '../services/models/ModelManager';
 import { startVADMode, stopVADMode } from '../services/audio/VADController';
-import { SplitScreenLayout } from '../components/conversation/SplitScreenLayout';
-import { PersonPanel } from '../components/conversation/PersonPanel';
-import { LoadingOverlay } from '../components/shared/LoadingOverlay';
+import { initModels } from '../services/models/ModelManager';
+import { GlassPanel } from '../components/glass/GlassPanel';
+import { BreathingDivider } from '../components/glass/BreathingDivider';
+import { HistorySheet } from '../components/glass/HistorySheet';
+import { GlassLoadingOverlay } from '../components/shared/GlassLoadingOverlay';
+import { useConversationStore } from '../store/conversationStore';
 import type { RootStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Conversation'>;
 
 export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   const whisperStatus = useModelStore(s => s.whisperStatus);
-  const zipvoiceStatus = useModelStore(s => s.zipvoiceStatus);
-  const whisperProgress = useModelStore(s => s.whisperProgress);
-  const zipvoiceProgress = useModelStore(s => s.zipvoiceProgress);
   const whisperError = useModelStore(s => s.whisperError);
-  const inputMode = useSettingsStore(s => s.inputMode);
-  const setInputMode = useSettingsStore(s => s.setInputMode);
+  const whisperProgress = useModelStore(s => s.whisperProgress);
+  const activeSpeaker = useConversationStore(s => s.activeSpeaker);
+  const pipelineStage = useConversationStore(s => s.pipelineStage);
+  const insets = useSafeAreaInsets();
 
-  const toggleMode = useCallback(() => {
-    if (inputMode === 'ptt') {
-      setInputMode('vad');
+  const [historyVisible, setHistoryVisible] = useState(false);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-start VAD when models are ready
+  useEffect(() => {
+    if (whisperStatus === 'ready') {
       startVADMode();
-    } else {
-      stopVADMode();
-      setInputMode('ptt');
     }
-  }, [inputMode, setInputMode]);
+    return () => {
+      stopVADMode();
+    };
+  }, [whisperStatus]);
 
+  const handleDividerPressIn = useCallback(() => {
+    // Long-press (600ms) on divider → open settings
+    longPressTimer.current = setTimeout(() => {
+      navigation.navigate('Settings');
+    }, 600);
+  }, [navigation]);
+
+  const handleDividerPressOut = useCallback(() => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }, []);
+
+  // Loading / error states
   if (whisperStatus === 'error') {
     return (
-      <View style={styles.error}>
-        <Text style={styles.errorTitle}>Error cargando modelo STT</Text>
+      <View style={styles.errorContainer}>
+        <StatusBar barStyle="light-content" backgroundColor="#000" />
+        <Text style={styles.errorTitle}>Error cargando modelo</Text>
         <Text style={styles.errorMsg}>{whisperError}</Text>
         <Pressable style={styles.retryBtn} onPress={() => void initModels()}>
-          <Text style={styles.retryTxt}>Reintentar</Text>
+          <Text style={styles.retryText}>Reintentar</Text>
         </Pressable>
       </View>
     );
@@ -46,107 +71,135 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
 
   if (whisperStatus !== 'ready') {
     return (
-      <LoadingOverlay
-        whisperStatus={whisperStatus}
-        zipvoiceStatus={zipvoiceStatus}
-        whisperProgress={whisperProgress}
-        zipvoiceProgress={zipvoiceProgress}
+      <GlassLoadingOverlay
+        status={whisperStatus}
+        progress={whisperProgress}
       />
     );
   }
 
   return (
-    <SafeAreaProvider>
-      <View style={styles.container}>
-        <SplitScreenLayout
-          topPanel={<PersonPanel personId="person_b" inverted />}
-          bottomPanel={<PersonPanel personId="person_a" />}
-        />
-        {/* Mode toggle + settings — floating on the divider */}
-        <View style={styles.modeToggleWrap}>
-          <Pressable style={styles.modeToggle} onPress={toggleMode}>
-            <Text style={styles.modeToggleText}>
-              {inputMode === 'ptt' ? 'PTT' : 'AUTO'}
-            </Text>
-          </Pressable>
-          <Pressable style={styles.gearBtn} onPress={() => navigation.navigate('Settings')}>
-            <Text style={styles.gearIcon}>⚙</Text>
-          </Pressable>
+    <View style={styles.root}>
+      <StatusBar barStyle="light-content" backgroundColor="#000" />
+
+      {/* Top half — person_b, rotated 180° so they read from across the table */}
+      <View
+        style={[
+          styles.half,
+          styles.topHalf,
+          { paddingBottom: insets.top },
+        ]}
+      >
+        <View style={styles.rotated}>
+          <GlassPanel personId="person_b" />
         </View>
       </View>
-    </SafeAreaProvider>
+
+      {/* Breathing divider — long-press opens settings */}
+      <Pressable
+        onPressIn={handleDividerPressIn}
+        onPressOut={handleDividerPressOut}
+        style={styles.dividerArea}
+      >
+        <BreathingDivider
+          activeSpeaker={activeSpeaker}
+          pipelineStage={pipelineStage}
+        />
+      </Pressable>
+
+      {/* Bottom half — person_a, normal orientation */}
+      <View
+        style={[
+          styles.half,
+          styles.bottomHalf,
+          { paddingBottom: insets.bottom },
+        ]}
+      >
+        <GlassPanel personId="person_a" />
+      </View>
+
+      {/* Swipe-up history hint */}
+      <Pressable
+        style={styles.historyHint}
+        onPress={() => setHistoryVisible(true)}
+      >
+        <Text style={styles.historyHintText}>↑</Text>
+      </Pressable>
+
+      {/* History sheet overlay */}
+      <HistorySheet
+        visible={historyVisible}
+        onClose={() => setHistoryVisible(false)}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  root: {
     flex: 1,
-    backgroundColor: '#0f0f0f',
+    backgroundColor: '#000000',
   },
-  error: {
+  half: {
     flex: 1,
-    backgroundColor: '#0f0f0f',
+  },
+  topHalf: {
+    // no extra background — pure black
+  },
+  bottomHalf: {
+    // no extra background — pure black
+  },
+  rotated: {
+    flex: 1,
+    transform: [{ rotate: '180deg' }],
+  },
+  dividerArea: {
+    paddingVertical: 12,
+    justifyContent: 'center',
+  },
+  errorContainer: {
+    flex: 1,
+    backgroundColor: '#000',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 32,
     gap: 16,
   },
   errorTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#f87171',
+    fontSize: 18,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.7)',
   },
   errorMsg: {
-    fontSize: 14,
-    color: '#6b7280',
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.3)',
     textAlign: 'center',
   },
   retryBtn: {
-    backgroundColor: '#2563eb',
-    borderRadius: 12,
-    paddingHorizontal: 32,
-    paddingVertical: 14,
+    marginTop: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 28,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
   },
-  retryTxt: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 16,
+  retryText: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.5)',
   },
-  modeToggleWrap: {
+  historyHint: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    top: '50%',
-    flexDirection: 'row',
+    bottom: 12,
+    alignSelf: 'center',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.06)',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    zIndex: 10,
   },
-  modeToggle: {
-    backgroundColor: '#1f2937',
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#374151',
-  },
-  modeToggleText: {
-    color: '#9ca3af',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1,
-  },
-  gearBtn: {
-    backgroundColor: '#1f2937',
-    borderRadius: 16,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#374151',
-  },
-  gearIcon: {
+  historyHintText: {
     fontSize: 14,
-    color: '#9ca3af',
+    color: 'rgba(255,255,255,0.25)',
   },
 });

@@ -1,8 +1,8 @@
 import { NativeModules } from 'react-native';
 import type { TranslationResult } from '../../app/types';
-import type { ITranslationService } from './TranslationService';
+import type { ITranslationService, LanguageCandidate } from './TranslationService';
 
-// Native module bridging Apple's Translation framework (iOS 17.4+)
+// Native module bridging Apple's Translation framework (iOS 17.4+) + NLLanguageRecognizer
 // Implementation in ios/Parly/Translation/TranslationBridge.swift
 const { ParlyTranslation } = NativeModules;
 
@@ -22,6 +22,13 @@ class IOSTranslationService implements ITranslationService {
 
   async downloadLanguagePair(_from: string, _to: string): Promise<void> {
     // iOS Translation framework handles downloads automatically
+  }
+
+  async identifyLanguage(text: string): Promise<readonly LanguageCandidate[]> {
+    if (!ParlyTranslation?.identifyLanguage) return [];
+    const results: Array<{ language: string; confidence: number }> =
+      await ParlyTranslation.identifyLanguage(text);
+    return results;
   }
 }
 

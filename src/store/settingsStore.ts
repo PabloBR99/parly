@@ -21,7 +21,7 @@ interface SettingsActions {
 const initialState: SettingsState = {
   personA: { language: 'es', voice: 'casual_male', displayName: 'Persona 1' },
   personB: { language: 'en', voice: 'casual_female', displayName: 'Persona 2' },
-  inputMode: 'ptt',
+  inputMode: 'vad',
   autoPlay: true,
   ttsNumSteps: 5,
 };

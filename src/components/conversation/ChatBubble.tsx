@@ -9,12 +9,26 @@ interface Props {
   readonly lang: string;
 }
 
-export function ChatBubble({ message, viewerPersonId, lang }: Props): React.JSX.Element {
+export const ChatBubble = React.memo(function ChatBubble({ message, viewerPersonId, lang }: Props): React.JSX.Element {
   const s = getUiStrings(lang);
   const isOwnMessage = message.speakerId === viewerPersonId;
-  const displayText = isOwnMessage ? message.originalText : (message.translatedText ?? '');
   const isPending = message.stage === 'transcribing' || message.stage === 'translating';
   const isError = message.stage === 'error';
+
+  // Each panel always shows text in the viewer's language:
+  // - Own messages: originalText (spoken in viewer's language)
+  // - Other's messages: translatedText (translated into viewer's language)
+  // - Error on other's message: localized error string (never show source-language text)
+  let displayText: string;
+  if (isOwnMessage) {
+    displayText = message.originalText;
+  } else if (message.translatedText) {
+    displayText = message.translatedText;
+  } else if (isError) {
+    displayText = s.translationFailed;
+  } else {
+    displayText = '';
+  }
 
   return (
     <View style={[styles.row, isOwnMessage ? styles.rowRight : styles.rowLeft]}>
@@ -36,7 +50,7 @@ export function ChatBubble({ message, viewerPersonId, lang }: Props): React.JSX.
       </View>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   row: {

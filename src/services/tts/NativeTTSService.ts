@@ -3,56 +3,103 @@ import type { VoiceId } from '../../app/types';
 
 const SPEECH_RATE = 0.5;
 
+interface CachedVoice {
+  readonly id: string;
+  readonly language: string;
+}
+
 class NativeTTSService {
   private initialized = false;
+  private activeCleanup: (() => void) | null = null;
+  private voicesByLang = new Map<string, CachedVoice>();
 
   async init(): Promise<void> {
     if (this.initialized) return;
     try {
       await Tts.getInitStatus();
       this.initialized = true;
+      await this.cacheVoices();
     } catch (e: unknown) {
-      // Some Android devices require a TTS engine to be installed
       const msg = e instanceof Error ? e.message : String(e);
       console.warn('[NativeTTSService] TTS init failed:', msg);
+    }
+  }
+
+  private async cacheVoices(): Promise<void> {
+    try {
+      const voices = await Tts.voices();
+      for (const v of voices) {
+        if (v.notInstalled) continue;
+        const lang = v.language.split('-')[0].split('_')[0].toLowerCase();
+        // Keep the first (highest-quality) voice per language
+        if (!this.voicesByLang.has(lang)) {
+          this.voicesByLang.set(lang, { id: v.id, language: v.language });
+        }
+      }
+    } catch {
+      // voices() not available — fall back to setDefaultLanguage path
     }
   }
 
   async speak(text: string, language: string, _voice: VoiceId): Promise<void> {
     if (!this.initialized) await this.init();
 
-    // Many Android devices reject bare codes ('en') but accept locale codes ('en-US')
-    const locale = toTtsLocale(language);
-    try {
-      await Tts.setDefaultLanguage(locale);
-    } catch {
-      // Try bare code as last resort
-      try { await Tts.setDefaultLanguage(language); } catch { /* unsupported */ }
+    const baseLang = language.split('-')[0].split('_')[0].toLowerCase();
+
+    // Prefer explicit voice selection — more reliable than setDefaultLanguage
+    const cached = this.voicesByLang.get(baseLang);
+    if (cached) {
+      try {
+        await Tts.setDefaultVoice(cached.id);
+      } catch {
+        // Voice selection failed — fall through to setDefaultLanguage
+        await this.setLanguageFallback(language);
+      }
+    } else {
+      await this.setLanguageFallback(language);
     }
+
     Tts.setDefaultRate(SPEECH_RATE);
 
+    console.warn(`[TTS-DEBUG] speak() text="${text}" lang="${language}"`);
+
     return new Promise((resolve) => {
-      // eslint-disable-next-line prefer-const
-      let finishSub: { remove(): void } | undefined;
-      // eslint-disable-next-line prefer-const
-      let errorSub: { remove(): void } | undefined;
-      const cleanup = () => {
+      let resolved = false;
+      const done = (reason: string) => {
+        if (resolved) return;
+        resolved = true;
+        console.warn(`[TTS-DEBUG] speak() resolved via ${reason}`);
         finishSub?.remove();
         errorSub?.remove();
         clearTimeout(timer);
+        this.activeCleanup = null;
+        resolve();
       };
-      const onFinish = () => { cleanup(); resolve(); };
-      const onError  = () => { cleanup(); resolve(); }; // non-fatal — just proceed
-      // 30s hard cap in case the TTS engine never fires the event
-      const timer = setTimeout(() => { cleanup(); resolve(); }, 30_000);
-      finishSub = Tts.addEventListener('tts-finish', onFinish) as unknown as { remove(): void };
-      errorSub  = Tts.addEventListener('tts-error',  onError) as unknown as { remove(): void };
+      let finishSub: { remove(): void } | undefined;
+      let errorSub: { remove(): void } | undefined;
+      // 8s hard cap — short enough to not freeze the pipeline
+      const timer = setTimeout(() => done('timeout'), 8_000);
+      finishSub = Tts.addEventListener('tts-finish', () => done('tts-finish')) as unknown as { remove(): void };
+      errorSub  = Tts.addEventListener('tts-error',  () => done('tts-error')) as unknown as { remove(): void };
+      this.activeCleanup = () => done('stop()');
       Tts.speak(text);
     });
   }
 
   stop(): void {
     Tts.stop();
+    if (this.activeCleanup) {
+      this.activeCleanup();
+    }
+  }
+
+  private async setLanguageFallback(language: string): Promise<void> {
+    const locale = toTtsLocale(language);
+    try {
+      await Tts.setDefaultLanguage(locale);
+    } catch {
+      try { await Tts.setDefaultLanguage(language); } catch { /* unsupported */ }
+    }
   }
 }
 

@@ -1,13 +1,14 @@
 import React from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack'; // eslint-disable-line @typescript-eslint/no-unused-vars
 import { useSettingsStore } from '../store/settingsStore';
 import { useAudioPermission } from '../hooks/useAudioPermission';
-import type { RootStackParamList } from '../navigation/types';
 import type { PersonId, VoiceId } from '../app/types';
 
-type Props = NativeStackScreenProps<RootStackParamList, 'Setup'>;
+// SetupScreen is no longer used — kept for reference only.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Props = NativeStackScreenProps<any, any>;
 
 const VOICES: { id: VoiceId; label: string; icon: string }[] = [
   { id: 'casual_male', label: 'Hombre', icon: '♂' },
@@ -50,18 +51,27 @@ export function SetupScreen({ navigation }: Props): React.JSX.Element {
   const { status: micStatus, request: requestMic } = useAudioPermission();
 
   const handleStart = async () => {
-    if (micStatus !== 'granted') {
-      const granted = await requestMic();
-      if (!granted) {
-        Alert.alert(
-          'Micrófono necesario',
-          'Parly necesita acceso al micrófono para funcionar.',
-          [{ text: 'OK' }],
-        );
-        return;
+    try {
+      if (micStatus !== 'granted') {
+        const granted = await requestMic();
+        if (!granted) {
+          Alert.alert(
+            'Micrófono necesario',
+            'Parly necesita acceso al micrófono para funcionar.',
+            [{ text: 'OK' }],
+          );
+          return;
+        }
       }
+      navigation.replace('Conversation');
+    } catch (e) {
+      console.error('[SetupScreen] Permission request failed:', e);
+      Alert.alert(
+        'Error',
+        'No se pudo verificar el permiso del micrófono. Inténtalo de nuevo.',
+        [{ text: 'OK' }],
+      );
     }
-    navigation.replace('Conversation');
   };
 
   return (

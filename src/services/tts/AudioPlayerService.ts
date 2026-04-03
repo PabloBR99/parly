@@ -1,12 +1,22 @@
-import { NativeModules, Platform } from 'react-native';
+import { NativeModules } from 'react-native';
 
-const SAMPLE_RATE = 24000; // Voxtral outputs 24kHz
+const SAMPLE_RATE = 24000; // ZipVoice outputs 24kHz
 
 export class AudioPlayerService {
   private playing = false;
 
   async play(buffer: Float32Array): Promise<void> {
-    if (this.playing) return;
+    if (this.playing) {
+      // Wait for current playback to finish before playing new buffer
+      await new Promise<void>(resolve => {
+        const check = setInterval(() => {
+          if (!this.playing) {
+            clearInterval(check);
+            resolve();
+          }
+        }, 50);
+      });
+    }
     this.playing = true;
 
     try {
@@ -35,7 +45,12 @@ export class AudioPlayerService {
     // Platform-specific PCM playback via native module or Audio API
     if (NativeModules.ParlyAudio?.playPCM) {
       const uint8 = new Uint8Array(int16.buffer);
-      const base64 = btoa(String.fromCharCode(...uint8));
+      const chunkSize = 8192;
+      let binary = '';
+      for (let i = 0; i < uint8.length; i += chunkSize) {
+        binary += String.fromCharCode(...uint8.subarray(i, Math.min(i + chunkSize, uint8.length)));
+      }
+      const base64 = btoa(binary);
       await NativeModules.ParlyAudio.playPCM(base64, SAMPLE_RATE);
     } else {
       // Dev fallback: estimate duration and wait

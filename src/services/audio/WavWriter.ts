@@ -1,14 +1,9 @@
-import RNFS from 'react-native-fs';
+import * as RNFS from '@dr.pogodin/react-native-fs';
+import { Buffer } from 'buffer';
 
 const SAMPLE_RATE = 16000;
 const NUM_CHANNELS = 1;
 const BITS_PER_SAMPLE = 16;
-
-function base64ByteLength(b64: string): number {
-  const len = b64.length;
-  const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
-  return (len * 3) / 4 - padding;
-}
 
 function writeAscii(view: DataView, offset: number, str: string): void {
   for (let i = 0; i < str.length; i++) {
@@ -47,21 +42,19 @@ function createWavHeaderBase64(dataByteLength: number): string {
 
 /**
  * Writes base64-encoded PCM Int16 chunks to a WAV file.
- * Each chunk is decoded independently — no alignment issues.
+ * Decodes each chunk individually to avoid base64 padding issues when
+ * concatenating multiple encoded strings.
  */
 export async function writePcmToWav(
   chunks: readonly string[],
   outputPath: string,
 ): Promise<void> {
-  let totalBytes = 0;
-  for (const chunk of chunks) {
-    totalBytes += base64ByteLength(chunk);
-  }
+  const pcmBuffers = chunks.map(c => Buffer.from(c, 'base64'));
+  const totalBytes = pcmBuffers.reduce((sum, b) => sum + b.length, 0);
 
   const headerB64 = createWavHeaderBase64(totalBytes);
-  await RNFS.writeFile(outputPath, headerB64, 'base64');
+  const headerBuf = Buffer.from(headerB64, 'base64');
 
-  for (const chunk of chunks) {
-    await RNFS.appendFile(outputPath, chunk, 'base64');
-  }
+  const wav = Buffer.concat([headerBuf, ...pcmBuffers]);
+  await RNFS.writeFile(outputPath, wav.toString('base64'), 'base64');
 }

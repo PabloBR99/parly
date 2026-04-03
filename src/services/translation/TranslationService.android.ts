@@ -1,8 +1,8 @@
 import { NativeModules } from 'react-native';
 import type { TranslationResult } from '../../app/types';
-import type { ITranslationService } from './TranslationService';
+import type { ITranslationService, LanguageCandidate } from './TranslationService';
 
-// Native module bridging Google ML Kit Translation
+// Native module bridging Google ML Kit Translation + Language Identification
 // Implementation in android/.../translation/TranslationModule.kt
 const { ParlyTranslation } = NativeModules;
 
@@ -23,6 +23,13 @@ class AndroidTranslationService implements ITranslationService {
   async downloadLanguagePair(from: string, to: string): Promise<void> {
     if (!ParlyTranslation) return;
     await ParlyTranslation.downloadModel(from, to);
+  }
+
+  async identifyLanguage(text: string): Promise<readonly LanguageCandidate[]> {
+    if (!ParlyTranslation?.identifyLanguage) return [];
+    const results: Array<{ language: string; confidence: number }> =
+      await ParlyTranslation.identifyLanguage(text);
+    return results;
   }
 }
 

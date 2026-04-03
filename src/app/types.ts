@@ -11,7 +11,6 @@ export type PipelineStage =
 export type ModelStatus =
   | 'not_downloaded'
   | 'downloading'
-  | 'downloaded'
   | 'loading'
   | 'ready'
   | 'error';

@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { FlatList, StyleSheet, View } from 'react-native';
+import React, { useEffect, useMemo, useRef } from 'react';
+import { FlatList, StyleSheet } from 'react-native';
 import type { Message, PersonId } from '../../app/types';
 import { ChatBubble } from './ChatBubble';
 
@@ -16,10 +16,14 @@ export function ChatBubbleList({ messages, viewerPersonId, lang, inverted }: Pro
   // Only show messages relevant to this panel:
   // - Messages this person sent (shows original text)
   // - Messages sent TO this person (shows translated text, only when ready)
-  const visibleMessages = messages.filter(m => {
-    if (m.speakerId === viewerPersonId) return true;
-    return m.translatedText !== null || m.stage === 'translating';
-  });
+  const visibleMessages = useMemo(
+    () => messages.filter(m => {
+      if (m.speakerId === viewerPersonId) return true;
+      // Show other person's messages when translated, translating, or failed
+      return m.translatedText !== null || m.stage === 'translating' || m.stage === 'error';
+    }),
+    [messages, viewerPersonId],
+  );
 
   useEffect(() => {
     if (visibleMessages.length > 0 && !inverted) {

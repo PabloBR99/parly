@@ -37,11 +37,17 @@ export function PersonPanel({ personId, inverted }: Props): React.JSX.Element {
   }, [personId, setActiveSpeaker]);
 
   const handlePressOut = useCallback(async () => {
-    const audioPath = await audioCaptureService.stop();
-    setActiveSpeaker(null);
-    if (audioPath) {
-      pipelineOrchestrator.submit(personId, audioPath);
-    } else {
+    try {
+      const audioPath = await audioCaptureService.stop();
+      setActiveSpeaker(null);
+      if (audioPath) {
+        pipelineOrchestrator.submit(personId, audioPath);
+      } else {
+        useConversationStore.getState().setPipelineStage('idle');
+      }
+    } catch (e) {
+      console.error('[PersonPanel] handlePressOut failed:', e);
+      setActiveSpeaker(null);
       useConversationStore.getState().setPipelineStage('idle');
     }
   }, [personId, setActiveSpeaker]);

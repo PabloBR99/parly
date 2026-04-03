@@ -11,6 +11,7 @@ import {
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useSettingsStore } from '../store/settingsStore';
 import { useConversationStore } from '../store/conversationStore';
+import { LanguageSelector } from '../components/conversation/LanguageSelector';
 import type { RootStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
@@ -22,6 +23,9 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const ttsNumSteps = useSettingsStore(s => s.ttsNumSteps);
   const setAutoPlay = useSettingsStore(s => s.setAutoPlay);
   const setTtsNumSteps = useSettingsStore(s => s.setTtsNumSteps);
+  const setPersonLanguage = useSettingsStore(s => s.setPersonLanguage);
+  const langA = useSettingsStore(s => s.personA.language);
+  const langB = useSettingsStore(s => s.personB.language);
   const clearConversation = useConversationStore(s => s.clearConversation);
 
   const handleClearConversation = () => {
@@ -44,6 +48,32 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+
+      {/* Idiomas — override auto-detection if needed */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Idiomas</Text>
+        <Text style={styles.hint}>Se detectan automáticamente. Cambia aquí si hay errores.</Text>
+
+        <View style={styles.row}>
+          <Text style={styles.label}>Persona A (abajo)</Text>
+          <LanguageSelector
+            value={langA}
+            onChange={code => setPersonLanguage('person_a', code)}
+            lang={langA}
+          />
+        </View>
+
+        <View style={styles.divider} />
+
+        <View style={styles.row}>
+          <Text style={styles.label}>Persona B (arriba)</Text>
+          <LanguageSelector
+            value={langB}
+            onChange={code => setPersonLanguage('person_b', code)}
+            lang={langB}
+          />
+        </View>
+      </View>
 
       {/* TTS */}
       <View style={styles.section}>

@@ -1,11 +1,11 @@
 // VADController — glue between AudioCaptureService, VADService, and PipelineOrchestrator.
 // Manages continuous listening, speech segment extraction, and anti-echo.
 
-import RNFS from 'react-native-fs';
+import * as RNFS from '@dr.pogodin/react-native-fs';
 import { audioCaptureService } from './AudioCaptureService';
 import { vadService } from './VADService';
 import { writePcmToWav } from './WavWriter';
-import { pipelineOrchestrator } from '../pipeline/PipelineOrchestrator';
+import { pipelineOrchestrator, resetAutoSpeaker } from '../pipeline/PipelineOrchestrator';
 import { useConversationStore } from '../../store/conversationStore';
 
 let segmentCounter = 0;
@@ -17,10 +17,18 @@ function nextSegmentPath(): string {
   return `${RNFS.DocumentDirectoryPath}/vad_segment_${++segmentCounter}.wav`;
 }
 
+/** Delete a VAD segment file after it has been processed. */
+export function cleanupSegmentFile(filePath: string): void {
+  RNFS.unlink(filePath).catch(() => {});
+}
+
 export function startVADMode(): void {
   if (active) return;
   active = true;
 
+  console.warn('[VADController] startVADMode() called');
+  segmentCounter = 0;
+  resetAutoSpeaker();
   vadService.start();
 
   // Anti-echo: pause VAD while TTS is producing audio
@@ -31,6 +39,7 @@ export function startVADMode(): void {
     if (stage === 'synthesizing' || stage === 'playing') {
       vadService.pause();
     } else if (stage === 'idle') {
+      console.warn('[VADController] idle → resuming VAD');
       vadService.resume();
       // Restore 'listening' indicator while VAD is active
       if (active) {
@@ -39,8 +48,13 @@ export function startVADMode(): void {
     }
   });
 
-  // Handle completed speech segments
+  // Handle speech events
   unsubscribeVad = vadService.onEvent(event => {
+    console.warn(`[VADController] VAD event: ${event}`);
+    if (event === 'speech_start') {
+      useConversationStore.getState().setPipelineStage('recording');
+      return;
+    }
     if (event === 'speech_end') {
       const chunks = vadService.collectSpeechChunks();
       if (chunks.length === 0) return;
@@ -58,7 +72,11 @@ export function startVADMode(): void {
   });
 
   // Start continuous audio streaming → VAD
+  let chunkCount = 0;
   audioCaptureService.startStreaming(base64Pcm => {
+    chunkCount++;
+    if (chunkCount === 1) console.warn('[VADController] first audio chunk received');
+    if (chunkCount === 50) console.warn('[VADController] 50 chunks received (audio flowing)');
     vadService.processChunk(base64Pcm);
   });
 
@@ -77,6 +95,7 @@ export function stopVADMode(): void {
   unsubscribeStore = null;
   unsubscribeVad = null;
 
+  segmentCounter = 0;
   useConversationStore.getState().setPipelineStage('idle');
 }
 

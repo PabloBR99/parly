@@ -1,6 +1,6 @@
 import type { Language } from './types';
 
-// Languages supported by Voxtral TTS (and used for UI localization)
+// Languages supported by Parly (ML Kit translation + UI localization)
 export const LANGUAGES: readonly Language[] = [
   { code: 'en', name: 'English',    flag: '🇬🇧' },
   { code: 'es', name: 'Español',    flag: '🇪🇸' },

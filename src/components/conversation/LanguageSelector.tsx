@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -25,15 +25,18 @@ export function LanguageSelector({ value, onChange, lang, inverted }: Props): Re
   const current = getLanguage(value);
   const s = getUiStrings(lang ?? value);
 
-  const filtered = search
-    ? LANGUAGES.filter(l =>
-        l.name.toLowerCase().includes(search.toLowerCase()) ||
-        l.code.toLowerCase().includes(search.toLowerCase()),
-      )
-    : LANGUAGES;
+  const filtered = useMemo(
+    () => search
+      ? LANGUAGES.filter(l =>
+          l.name.toLowerCase().includes(search.toLowerCase()) ||
+          l.code.toLowerCase().includes(search.toLowerCase()),
+        )
+      : LANGUAGES,
+    [search],
+  );
 
-  function select(lang: Language): void {
-    onChange(lang.code);
+  function select(selected: Language): void {
+    onChange(selected.code);
     setOpen(false);
     setSearch('');
   }

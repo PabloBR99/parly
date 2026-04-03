@@ -19,7 +19,7 @@ export class UtteranceQueue {
   }
 
   clear(): void {
-    this.queue.length = 0;
+    this.queue.splice(0);
   }
 
   get isProcessing(): boolean {

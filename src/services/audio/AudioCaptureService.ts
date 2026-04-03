@@ -1,5 +1,5 @@
 import { Platform, PermissionsAndroid } from 'react-native';
-import RNFS from 'react-native-fs';
+import * as RNFS from '@dr.pogodin/react-native-fs';
 
 // react-native-audio-record: records raw PCM and saves to a WAV file
 // Docs: https://github.com/goodatlas/react-native-audio-record
@@ -17,6 +17,7 @@ export class AudioCaptureService {
   private recording = false;
   private initialized = false;
   private streaming = false;
+  private streamingHandler: ((data: string) => void) | null = null;
 
   private init(): void {
     if (this.initialized) return;
@@ -71,6 +72,7 @@ export class AudioCaptureService {
   startStreaming(onData: (base64Pcm: string) => void): void {
     if (this.recording || this.streaming) return;
     this.init();
+    this.streamingHandler = onData;
     AudioRecord.on('data', onData);
     this.streaming = true;
     this.recording = true;
@@ -82,6 +84,12 @@ export class AudioCaptureService {
     if (!this.streaming) return;
     this.streaming = false;
     this.recording = false;
+    if (this.streamingHandler) {
+      // react-native-audio-record uses EventEmitter internally but types omit removeListener
+      (AudioRecord as unknown as { removeListener(event: string, cb: Function): void })
+        .removeListener('data', this.streamingHandler);
+      this.streamingHandler = null;
+    }
     await AudioRecord.stop();
   }
 

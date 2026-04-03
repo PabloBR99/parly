@@ -4,6 +4,8 @@ import android.os.Handler
 import android.os.Looper
 import com.facebook.react.bridge.*
 import com.google.mlkit.common.model.DownloadConditions
+import com.google.mlkit.nl.languageid.LanguageIdentification
+import com.google.mlkit.nl.languageid.LanguageIdentificationOptions
 import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.TranslatorOptions
@@ -53,7 +55,7 @@ class TranslationModule(reactContext: ReactApplicationContext) :
         val handler = Handler(Looper.getMainLooper())
         handler.postDelayed({
             settle { promise.reject("TRANSLATION_TIMEOUT", "Translation timed out (model download?)") }
-        }, 15_000)
+        }, 30_000)
 
         fun doTranslate() {
             translator.translate(text)
@@ -107,6 +109,32 @@ class TranslationModule(reactContext: ReactApplicationContext) :
             }
             .addOnFailureListener { e ->
                 promise.reject("DOWNLOAD_ERROR", e.message, e)
+            }
+    }
+
+    @ReactMethod
+    fun identifyLanguage(text: String, promise: Promise) {
+        val client = LanguageIdentification.getClient(
+            LanguageIdentificationOptions.Builder()
+                .setConfidenceThreshold(0.3f)
+                .build()
+        )
+        client.identifyPossibleLanguages(text)
+            .addOnSuccessListener { results ->
+                val arr = Arguments.createArray()
+                for (lang in results) {
+                    if (lang.languageTag == "und") continue
+                    val map = Arguments.createMap()
+                    map.putString("language", lang.languageTag)
+                    map.putDouble("confidence", lang.confidence.toDouble())
+                    arr.pushMap(map)
+                }
+                promise.resolve(arr)
+                client.close()
+            }
+            .addOnFailureListener { e ->
+                promise.reject("LANG_ID_ERROR", e.message, e)
+                client.close()
             }
     }
 

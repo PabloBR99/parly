@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 import Translation
 
 @objc(ParlyTranslation)
@@ -51,6 +52,28 @@ class TranslationBridge: NSObject {
       let status = await availability.status(from: source, to: target)
       resolve(status == .installed || status == .supported)
     }
+  }
+
+  @objc
+  func identifyLanguage(
+    _ text: String,
+    resolve: @escaping RCTPromiseResolveBlock,
+    reject: @escaping RCTPromiseRejectBlock
+  ) {
+    let recognizer = NLLanguageRecognizer()
+    recognizer.processString(text)
+
+    let hypotheses = recognizer.languageHypotheses(withMaximum: 5)
+    var results: [[String: Any]] = []
+    for (lang, confidence) in hypotheses {
+      results.append([
+        "language": lang.rawValue,
+        "confidence": confidence
+      ])
+    }
+    // Sort by confidence descending
+    results.sort { ($0["confidence"] as! Double) > ($1["confidence"] as! Double) }
+    resolve(results)
   }
 
   @objc

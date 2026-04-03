@@ -1,14 +1,43 @@
-import RNFS from 'react-native-fs';
+import * as RNFS from '@dr.pogodin/react-native-fs';
 import { useModelStore } from '../../store/modelStore';
+import { useSettingsStore } from '../../store/settingsStore';
 import { whisperService } from '../stt/WhisperService';
+import { canaryService, CanaryService } from '../stt/CanaryService';
 import { zipvoiceService } from '../tts/ZipVoiceService';
 
-// ── Sherpa-ONNX Whisper base multilingual int8 — ~161MB ──────────────────────
+// ── Sherpa-ONNX Whisper small multilingual int8 — ~244MB ─────────────────────
+// Significantly better WER and language detection than base.
 // ⚠️  Verify these URLs before production — check:
-//     https://huggingface.co/csukuangfj/sherpa-onnx-whisper-base
+//     https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small
 const WHISPER_HF_BASE =
-  'https://huggingface.co/csukuangfj/sherpa-onnx-whisper-base/resolve/main';
-const WHISPER_MODEL_DIR = 'sherpa-onnx-whisper-base';
+  'https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main';
+const WHISPER_MODEL_DIR = 'sherpa-onnx-whisper-small';
+
+// Old base model dir — cleaned up on first run of the small model
+const WHISPER_OLD_DIR = 'sherpa-onnx-whisper-base';
+
+// ── NeMo Canary 180M Flash — ~180MB int8 ──────────────────────────────────────
+// Pure multilingual ASR for en/es/de/fr — physically cannot translate.
+// ⚠️  Verify these URLs before production — check:
+//     https://huggingface.co/k2-fsa/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8
+const CANARY_HF_BASE =
+  'https://huggingface.co/csukuangfj/sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8/resolve/main';
+const CANARY_MODEL_DIR = 'sherpa-onnx-nemo-canary-180m-flash-en-es-de-fr-int8';
+
+interface CanaryFile {
+  readonly name: string;
+  readonly minSize: number;
+  readonly sizeEstimate: number; // MB
+}
+
+// File list verified from scripts/nemo/canary/run_180m_flash.sh in k2-fsa/sherpa-onnx.
+const CANARY_FILES: CanaryFile[] = [
+  { name: 'encoder.int8.onnx', minSize: 120 * 1024 * 1024, sizeEstimate: 133 },
+  { name: 'decoder.int8.onnx', minSize: 65  * 1024 * 1024, sizeEstimate: 74  },
+  { name: 'tokens.txt',        minSize: 40  * 1024,         sizeEstimate: 0.1 },
+];
+
+const TOTAL_CANARY_MB = CANARY_FILES.reduce((s, f) => s + f.sizeEstimate, 0);
 
 interface WhisperFile {
   readonly name: string;
@@ -17,9 +46,9 @@ interface WhisperFile {
 }
 
 const WHISPER_FILES: WhisperFile[] = [
-  { name: 'base-encoder.int8.onnx', minSize: 25  * 1024 * 1024, sizeEstimate: 29  },
-  { name: 'base-decoder.int8.onnx', minSize: 120 * 1024 * 1024, sizeEstimate: 131 },
-  { name: 'base-tokens.txt',        minSize: 500 * 1024,         sizeEstimate: 0.8 },
+  { name: 'small-encoder.int8.onnx', minSize: 80  * 1024 * 1024, sizeEstimate: 95  },
+  { name: 'small-decoder.int8.onnx', minSize: 130 * 1024 * 1024, sizeEstimate: 148 },
+  { name: 'small-tokens.txt',        minSize: 500 * 1024,         sizeEstimate: 0.8 },
 ];
 
 const TOTAL_WHISPER_MB = WHISPER_FILES.reduce((s, f) => s + f.sizeEstimate, 0);
@@ -75,7 +104,7 @@ async function downloadFile(
     progress: ({ bytesWritten, contentLength }) => {
       onProgress(contentLength > 0 ? Math.round((bytesWritten / contentLength) * 100) : 0);
     },
-    progressDivider: 1,
+    progressDivider: 5,
     background: true,
     discretionary: true,
   }).promise;
@@ -110,19 +139,59 @@ async function downloadZipvoiceModel(
   }
 }
 
+async function downloadCanaryModel(
+  modelDir: string,
+  onProgress: (pct: number) => void,
+): Promise<void> {
+  await RNFS.mkdir(modelDir);
+
+  let completedMB = 0;
+
+  for (const file of CANARY_FILES) {
+    const url = `${CANARY_HF_BASE}/${file.name}`;
+    const dest = `${modelDir}/${file.name}`;
+
+    await downloadFile(url, dest, file.minSize, filePct => {
+      const fileMB = file.sizeEstimate * (filePct / 100);
+      onProgress(
+        Math.round(((completedMB + fileMB) / TOTAL_CANARY_MB) * 100),
+      );
+    });
+
+    completedMB += file.sizeEstimate;
+    onProgress(Math.round((completedMB / TOTAL_CANARY_MB) * 100));
+  }
+}
+
 async function getAvailableMemoryMB(): Promise<number> {
   try {
     const { NativeModules } = await import('react-native');
-    const mb: number = await NativeModules.ParlyMemory?.getAvailableMemoryMB?.();
-    return mb ?? 4096;
+    const mb: number | undefined = await NativeModules.ParlyMemory?.getAvailableMemoryMB?.();
+    if (mb == null) {
+      console.warn('[ModelManager] ParlyMemory module unavailable, assuming constrained memory');
+      return 512;
+    }
+    return mb;
   } catch {
-    return 4096;
+    return 512;
   }
 }
 
 // ── Public ────────────────────────────────────────────────────────────────────
 
+let _initPromise: Promise<void> | null = null;
+
 export async function initModels(): Promise<void> {
+  if (_initPromise) return _initPromise;
+  _initPromise = _initModelsImpl();
+  try {
+    await _initPromise;
+  } finally {
+    _initPromise = null;
+  }
+}
+
+async function _initModelsImpl(): Promise<void> {
   const store = useModelStore.getState();
 
   // ── Whisper (required) ────────────────────────────────────────────────────
@@ -146,11 +215,39 @@ export async function initModels(): Promise<void> {
     store.setWhisperStatus('loading');
     await whisperService.load(whisperDir);
     store.setWhisperStatus('ready');
+
+    // Clean up old base model to free ~161MB
+    const oldDir = `${RNFS.DocumentDirectoryPath}/${WHISPER_OLD_DIR}`;
+    RNFS.exists(oldDir)
+      .then(exists => exists ? RNFS.unlink(oldDir) : Promise.resolve())
+      .catch(() => {});
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     store.setWhisperStatus('error');
     store.setWhisperError(msg);
     throw e; // Whisper is required — propagate
+  }
+
+  // ── Canary (optional, preferred STT for en/es/de/fr pairs) ──────────────
+  const { personA, personB } = useSettingsStore.getState();
+  const canaryDir = `${RNFS.DocumentDirectoryPath}/${CANARY_MODEL_DIR}`;
+
+  if (!CanaryService.supportsLanguagePair(personA.language, personB.language)) {
+    store.setCanaryStatus('error');
+    store.setCanaryError('Par de idiomas no cubierto por Canary — usando Whisper.');
+  } else {
+    store.setCanaryStatus('downloading');
+    try {
+      await downloadCanaryModel(canaryDir, pct => store.setCanaryProgress(pct));
+      store.setCanaryStatus('loading');
+      await canaryService.load(canaryDir, personA.language, personB.language);
+      store.setCanaryStatus('ready');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      store.setCanaryStatus('error');
+      store.setCanaryError(msg);
+      // Non-fatal — pipeline falls back to Whisper automatically
+    }
   }
 
   // ── ZipVoice (optional) ───────────────────────────────────────────────────

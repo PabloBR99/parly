@@ -1,10 +1,19 @@
 import { create } from 'zustand';
 import type { Message, PersonId, PipelineStage } from '../app/types';
 
+interface LanguageDetection {
+  readonly lang: string;
+  readonly timestamp: number;
+}
+
 interface ConversationState {
   readonly messages: readonly Message[];
   readonly activeSpeaker: PersonId | null;
   readonly pipelineStage: PipelineStage;
+  readonly detectedLangs: {
+    readonly person_a: LanguageDetection | null;
+    readonly person_b: LanguageDetection | null;
+  };
 }
 
 interface ConversationActions {
@@ -13,6 +22,7 @@ interface ConversationActions {
   removeMessage: (id: string) => void;
   setActiveSpeaker: (speaker: PersonId | null) => void;
   setPipelineStage: (stage: PipelineStage) => void;
+  setDetectedLang: (personId: PersonId, lang: string) => void;
   clearConversation: () => void;
 }
 
@@ -20,6 +30,7 @@ const initialState: ConversationState = {
   messages: [],
   activeSpeaker: null,
   pipelineStage: 'idle',
+  detectedLangs: { person_a: null, person_b: null },
 };
 
 export const useConversationStore = create<ConversationState & ConversationActions>(set => ({
@@ -40,5 +51,18 @@ export const useConversationStore = create<ConversationState & ConversationActio
 
   setPipelineStage: stage => set({ pipelineStage: stage }),
 
-  clearConversation: () => set({ messages: [], activeSpeaker: null, pipelineStage: 'idle' }),
+  setDetectedLang: (personId, lang) =>
+    set(state => ({
+      detectedLangs: {
+        ...state.detectedLangs,
+        [personId]: { lang, timestamp: Date.now() },
+      },
+    })),
+
+  clearConversation: () => set({
+    messages: [],
+    activeSpeaker: null,
+    pipelineStage: 'idle',
+    detectedLangs: { person_a: null, person_b: null },
+  }),
 }));

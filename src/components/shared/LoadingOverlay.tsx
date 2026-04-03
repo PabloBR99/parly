@@ -2,9 +2,11 @@ import React from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { ProgressBar } from './ProgressBar';
 
+import type { ModelStatus } from '../../app/types';
+
 interface Props {
-  readonly whisperStatus: string;
-  readonly zipvoiceStatus: string;
+  readonly whisperStatus: ModelStatus;
+  readonly zipvoiceStatus: ModelStatus;
   readonly whisperProgress: number;
   readonly zipvoiceProgress: number;
 }
@@ -48,15 +50,13 @@ export function LoadingOverlay({
   );
 }
 
-function statusLabel(status: string): string {
+function statusLabel(status: ModelStatus): string {
   switch (status) {
     case 'not_downloaded': return 'Pendiente';
     case 'downloading': return 'Descargando…';
-    case 'downloaded': return 'Descargado';
     case 'loading': return 'Cargando en memoria…';
     case 'ready': return 'Listo ✓';
     case 'error': return 'Omitido';
-    default: return status;
   }
 }
 
