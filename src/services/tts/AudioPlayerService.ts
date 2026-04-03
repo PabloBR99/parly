@@ -22,7 +22,7 @@ export class AudioPlayerService {
 
   stop(): void {
     this.playing = false;
-    NativeModules.LinguaFaceAudio?.stopPlayback?.();
+    NativeModules.ParlyAudio?.stopPlayback?.();
   }
 
   private async playPCM(buffer: Float32Array): Promise<void> {
@@ -33,10 +33,10 @@ export class AudioPlayerService {
     }
 
     // Platform-specific PCM playback via native module or Audio API
-    if (NativeModules.LinguaFaceAudio?.playPCM) {
+    if (NativeModules.ParlyAudio?.playPCM) {
       const uint8 = new Uint8Array(int16.buffer);
       const base64 = btoa(String.fromCharCode(...uint8));
-      await NativeModules.LinguaFaceAudio.playPCM(base64, SAMPLE_RATE);
+      await NativeModules.ParlyAudio.playPCM(base64, SAMPLE_RATE);
     } else {
       // Dev fallback: estimate duration and wait
       const durationMs = (buffer.length / SAMPLE_RATE) * 1000;

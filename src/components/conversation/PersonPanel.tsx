@@ -1,14 +1,14 @@
 import React, { useCallback } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useConversationStore } from '../../store/conversationStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { audioCaptureService } from '../../services/audio/AudioCaptureService';
 import { pipelineOrchestrator } from '../../services/pipeline/PipelineOrchestrator';
-import { getUiStrings } from '../../i18n/uiStrings';
 import type { PersonId } from '../../app/types';
 import { ChatBubbleList } from './ChatBubbleList';
 import { LanguageSelector } from './LanguageSelector';
 import { SpeakButton } from './SpeakButton';
+import { StatusIndicator } from './StatusIndicator';
 
 interface Props {
   readonly personId: PersonId;
@@ -46,8 +46,6 @@ export function PersonPanel({ personId, inverted }: Props): React.JSX.Element {
     }
   }, [personId, setActiveSpeaker]);
 
-  const s = getUiStrings(language);
-
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -74,11 +72,7 @@ export function PersonPanel({ personId, inverted }: Props): React.JSX.Element {
           lang={language}
         />
       ) : (
-        <View style={styles.listeningBar}>
-          <Text style={styles.listeningText}>
-            {pipelineStage === 'listening' ? s.listening : ''}
-          </Text>
-        </View>
+        <StatusIndicator stage={pipelineStage} lang={language} />
       )}
     </View>
   );
@@ -94,13 +88,5 @@ const styles = StyleSheet.create({
   },
   messages: {
     flex: 1,
-  },
-  listeningBar: {
-    alignItems: 'center',
-    paddingVertical: 12,
-  },
-  listeningText: {
-    fontSize: 12,
-    color: '#6b7280',
   },
 });

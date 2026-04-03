@@ -1,6 +1,6 @@
 #import <React/RCTBridgeModule.h>
 
-@interface RCT_EXTERN_MODULE(LinguaFaceTranslation, NSObject)
+@interface RCT_EXTERN_MODULE(ParlyTranslation, NSObject)
 
 RCT_EXTERN_METHOD(
   translate:(NSString *)text

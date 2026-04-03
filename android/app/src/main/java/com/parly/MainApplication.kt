@@ -1,4 +1,4 @@
-package com.linguaface
+package com.parly
 
 import android.app.Application
 import com.facebook.react.PackageList
@@ -6,8 +6,8 @@ import com.facebook.react.ReactApplication
 import com.facebook.react.ReactHost
 import com.facebook.react.ReactNativeApplicationEntryPoint.loadReactNative
 import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
-import com.linguaface.translation.TranslationPackage
-import com.linguaface.audio.AudioPackage
+import com.parly.translation.TranslationPackage
+import com.parly.audio.AudioPackage
 
 class MainApplication : Application(), ReactApplication {
 

@@ -3,21 +3,21 @@ import type { TranslationResult } from '../../app/types';
 import type { ITranslationService } from './TranslationService';
 
 // Native module bridging Apple's Translation framework (iOS 17.4+)
-// Implementation in ios/LinguaFace/Translation/TranslationBridge.swift
-const { LinguaFaceTranslation } = NativeModules;
+// Implementation in ios/Parly/Translation/TranslationBridge.swift
+const { ParlyTranslation } = NativeModules;
 
 class IOSTranslationService implements ITranslationService {
   async translate(text: string, from: string, to: string): Promise<TranslationResult> {
-    if (!LinguaFaceTranslation) {
+    if (!ParlyTranslation) {
       throw new Error('[TranslationService.ios] Native module not available');
     }
-    const result: string = await LinguaFaceTranslation.translate(text, from, to);
+    const result: string = await ParlyTranslation.translate(text, from, to);
     return { text: result };
   }
 
   async isLanguagePairReady(from: string, to: string): Promise<boolean> {
-    if (!LinguaFaceTranslation) return false;
-    return LinguaFaceTranslation.isLanguagePairAvailable(from, to);
+    if (!ParlyTranslation) return false;
+    return ParlyTranslation.isLanguagePairAvailable(from, to);
   }
 
   async downloadLanguagePair(_from: string, _to: string): Promise<void> {

@@ -1,4 +1,4 @@
-package com.linguaface.translation
+package com.parly.translation
 
 import android.os.Handler
 import android.os.Looper
@@ -11,7 +11,7 @@ import com.google.mlkit.nl.translate.TranslatorOptions
 class TranslationModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
-    override fun getName() = "LinguaFaceTranslation"
+    override fun getName() = "ParlyTranslation"
 
     // Reuse translator instances — creating a new one per call discards the loaded model
     private val translatorCache = mutableMapOf<String, com.google.mlkit.nl.translate.Translator>()

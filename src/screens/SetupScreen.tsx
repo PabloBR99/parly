@@ -69,7 +69,7 @@ export function SetupScreen({ navigation }: Props): React.JSX.Element {
             if (!granted) {
               Alert.alert(
                 'Micrófono necesario',
-                'LinguaFace necesita acceso al micrófono para funcionar.',
+                'Parly necesita acceso al micrófono para funcionar.',
                 [{ text: 'OK' }],
               );
               return;

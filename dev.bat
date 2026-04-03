@@ -1,5 +1,5 @@
 @echo off
-REM LinguaFace — Dev environment setup
+REM Parly — Dev environment setup
 REM Run this before any npx react-native command
 
 set JAVA_HOME=C:\Program Files\Android\Android Studio\jbr

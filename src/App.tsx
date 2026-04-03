@@ -5,6 +5,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { SetupScreen } from './screens/SetupScreen';
 import { ConversationScreen } from './screens/ConversationScreen';
+import { SettingsScreen } from './screens/SettingsScreen';
 import { initModels } from './services/models/ModelManager';
 import { warmupTranslation } from './services/pipeline/PipelineOrchestrator';
 import { nativeTTSService } from './services/tts/NativeTTSService';
@@ -50,12 +51,17 @@ export default function App(): React.JSX.Element {
           <Stack.Screen
             name="Setup"
             component={SetupScreen}
-            options={{ title: 'LinguaFace' }}
+            options={{ title: 'Parly' }}
           />
           <Stack.Screen
             name="Conversation"
             component={ConversationScreen}
             options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="Settings"
+            component={SettingsScreen}
+            options={{ title: 'Ajustes' }}
           />
         </Stack.Navigator>
       </NavigationContainer>

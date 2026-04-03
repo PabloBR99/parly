@@ -32,7 +32,7 @@ class MemoryMonitor {
   async getAvailableMB(): Promise<number> {
     try {
       const mb: number =
-        await NativeModules.LinguaFaceMemory?.getAvailableMemoryMB?.();
+        await NativeModules.ParlyMemory?.getAvailableMemoryMB?.();
       return mb ?? 4096;
     } catch {
       return 4096;

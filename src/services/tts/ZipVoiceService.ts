@@ -34,13 +34,14 @@ export class ZipVoiceService {
     text: string,
     referenceAudio: Float32Array,
     referenceText: string,
+    numSteps = 5,
   ): Promise<Float32Array> {
     if (!this.engine) throw new Error('[ZipVoiceService] Not loaded');
 
     const result = await this.engine.generateSpeech(text, {
       referenceAudio: { samples: Array.from(referenceAudio), sampleRate: 24000 },
       referenceText,
-      numSteps: 5,
+      numSteps,
       speed: 1.0,
     });
 

@@ -1,7 +1,7 @@
 import Foundation
 import Translation
 
-@objc(LinguaFaceTranslation)
+@objc(ParlyTranslation)
 class TranslationBridge: NSObject {
 
   @objc

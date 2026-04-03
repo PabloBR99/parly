@@ -6,6 +6,7 @@ interface SettingsState {
   readonly personB: PersonConfig;
   readonly inputMode: 'ptt' | 'vad';
   readonly autoPlay: boolean;
+  readonly ttsNumSteps: number;
 }
 
 interface SettingsActions {
@@ -14,6 +15,7 @@ interface SettingsActions {
   setPersonDisplayName: (personId: PersonId, name: string) => void;
   setInputMode: (mode: 'ptt' | 'vad') => void;
   setAutoPlay: (autoPlay: boolean) => void;
+  setTtsNumSteps: (steps: number) => void;
 }
 
 const initialState: SettingsState = {
@@ -21,6 +23,7 @@ const initialState: SettingsState = {
   personB: { language: 'en', voice: 'casual_female', displayName: 'Persona 2' },
   inputMode: 'ptt',
   autoPlay: true,
+  ttsNumSteps: 5,
 };
 
 export const useSettingsStore = create<SettingsState & SettingsActions>(set => ({
@@ -53,4 +56,6 @@ export const useSettingsStore = create<SettingsState & SettingsActions>(set => (
   setInputMode: mode => set({ inputMode: mode }),
 
   setAutoPlay: autoPlay => set({ autoPlay }),
+
+  setTtsNumSteps: steps => set({ ttsNumSteps: steps }),
 }));

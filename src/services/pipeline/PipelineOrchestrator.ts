@@ -206,6 +206,7 @@ class PipelineOrchestrator {
           translatedText,
           voiceRef,
           transcribedText,
+          useSettingsStore.getState().ttsNumSteps,
         );
         setPipelineStage('playing');
         await audioPlayerService.play(audioBuffer);

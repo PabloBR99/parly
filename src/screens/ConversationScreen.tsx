@@ -1,6 +1,7 @@
 import React, { useCallback } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useModelStore } from '../store/modelStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { initModels } from '../services/models/ModelManager';
@@ -8,8 +9,11 @@ import { startVADMode, stopVADMode } from '../services/audio/VADController';
 import { SplitScreenLayout } from '../components/conversation/SplitScreenLayout';
 import { PersonPanel } from '../components/conversation/PersonPanel';
 import { LoadingOverlay } from '../components/shared/LoadingOverlay';
+import type { RootStackParamList } from '../navigation/types';
 
-export function ConversationScreen(): React.JSX.Element {
+type Props = NativeStackScreenProps<RootStackParamList, 'Conversation'>;
+
+export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   const whisperStatus = useModelStore(s => s.whisperStatus);
   const zipvoiceStatus = useModelStore(s => s.zipvoiceStatus);
   const whisperProgress = useModelStore(s => s.whisperProgress);
@@ -58,12 +62,15 @@ export function ConversationScreen(): React.JSX.Element {
           topPanel={<PersonPanel personId="person_b" inverted />}
           bottomPanel={<PersonPanel personId="person_a" />}
         />
-        {/* Mode toggle — floating pill on the divider */}
+        {/* Mode toggle + settings — floating on the divider */}
         <View style={styles.modeToggleWrap}>
           <Pressable style={styles.modeToggle} onPress={toggleMode}>
             <Text style={styles.modeToggleText}>
               {inputMode === 'ptt' ? 'PTT' : 'AUTO'}
             </Text>
+          </Pressable>
+          <Pressable style={styles.gearBtn} onPress={() => navigation.navigate('Settings')}>
+            <Text style={styles.gearIcon}>⚙</Text>
           </Pressable>
         </View>
       </View>
@@ -110,7 +117,10 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     top: '50%',
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
     zIndex: 10,
   },
   modeToggle: {
@@ -126,5 +136,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 1,
+  },
+  gearBtn: {
+    backgroundColor: '#1f2937',
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#374151',
+  },
+  gearIcon: {
+    fontSize: 14,
+    color: '#9ca3af',
   },
 });

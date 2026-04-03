@@ -1,4 +1,4 @@
-package com.linguaface.audio
+package com.parly.audio
 
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -12,7 +12,7 @@ import java.nio.ByteOrder
 class AudioModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
-    override fun getName() = "LinguaFaceAudio"
+    override fun getName() = "ParlyAudio"
 
     @ReactMethod
     fun configureSession(promise: Promise) {

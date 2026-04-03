@@ -102,7 +102,7 @@ async function downloadZipvoiceModel(
 async function getAvailableMemoryMB(): Promise<number> {
   try {
     const { NativeModules } = await import('react-native');
-    const mb: number = await NativeModules.LinguaFaceMemory?.getAvailableMemoryMB?.();
+    const mb: number = await NativeModules.ParlyMemory?.getAvailableMemoryMB?.();
     return mb ?? 4096;
   } catch {
     return 4096;

@@ -10,7 +10,7 @@ const CHANNELS = 1;        // Mono
 const BITS_PER_SAMPLE = 16;
 
 // react-native-audio-record prepends getFilesDir() to wavFile, so pass just the filename.
-const RECORDING_FILENAME = 'linguaface_recording.wav';
+const RECORDING_FILENAME = 'parly_recording.wav';
 export const RECORDING_PATH = `${RNFS.DocumentDirectoryPath}/${RECORDING_FILENAME}`;
 
 export class AudioCaptureService {
@@ -36,7 +36,7 @@ export class AudioCaptureService {
         PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
         {
           title: 'Permiso de micrófono',
-          message: 'LinguaFace necesita acceso al micrófono para transcribir la conversación.',
+          message: 'Parly necesita acceso al micrófono para transcribir la conversación.',
           buttonPositive: 'Permitir',
           buttonNegative: 'Cancelar',
         },

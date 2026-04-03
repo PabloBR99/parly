@@ -1,6 +1,6 @@
 #import <React/RCTBridgeModule.h>
 
-@interface RCT_EXTERN_MODULE(LinguaFaceAudio, NSObject)
+@interface RCT_EXTERN_MODULE(ParlyAudio, NSObject)
 
 RCT_EXTERN_METHOD(
   configureSession:(RCTPromiseResolveBlock)resolve

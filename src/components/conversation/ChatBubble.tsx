@@ -14,10 +14,15 @@ export function ChatBubble({ message, viewerPersonId, lang }: Props): React.JSX.
   const isOwnMessage = message.speakerId === viewerPersonId;
   const displayText = isOwnMessage ? message.originalText : (message.translatedText ?? '');
   const isPending = message.stage === 'transcribing' || message.stage === 'translating';
+  const isError = message.stage === 'error';
 
   return (
     <View style={[styles.row, isOwnMessage ? styles.rowRight : styles.rowLeft]}>
-      <View style={[styles.bubble, isOwnMessage ? styles.ownBubble : styles.otherBubble]}>
+      <View style={[
+        styles.bubble,
+        isOwnMessage ? styles.ownBubble : styles.otherBubble,
+        isError && styles.errorBubble,
+      ]}>
         {isPending ? (
           <View style={styles.pendingRow}>
             <ActivityIndicator size="small" color="#9ca3af" />
@@ -57,6 +62,11 @@ const styles = StyleSheet.create({
   otherBubble: {
     backgroundColor: '#1f2937',
     borderBottomLeftRadius: 4,
+  },
+  errorBubble: {
+    backgroundColor: '#7f1d1d',
+    borderColor: '#dc2626',
+    borderWidth: 1,
   },
   text: {
     color: '#f9fafb',

@@ -1,7 +1,7 @@
 import Foundation
 import AVFoundation
 
-@objc(LinguaFaceAudio)
+@objc(ParlyAudio)
 class AudioRouterBridge: NSObject {
 
   @objc

@@ -1,4 +1,4 @@
-# LinguaFace — Real-Time Conversation Translator
+# Parly — Real-Time Conversation Translator
 
 App móvil cross-platform (iOS + Android) que traduce conversaciones cara a cara en tiempo real. El teléfono se coloca entre dos personas. Pantalla dividida: cada persona ve la conversación en su idioma. 100% on-device, sin cloud.
 
@@ -64,7 +64,7 @@ Todo secuencial via `UtteranceQueue`. Una utterance a la vez.
 ## Estructura del proyecto
 
 ```
-linguaface/
+parly/
 ├── src/
 │   ├── app/
 │   │   └── types.ts                    # Tipos globales
@@ -110,13 +110,13 @@ linguaface/
 │       ├── SetupScreen.tsx
 │       └── ModelDownloadScreen.tsx
 ├── ios/
-│   └── LinguaFace/
+│   └── Parly/
 │       ├── Translation/
 │       │   └── TranslationBridge.swift
 │       └── Audio/
 │           └── AudioRouterBridge.swift
 └── android/
-    └── app/src/main/java/com/linguaface/
+    └── app/src/main/java/com/parly/
         ├── translation/
         │   └── TranslationModule.kt
         └── audio/
@@ -157,11 +157,12 @@ linguaface/
 - [x] `numSteps: 5` (balance velocidad/calidad)
 - [x] Probado en Android ✓
 
-### Fase 4 — VAD + Polish
-- [ ] Voice Activity Detection (energy-based)
-- [ ] Indicadores de estado animados
-- [ ] Manejo de errores completo
-- [ ] SettingsScreen
+### Fase 4 — VAD + Polish ✅
+- [x] Voice Activity Detection (energy-based) — VADService + VADController + WavWriter
+- [x] Indicadores de estado animados — StatusIndicator con dot pulsante por stage
+- [x] Manejo de errores completo — bubbles rojas en error, fallback NativeTTS
+- [x] SettingsScreen — autoPlay toggle, ttsNumSteps (5/10/15/20), borrar conversación
+- [x] Navegación Settings desde ConversationScreen (botón ⚙ en el divisor)
 
 ---
 
