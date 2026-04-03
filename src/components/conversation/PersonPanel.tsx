@@ -58,7 +58,7 @@ export function PersonPanel({ personId, inverted }: Props): React.JSX.Element {
       </View>
 
       <View style={styles.messages}>
-        <ChatBubbleList messages={messages} viewerPersonId={personId} lang={language} />
+        <ChatBubbleList messages={messages} viewerPersonId={personId} lang={language} inverted={inverted} />
       </View>
 
       {inputMode === 'ptt' ? (

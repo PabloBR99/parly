@@ -1,45 +1,55 @@
-import { initWhisper, type WhisperContext } from 'whisper.rn';
+import { createSTT } from 'react-native-sherpa-onnx/stt';
+import type { SttEngine } from 'react-native-sherpa-onnx/stt';
 import { Platform } from 'react-native';
 import type { TranscriptionResult } from '../../app/types';
 
-const WHISPER_THREADS = 4;
+const STT_THREADS = 4;
+
+async function resolveProvider(): Promise<string> {
+  if (Platform.OS !== 'android') return 'cpu';
+  try {
+    const { getNnapiSupport } = await import('react-native-sherpa-onnx');
+    const support = await getNnapiSupport();
+    return support.canInit ? 'nnapi' : 'cpu';
+  } catch {
+    return 'cpu';
+  }
+}
 
 export class WhisperService {
-  private context: WhisperContext | null = null;
+  private engine: SttEngine | null = null;
 
-  async load(modelPath: string): Promise<void> {
-    this.context = await initWhisper({ filePath: modelPath });
+  async load(modelDir: string): Promise<void> {
+    const provider = await resolveProvider();
+    this.engine = await createSTT({
+      modelPath: { type: 'file', path: modelDir },
+      modelType: 'whisper',
+      numThreads: STT_THREADS,
+      provider,
+      modelOptions: {
+        whisper: { task: 'transcribe' }, // no language → auto-detect
+      },
+    });
   }
 
   get isReady(): boolean {
-    return this.context !== null;
+    return this.engine !== null;
   }
 
-  async transcribe(audioPath: string, language?: string): Promise<TranscriptionResult> {
-    if (!this.context) {
-      throw new Error('[WhisperService] Model not loaded');
-    }
+  async transcribe(audioPath: string, _language?: string): Promise<TranscriptionResult> {
+    if (!this.engine) throw new Error('[WhisperService] Model not loaded');
 
-    const { promise } = this.context.transcribe(audioPath, {
-      language: language === 'auto' ? undefined : language,
-      maxLen: 0,           // 0 = unlimited (was 1, which forced ~1 char/segment — massive overhead)
-      tokenTimestamps: false,
-      nThreads: WHISPER_THREADS,
-      noContext: true,     // PTT utterances are independent — skip prior audio context
-      useCoreML: Platform.OS === 'ios', // Apple Neural Engine acceleration on iPhone
-    });
-
-    const { result, language: detectedLang } = await promise;
+    const result = await this.engine.transcribeFile(audioPath);
 
     return {
-      text: result.trim(),
-      language: detectedLang ?? language ?? 'auto',
+      text: result.text.trim(),
+      language: result.lang || _language || 'auto',
     };
   }
 
   async release(): Promise<void> {
-    await this.context?.release();
-    this.context = null;
+    await this.engine?.destroy();
+    this.engine = null;
   }
 }
 

@@ -7,9 +7,10 @@ interface Props {
   readonly messages: readonly Message[];
   readonly viewerPersonId: PersonId;
   readonly lang: string;
+  readonly inverted?: boolean;
 }
 
-export function ChatBubbleList({ messages, viewerPersonId, lang }: Props): React.JSX.Element {
+export function ChatBubbleList({ messages, viewerPersonId, lang, inverted }: Props): React.JSX.Element {
   const listRef = useRef<FlatList<Message>>(null);
 
   // Only show messages relevant to this panel:
@@ -21,10 +22,12 @@ export function ChatBubbleList({ messages, viewerPersonId, lang }: Props): React
   });
 
   useEffect(() => {
-    if (visibleMessages.length > 0) {
+    if (visibleMessages.length > 0 && !inverted) {
       listRef.current?.scrollToEnd({ animated: true });
     }
-  }, [visibleMessages.length]);
+    // When inverted, FlatList auto-shows newest items at the top (visually bottom
+    // of the rotated panel), so no manual scroll needed.
+  }, [visibleMessages.length, inverted]);
 
   return (
     <FlatList
@@ -34,7 +37,8 @@ export function ChatBubbleList({ messages, viewerPersonId, lang }: Props): React
       renderItem={({ item }) => (
         <ChatBubble message={item} viewerPersonId={viewerPersonId} lang={lang} />
       )}
-      contentContainerStyle={styles.content}
+      inverted={inverted}
+      contentContainerStyle={inverted ? styles.contentInverted : styles.content}
       showsVerticalScrollIndicator={false}
     />
   );
@@ -45,5 +49,8 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     flexGrow: 1,
     justifyContent: 'flex-end',
+  },
+  contentInverted: {
+    paddingVertical: 8,
   },
 });

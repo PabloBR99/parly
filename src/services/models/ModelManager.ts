@@ -3,11 +3,26 @@ import { useModelStore } from '../../store/modelStore';
 import { whisperService } from '../stt/WhisperService';
 import { zipvoiceService } from '../tts/ZipVoiceService';
 
-// ── Whisper base multilingual Q8_0 — ~82MB ───────────────────────────────────
-const WHISPER_MODEL_URL =
-  'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q8_0.bin';
-const WHISPER_FILENAME = 'ggml-base-q8_0.bin';
-const WHISPER_MIN_SIZE = 60 * 1024 * 1024; // 60MB
+// ── Sherpa-ONNX Whisper base multilingual int8 — ~161MB ──────────────────────
+// ⚠️  Verify these URLs before production — check:
+//     https://huggingface.co/csukuangfj/sherpa-onnx-whisper-base
+const WHISPER_HF_BASE =
+  'https://huggingface.co/csukuangfj/sherpa-onnx-whisper-base/resolve/main';
+const WHISPER_MODEL_DIR = 'sherpa-onnx-whisper-base';
+
+interface WhisperFile {
+  readonly name: string;
+  readonly minSize: number;
+  readonly sizeEstimate: number; // MB, for progress weighting
+}
+
+const WHISPER_FILES: WhisperFile[] = [
+  { name: 'base-encoder.int8.onnx', minSize: 25  * 1024 * 1024, sizeEstimate: 29  },
+  { name: 'base-decoder.int8.onnx', minSize: 120 * 1024 * 1024, sizeEstimate: 131 },
+  { name: 'base-tokens.txt',        minSize: 500 * 1024,         sizeEstimate: 0.8 },
+];
+
+const TOTAL_WHISPER_MB = WHISPER_FILES.reduce((s, f) => s + f.sizeEstimate, 0);
 
 // ── ZipVoice distill-int8 — ~104MB total ─────────────────────────────────────
 // Individual ONNX files hosted on HuggingFace k2-fsa organization.
@@ -37,10 +52,6 @@ const TOTAL_ZIPVOICE_MB = ZIPVOICE_FILES.reduce((s, f) => s + f.sizeEstimate, 0)
 const ENABLE_ZIPVOICE = true;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function modelPath(filename: string): string {
-  return `${RNFS.DocumentDirectoryPath}/${filename}`;
-}
 
 async function downloadFile(
   url: string,
@@ -116,15 +127,24 @@ export async function initModels(): Promise<void> {
 
   // ── Whisper (required) ────────────────────────────────────────────────────
   store.setWhisperStatus('downloading');
+  const whisperDir = `${RNFS.DocumentDirectoryPath}/${WHISPER_MODEL_DIR}`;
   try {
-    await downloadFile(
-      WHISPER_MODEL_URL,
-      modelPath(WHISPER_FILENAME),
-      WHISPER_MIN_SIZE,
-      pct => store.setWhisperProgress(pct),
-    );
+    await RNFS.mkdir(whisperDir);
+    let completedMB = 0;
+    for (const file of WHISPER_FILES) {
+      const url = `${WHISPER_HF_BASE}/${file.name}`;
+      const dest = `${whisperDir}/${file.name}`;
+      await downloadFile(url, dest, file.minSize, filePct => {
+        const fileMB = file.sizeEstimate * (filePct / 100);
+        store.setWhisperProgress(
+          Math.round(((completedMB + fileMB) / TOTAL_WHISPER_MB) * 100),
+        );
+      });
+      completedMB += file.sizeEstimate;
+      store.setWhisperProgress(Math.round((completedMB / TOTAL_WHISPER_MB) * 100));
+    }
     store.setWhisperStatus('loading');
-    await whisperService.load(modelPath(WHISPER_FILENAME));
+    await whisperService.load(whisperDir);
     store.setWhisperStatus('ready');
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
