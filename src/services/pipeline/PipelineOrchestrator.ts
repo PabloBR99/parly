@@ -1,32 +1,28 @@
 import { Platform } from 'react-native';
-import * as RNFS from '@dr.pogodin/react-native-fs';
 import { nanoid } from 'nanoid/non-secure';
 import { useConversationStore } from '../../store/conversationStore';
 import { useSettingsStore } from '../../store/settingsStore';
+import { useModelStore } from '../../store/modelStore';
 import { whisperService } from '../stt/WhisperService';
-import { canaryService, CanaryService } from '../stt/CanaryService';
+import { zipvoiceService } from '../tts/ZipVoiceService';
 import { nativeTTSService } from '../tts/NativeTTSService';
+import { audioPlayerService } from '../tts/AudioPlayerService';
 import { UtteranceQueue } from './UtteranceQueue';
+import { readWavAsVoiceRef } from '../../utils/audioUtils';
 import type { ITranslationService } from '../translation/TranslationService';
-import type { Utterance, PersonId, PipelineStage, Message, VoiceId } from '../../app/types';
+import type { Utterance, PersonId } from '../../app/types';
 
 // Cache after first load — dynamic imports are fast but not zero-cost on the hot path
 let _translationService: ITranslationService | null = null;
-let _translationServicePromise: Promise<ITranslationService> | null = null;
 
 async function getTranslationService(): Promise<ITranslationService> {
   if (_translationService) return _translationService;
-  if (!_translationServicePromise) {
-    _translationServicePromise = (async () => {
-      if (Platform.OS === 'ios') {
-        _translationService = (await import('../translation/TranslationService.ios')).default;
-      } else {
-        _translationService = (await import('../translation/TranslationService.android')).default;
-      }
-      return _translationService;
-    })();
+  if (Platform.OS === 'ios') {
+    _translationService = (await import('../translation/TranslationService.ios')).default;
+  } else {
+    _translationService = (await import('../translation/TranslationService.android')).default;
   }
-  return _translationServicePromise;
+  return _translationService;
 }
 
 /**
@@ -43,6 +39,8 @@ export async function warmupTranslation(): Promise<void> {
   ]);
 }
 
+// Track last auto-detected speaker for turn-alternation fallback
+let lastAutoSpeaker: PersonId | null = null;
 
 class PipelineOrchestrator {
   private readonly queue = new UtteranceQueue();
@@ -69,7 +67,7 @@ class PipelineOrchestrator {
     this.queue.enqueue(utterance);
   }
 
-  /** VAD mode — speaker will be auto-detected from Whisper language output. */
+  /** VAD mode — speaker will be auto-detected from translation direction. */
   submitAuto(audioPath: string): void {
     const utterance: Utterance = {
       id: nanoid(),
@@ -85,15 +83,10 @@ class PipelineOrchestrator {
     return this.queue.isProcessing;
   }
 
-  clearQueue(): void {
-    this.queue.clear();
-  }
-
   private async processUtterance(utterance: Utterance): Promise<void> {
     const { addMessage, updateMessage, setPipelineStage } =
       useConversationStore.getState();
     const settings = useSettingsStore.getState();
-    const { autoPlay } = settings;
     const messageId = utterance.id;
 
     const isAutoMode = utterance.sourceLang === 'auto';
@@ -101,11 +94,12 @@ class PipelineOrchestrator {
     let sourceLang = utterance.sourceLang;
     let targetLang = utterance.targetLang;
     let preTranscribedText: string | null = null;
+    let preTranslatedText: string | null = null;
 
-    try {
-      // ── Auto-detect speaker via translation direction ───────────────────
-      if (isAutoMode) {
-        setPipelineStage('transcribing');
+    // ── Auto-detect speaker via translation direction ─────────────────────
+    if (isAutoMode) {
+      setPipelineStage('transcribing');
+      try {
         const resolved = await detectSpeakerViaTranslation(
           utterance.audioPath,
           settings.personA.language,
@@ -118,161 +112,185 @@ class PipelineOrchestrator {
 
         speakerId = resolved.speakerId;
         preTranscribedText = resolved.originalText;
+        preTranslatedText = resolved.translatedText;
         sourceLang = resolved.sourceLang;
         targetLang = resolved.targetLang;
-      }
-
-      // Surface language detection to the UI (first-utterance toast)
-      if (isAutoMode) {
-        const { setDetectedLang, detectedLangs } = useConversationStore.getState();
-        const prev = detectedLangs[speakerId];
-        if (!prev || prev.lang !== sourceLang) {
-          setDetectedLang(speakerId, sourceLang);
-        }
-      }
-
-      const listenerConfig =
-        speakerId === 'person_a' ? settings.personB : settings.personA;
-
-      addMessage({
-        id: messageId,
-        speakerId,
-        originalText: preTranscribedText ?? '',
-        translatedText: null,
-        stage: preTranscribedText ? 'translating' : 'transcribing',
-        timestamp: Date.now(),
-      });
-
-      // Stage 1: STT (skip if already transcribed during auto-detect)
-      setPipelineStage('transcribing');
-      const transcribedText = await this.runSTT(
-        utterance, messageId, sourceLang, preTranscribedText, updateMessage, setPipelineStage,
-      );
-      if (!transcribedText) return;
-
-      // Stage 2: Translation — always done fresh to guarantee correct output
-      setPipelineStage('translating');
-      const translatedText = await this.runTranslation(
-        messageId, transcribedText, sourceLang, targetLang, updateMessage,
-      );
-
-      // Stage 3: TTS
-      if (!autoPlay) {
+        lastAutoSpeaker = speakerId;
+        console.log('[Pipeline] Speaker resolved →', {
+          speakerId, sourceLang, targetLang,
+          confidence: resolved.confidence,
+        });
+      } catch (e) {
+        console.error('[Pipeline] Auto-detect failed:', e);
         setPipelineStage('idle');
         return;
       }
-
-      console.warn(`[TTS-DEBUG] transcribed="${transcribedText}" translated="${translatedText}" target="${targetLang}"`);
-
-      setPipelineStage('synthesizing');
-      await this.runTTS(
-        translatedText, targetLang,
-        listenerConfig.voice, setPipelineStage,
-      );
-
-      setPipelineStage('idle');
-    } catch (e) {
-      console.error('[Pipeline] Utterance processing failed:', e);
-      setPipelineStage('idle');
-    } finally {
-      // Cleanup VAD segment files after processing
-      if (isAutoMode) {
-        RNFS.unlink(utterance.audioPath).catch(() => {});
-      }
     }
-  }
 
-  private async runSTT(
-    utterance: Utterance,
-    messageId: string,
-    sourceLang: string,
-    preTranscribedText: string | null,
-    updateMessage: (id: string, patch: Partial<Message>) => void,
-    setPipelineStage: (stage: PipelineStage) => void,
-  ): Promise<string | null> {
-    if (preTranscribedText) return preTranscribedText;
+    const listenerConfig =
+      speakerId === 'person_a' ? settings.personB : settings.personA;
 
-    try {
-      const result = await whisperService.transcribe(utterance.audioPath, sourceLang);
-      const cleaned = result.text.trim();
-      if (!cleaned || /^\[.*\]$/.test(cleaned)) {
-        useConversationStore.getState().removeMessage(messageId);
+    addMessage({
+      id: messageId,
+      speakerId,
+      originalText: preTranscribedText ?? '',
+      translatedText: null,
+      stage: preTranscribedText ? 'translating' : 'transcribing',
+      timestamp: Date.now(),
+    });
+
+    // Stage 1: STT (skip if already transcribed during auto-detect)
+    setPipelineStage('transcribing');
+    let transcribedText: string;
+    if (preTranscribedText) {
+      transcribedText = preTranscribedText;
+    } else {
+      try {
+        const result = await whisperService.transcribe(
+          utterance.audioPath,
+          sourceLang,
+        );
+        const cleaned = result.text.trim();
+        if (!cleaned || isWhisperNoise(cleaned)) {
+          useConversationStore.getState().removeMessage(messageId);
+          setPipelineStage('idle');
+          return;
+        }
+        transcribedText = cleaned;
+        updateMessage(messageId, { originalText: transcribedText, stage: 'translating' });
+      } catch (e) {
+        updateMessage(messageId, { originalText: '[Transcription failed]', stage: 'error' });
         setPipelineStage('idle');
-        return null;
+        return;
       }
-      updateMessage(messageId, { originalText: cleaned, stage: 'translating' });
-      return cleaned;
-    } catch {
-      updateMessage(messageId, { originalText: '[Transcription failed]', stage: 'error' });
+    }
+
+    // Stage 2: Translation (skip if auto-detect already provided it)
+    setPipelineStage('translating');
+    let translatedText: string;
+    if (preTranslatedText && !isSimilar(preTranslatedText, transcribedText)) {
+      translatedText = preTranslatedText;
+      console.log('[Pipeline] Translation (from auto-detect) →', { translatedText });
+      updateMessage(messageId, { translatedText, stage: 'done' });
+    } else {
+      try {
+        const svc = await getTranslationService();
+        const translation = await svc.translate(transcribedText, sourceLang, targetLang);
+        translatedText = translation.text;
+        console.log('[Pipeline] Translation OK →', { from: sourceLang, to: targetLang, input: transcribedText, output: translatedText });
+        updateMessage(messageId, { translatedText, stage: 'done' });
+      } catch (e) {
+        console.error('[Pipeline] Translation FAILED →', { from: sourceLang, to: targetLang, input: transcribedText, error: e });
+        updateMessage(messageId, {
+          translatedText: transcribedText,
+          stage: 'error',
+        });
+        translatedText = transcribedText;
+      }
+    }
+
+    // Stage 3: TTS
+    console.log('[Pipeline] TTS →', { translatedText, targetLang, voice: listenerConfig.voice });
+    if (!useSettingsStore.getState().autoPlay) {
       setPipelineStage('idle');
-      return null;
+      return;
     }
-  }
 
-  private async runTranslation(
-    messageId: string,
-    transcribedText: string,
-    sourceLang: string,
-    targetLang: string,
-    updateMessage: (id: string, patch: Partial<Message>) => void,
-  ): Promise<string> {
-    try {
-      const svc = await getTranslationService();
-      const translation = await svc.translate(transcribedText, sourceLang, targetLang);
-      updateMessage(messageId, { translatedText: translation.text, stage: 'done' });
-      return translation.text;
-    } catch {
-      updateMessage(messageId, { stage: 'error' });
-      return transcribedText;
+    setPipelineStage('synthesizing');
+    const zipvoiceReady = useModelStore.getState().zipvoiceStatus === 'ready';
+
+    if (zipvoiceReady && zipvoiceService.isReady) {
+      try {
+        const voiceRef = await readWavAsVoiceRef(utterance.audioPath);
+        const audioBuffer = await zipvoiceService.synthesize(
+          translatedText,
+          voiceRef,
+          transcribedText,
+          useSettingsStore.getState().ttsNumSteps,
+        );
+        setPipelineStage('playing');
+        await audioPlayerService.play(audioBuffer);
+      } catch (e) {
+        console.error('[Pipeline] ZipVoice TTS failed, falling back to OS TTS', e);
+        await nativeTTSService.speak(translatedText, targetLang, listenerConfig.voice);
+      }
+    } else {
+      await nativeTTSService.speak(translatedText, targetLang, listenerConfig.voice);
     }
-  }
 
-  private async runTTS(
-    translatedText: string,
-    targetLang: string,
-    voice: VoiceId,
-    setPipelineStage: (stage: PipelineStage) => void,
-  ): Promise<void> {
-    // ZipVoice (voice-cloning TTS) can't reliably handle cross-lingual synthesis:
-    // the Spanish reference audio biases the model to produce Spanish output even
-    // when the target text is English.  Always use native OS TTS for translations.
-    setPipelineStage('playing');
-    await nativeTTSService.speak(translatedText, targetLang, voice);
+    setPipelineStage('idle');
   }
 }
 
 export const pipelineOrchestrator = new PipelineOrchestrator();
 
-// ── React to language changes: pre-download new pair models ─────────────
-let _prevLangA: string | null = null;
-let _prevLangB: string | null = null;
+// ── Text normalization & comparison ──────────────────────────────────────────
 
-useSettingsStore.subscribe(state => {
-  const langA = state.personA.language;
-  const langB = state.personB.language;
+/** Normalize text for comparison: lowercase, strip punctuation/whitespace. */
+function normalize(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[.,;:!?¡¿'"«»""''…\-–—()\[\]{}]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-  if (_prevLangA === null) {
-    // First run — just record, warmup already happened at startup
-    _prevLangA = langA;
-    _prevLangB = langB;
-    return;
+/** Check if Whisper output is noise/silence markers. */
+function isWhisperNoise(text: string): boolean {
+  const t = text.trim();
+  // Brackets: [BLANK_AUDIO], [Music], [silence], etc.
+  if (/^\[.*\]$/.test(t)) return true;
+  // Parentheses: (music), (silence), etc.
+  if (/^\(.*\)$/.test(t)) return true;
+  // Common Whisper hallucinations on silence
+  if (/^(\.+|,+|\s+)$/.test(t)) return true;
+  // Repeated single characters (common hallucination)
+  if (/^(.)\1{3,}$/.test(t.replace(/\s/g, ''))) return true;
+  // Too short to be meaningful (single word < 3 chars)
+  if (t.length < 3) return true;
+  // Common Whisper noise strings
+  const noisePatterns = [
+    'thank you', 'thanks for watching', 'subscribe',
+    'gracias por ver', 'suscríbete',
+    'you', 'bye', 'uh', 'um', 'hmm',
+  ];
+  if (noisePatterns.includes(t.toLowerCase())) return true;
+  return false;
+}
+
+/**
+ * Check if two texts are essentially the same after normalization.
+ * Uses character-level similarity — texts are "similar" if >80% of characters match.
+ */
+function isSimilar(a: string, b: string, threshold = 0.80): boolean {
+  const na = normalize(a);
+  const nb = normalize(b);
+  if (na === nb) return true;
+  if (na.length === 0 || nb.length === 0) return false;
+
+  // Quick check: if one contains the other
+  if (na.includes(nb) || nb.includes(na)) return true;
+
+  // Character-level similarity (good enough, avoids expensive Levenshtein)
+  const sim = charSimilarity(na, nb);
+  return sim >= threshold;
+}
+
+/** Rough character-level similarity: ratio of matching chars in order. */
+function charSimilarity(a: string, b: string): number {
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen === 0) return 1;
+
+  // LCS-like count of matching characters
+  let matches = 0;
+  let bIdx = 0;
+  for (let i = 0; i < a.length && bIdx < b.length; i++) {
+    if (a[i] === b[bIdx]) {
+      matches++;
+      bIdx++;
+    }
   }
-
-  if (langA !== _prevLangA || langB !== _prevLangB) {
-    _prevLangA = langA;
-    _prevLangB = langB;
-
-    // Pre-download models for the new pair so the next translation doesn't block
-    warmupTranslation().catch(() => {});
-
-    // Discard any queued utterances that were captured with the old language pair
-    pipelineOrchestrator.clearQueue();
-  }
-});
-
-/** Reset auto-speaker tracking (call when starting a new VAD session). */
-export function resetAutoSpeaker(): void {
-  // No-op — speaker state is now stateless (detected per-utterance)
+  return matches / maxLen;
 }
 
 // ── Speaker detection for VAD mode ───────────────────────────────────────────
@@ -280,413 +298,136 @@ export function resetAutoSpeaker(): void {
 interface AutoDetectResult {
   readonly speakerId: PersonId;
   readonly originalText: string;
+  readonly translatedText: string;
   readonly sourceLang: string;
   readonly targetLang: string;
+  readonly confidence: 'high' | 'medium' | 'low';
 }
 
 /**
- * Determine who spoke using multi-signal language identification.
+ * Determine who spoke using ML Kit/iOS Translation as a language detector.
  *
- * When Canary supports the language pair (en/es/de/fr):
- *   Runs both Canary engines in parallel — no auto-translation possible.
- *   ML Kit picks the correct transcript from the two results.
+ * Strategy:
+ *  1. Transcribe with Whisper auto → get raw text (ignore language tag).
+ *  2. Translate in BOTH directions via native translation.
+ *  3. Compare NORMALIZED texts using similarity metric (not exact match).
+ *  4. The direction that produces a DIFFERENT text = correct translation direction.
+ *  5. Return the translation too so processUtterance can skip Stage 2.
  *
- * Otherwise (other language pairs):
- *   Falls back to Whisper + multi-signal detection (may have auto-translation issues).
+ * Key improvement over v1: uses normalized similarity comparison instead of
+ * exact string equality, which avoids false positives from capitalization,
+ * punctuation, or minor formatting differences.
  */
 async function detectSpeakerViaTranslation(
   audioPath: string,
   langA: string,
   langB: string,
 ): Promise<AutoDetectResult | null> {
-  const svc = await getTranslationService();
-
-  // ── Canary path: zero auto-translation risk ───────────────────────────────
-  if (CanaryService.supportsLanguagePair(langA, langB) && canaryService.isReady) {
-    return detectSpeakerViaCanary(audioPath, langA, langB, svc);
-  }
-
-  // ── Whisper fallback ──────────────────────────────────────────────────────
-  return detectSpeakerViaWhisper(audioPath, langA, langB, svc);
-}
-
-/**
- * Canary dual-engine speaker detection.
- *
- * Runs both engines simultaneously and uses ML Kit on the resulting texts
- * to pick the one that matches the actual spoken language.
- * Since each engine uses srcLang=tgtLang, neither can ever translate.
- */
-async function detectSpeakerViaCanary(
-  audioPath: string,
-  langA: string,
-  langB: string,
-  svc: ITranslationService,
-): Promise<AutoDetectResult | null> {
-  const dual = await canaryService.transcribeBoth(audioPath);
-  if (!dual) return null;
-
-  const { textA, textB } = dual;
-
-  // Discard if both engines produced empty / noise-only output
-  if ((!textA || /^\[.*\]$/.test(textA)) && (!textB || /^\[.*\]$/.test(textB))) {
-    return null;
-  }
-
-  const normA = langA.split('-')[0].split('_')[0].toLowerCase();
-  const normB = langB.split('-')[0].split('_')[0].toLowerCase();
-
-  // Prefer the transcript where ML Kit confidently identifies the language
-  // as matching the engine's configured srcLang.
-  const scoreA = await scoreTranscriptForLang(textA, normA, normB, svc);
-  const scoreB = await scoreTranscriptForLang(textB, normB, normA, svc);
-
-  let detectedLang: string;
-  let originalText: string;
-
-  if (scoreA >= scoreB && textA) {
-    detectedLang = langA;
-    originalText = textA;
-    console.warn(`[Canary] picked engine_a lang=${langA} score=${scoreA.toFixed(2)} text="${textA.slice(0, 30)}"`);
-  } else if (textB) {
-    detectedLang = langB;
-    originalText = textB;
-    console.warn(`[Canary] picked engine_b lang=${langB} score=${scoreB.toFixed(2)} text="${textB.slice(0, 30)}"`);
-  } else {
-    return null;
-  }
-
-  // Phonetic garble check:
-  // When Canary uses the wrong srcLang it sometimes force-maps audio phonetically
-  // (e.g. Spanish "encantado" → garbled English "encantrated").
-  // Condition: winner won confidently (≥0.9) but loser had low confidence (<0.8),
-  // AND a long word in the winner shares ≥65% character overlap with a word in the loser.
-  // This is narrower than a semantic check and avoids false positives when Canary
-  // correctly translates (e.g. "Estoy muy bien" ↔ "I'm very well" — no shared chars).
-  const winnerScore = detectedLang === langA ? scoreA : scoreB;
-  const loserScore  = detectedLang === langA ? scoreB : scoreA;
-  const loserText   = detectedLang === langA ? textB : textA;
-  const loserLang   = detectedLang === langA ? langB : langA;
-
-  if (
-    loserText &&
-    !/^\[.*\]$/.test(loserText) &&
-    winnerScore >= 0.9 &&
-    loserScore < 0.8 &&
-    hasPhoneticGarbling(originalText, loserText)
-  ) {
-    detectedLang = loserLang;
-    originalText = loserText;
-    console.warn(`[Canary] garble-swap → lang=${detectedLang} text="${originalText.slice(0, 30)}"`);
-  }
-
-  const isLangA = detectedLang === langA;
-  return {
-    speakerId: isLangA ? 'person_a' : 'person_b',
-    originalText,
-    sourceLang: detectedLang,
-    targetLang: isLangA ? langB : langA,
-  };
-}
-
-/**
- * Returns true if any long word (≥5 chars) in `winner` shares ≥65% of its
- * characters (by LCS ratio) with any long word in `loser`.
- *
- * Catches phonetic transliterations like "encantrated" ↔ "encantado" (LCS=73%)
- * without triggering on genuine translations like "thanks" ↔ "gracias" (LCS=14%).
- */
-function hasPhoneticGarbling(winner: string, loser: string): boolean {
-  const LONG_WORD = /[a-záéíóúüñ]{5,}/gi;
-  const winnerWords = winner.match(LONG_WORD) ?? [];
-  const loserWords  = loser.match(LONG_WORD)  ?? [];
-
-  for (const ww of winnerWords) {
-    for (const lw of loserWords) {
-      const ratio = lcsLength(ww.toLowerCase(), lw.toLowerCase()) /
-                    Math.max(ww.length, lw.length);
-      if (ratio >= 0.65) {
-        console.warn(`[Canary] phonetic overlap ${ratio.toFixed(2)}: "${ww}" ↔ "${lw}"`);
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-/** Longest common subsequence length (character-level). */
-function lcsLength(a: string, b: string): number {
-  const m = a.length;
-  const n = b.length;
-  // Use two rolling rows to keep memory O(n)
-  let prev = new Array<number>(n + 1).fill(0);
-  let curr = new Array<number>(n + 1).fill(0);
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      curr[j] = a[i - 1] === b[j - 1]
-        ? prev[j - 1] + 1
-        : Math.max(prev[j], curr[j - 1]);
-    }
-    [prev, curr] = [curr, prev];
-    curr.fill(0);
-  }
-  return prev[n];
-}
-
-/**
- * Score how well a transcript matches a given language using ML Kit.
- * Returns 0–1 confidence. Falls back to 0.5 if ML Kit is inconclusive.
- */
-async function scoreTranscriptForLang(
-  text: string,
-  targetLang: string,
-  otherLang: string,
-  svc: ITranslationService,
-): Promise<number> {
-  if (!text || /^\[.*\]$/.test(text)) return 0;
-
-  try {
-    const candidates = await svc.identifyLanguage(text);
-    for (const c of candidates) {
-      const norm = c.language.split('-')[0].split('_')[0].toLowerCase();
-      if (norm === targetLang) return c.confidence;
-    }
-    // If the other language scores higher, this engine was wrong
-    for (const c of candidates) {
-      const norm = c.language.split('-')[0].split('_')[0].toLowerCase();
-      if (norm === otherLang) return 1 - c.confidence; // penalise
-    }
-  } catch {
-    // ML Kit unavailable — use heuristic
-  }
-
-  // Neutral fallback — tie-break by text length (longer = more confident transcription)
-  return 0.5;
-}
-
-/**
- * Whisper-based speaker detection (fallback for non-Canary language pairs).
- * Subject to Whisper's auto-translation issue; uses multi-signal detection to mitigate.
- */
-async function detectSpeakerViaWhisper(
-  audioPath: string,
-  langA: string,
-  langB: string,
-  svc: ITranslationService,
-): Promise<AutoDetectResult | null> {
-  // Step 1: Transcribe
+  // Transcribe — ignore the language tag, just get the text
   const result = await whisperService.transcribe(audioPath);
   const text = result.text.trim();
-  if (!text || /^\[.*\]$/.test(text)) return null;
 
-  // Step 2: Identify language — must be one of the two configured languages
-  const detectedLang = await identifyLanguageMultiSignal(
-    text, result.language, langA, langB, svc,
-  );
+  if (!text || isWhisperNoise(text)) return null;
 
-  // If the language can't be confidently identified, discard this audio
-  if (!detectedLang) return null;
+  console.log('[Pipeline] Transcribed →', { text, whisperLang: result.language });
 
-  // Step 3: Map detected language → speaker
-  const isLangA = detectedLang === langA;
-  const audioLang = isLangA ? langA : langB;
-  const targetLang = isLangA ? langB : langA;
-  const speakerId: PersonId = isLangA ? 'person_a' : 'person_b';
+  // Translate in both directions
+  const svc = await getTranslationService();
 
-  // Whisper sometimes auto-translates instead of transcribing (e.g. Spanish audio
-  // → English text). Detect this by checking if the text language differs from the
-  // audio language. When this happens, the text is already in the target language
-  // and we should translate it BACK to get the original for display.
-  const textLang = await detectTextLanguage(text, langA, langB, svc);
-  const whisperAutoTranslated = textLang !== null && textLang !== audioLang;
+  const [transAB, transBA] = await Promise.all([
+    svc.translate(text, langA, langB).catch(() => ({ text })),
+    svc.translate(text, langB, langA).catch(() => ({ text })),
+  ]);
 
-  if (whisperAutoTranslated) {
-    // Text is already in the target language — use it as-is for TTS,
-    // and reverse-translate it back for the original display text.
-    const originalText = await svc.translate(text, textLang, audioLang)
-      .then(r => r.text)
-      .catch(() => text);
+  // Compare using normalized similarity (NOT exact match)
+  const simAB = charSimilarity(normalize(text), normalize(transAB.text));
+  const simBA = charSimilarity(normalize(text), normalize(transBA.text));
 
+  // A translation that CHANGED the text has LOW similarity to the original
+  // A translation that kept it the same has HIGH similarity
+  const UNCHANGED_THRESHOLD = 0.75; // above this = text didn't really change
+
+  const unchangedAB = simAB >= UNCHANGED_THRESHOLD;
+  const unchangedBA = simBA >= UNCHANGED_THRESHOLD;
+
+  console.log('[Pipeline] Direction test →', {
+    [`${langA}→${langB}`]: { result: transAB.text, similarity: simAB.toFixed(2), unchanged: unchangedAB },
+    [`${langB}→${langA}`]: { result: transBA.text, similarity: simBA.toFixed(2), unchanged: unchangedBA },
+  });
+
+  // Case 1: A→B changed, B→A didn't → text is in langA → person A spoke
+  if (!unchangedAB && unchangedBA) {
     return {
-      speakerId,
-      originalText,
-      sourceLang: audioLang,
-      targetLang,
+      speakerId: 'person_a',
+      originalText: text,
+      translatedText: transAB.text,
+      sourceLang: langA,
+      targetLang: langB,
+      confidence: 'high',
     };
   }
 
+  // Case 2: B→A changed, A→B didn't → text is in langB → person B spoke
+  if (!unchangedBA && unchangedAB) {
+    return {
+      speakerId: 'person_b',
+      originalText: text,
+      translatedText: transBA.text,
+      sourceLang: langB,
+      targetLang: langA,
+      confidence: 'high',
+    };
+  }
+
+  // Case 3: Both changed → pick the direction with MORE change (lower similarity)
+  if (!unchangedAB && !unchangedBA) {
+    const isA = simAB < simBA; // lower similarity = more change = correct direction
+    console.log('[Pipeline] Both changed — picking', isA ? langA : langB, 'as source');
+    return {
+      speakerId: isA ? 'person_a' : 'person_b',
+      originalText: text,
+      translatedText: isA ? transAB.text : transBA.text,
+      sourceLang: isA ? langA : langB,
+      targetLang: isA ? langB : langA,
+      confidence: 'medium',
+    };
+  }
+
+  // Case 4: Neither changed — use Whisper's language hint + alternation fallback
+  console.log('[Pipeline] Neither direction changed text — using fallback');
+
+  // Try Whisper's detected language as a weak signal
+  const whisperLang = result.language?.split('-')[0]?.toLowerCase();
+  if (whisperLang === langA) {
+    return {
+      speakerId: 'person_a',
+      originalText: text,
+      translatedText: text, // no translation available
+      sourceLang: langA,
+      targetLang: langB,
+      confidence: 'low',
+    };
+  }
+  if (whisperLang === langB) {
+    return {
+      speakerId: 'person_b',
+      originalText: text,
+      translatedText: text,
+      sourceLang: langB,
+      targetLang: langA,
+      confidence: 'low',
+    };
+  }
+
+  // Last resort: alternate speakers
+  const speaker: PersonId =
+    lastAutoSpeaker === 'person_a' ? 'person_b' : 'person_a';
   return {
-    speakerId,
+    speakerId: speaker,
     originalText: text,
-    sourceLang: audioLang,
-    targetLang,
+    translatedText: text,
+    sourceLang: speaker === 'person_a' ? langA : langB,
+    targetLang: speaker === 'person_a' ? langB : langA,
+    confidence: 'low',
   };
 }
-
-/**
- * Multi-signal language identification strictly constrained to two known languages.
- * Returns langA, langB, or null if the text cannot be confidently attributed to either.
- * When null is returned, the audio segment is discarded.
- */
-async function identifyLanguageMultiSignal(
-  text: string,
-  whisperLang: string,
-  langA: string,
-  langB: string,
-  svc: ITranslationService,
-): Promise<string | null> {
-  // Normalize language codes for comparison (strip region: "en-US" → "en")
-  const normA = langA.split('-')[0].split('_')[0].toLowerCase();
-  const normB = langB.split('-')[0].split('_')[0].toLowerCase();
-
-  // Same language on both sides → auto-detect is meaningless
-  if (normA === normB) return null;
-
-  const normWhisper = whisperLang.split('-')[0].split('_')[0].toLowerCase();
-
-  // Signal 1: Native language identification on text (ML Kit / NLLanguageRecognizer).
-  // Most reliable for typical conversational text.
-  const nativeLangResult = await tryNativeLangId(text, normA, normB, svc);
-  if (nativeLangResult) {
-    const nativeNorm = nativeLangResult.split('-')[0].split('_')[0].toLowerCase();
-
-    // Cross-check for Whisper auto-translation: if ML Kit says the text is langB
-    // but Whisper's audio lang says langA, Whisper silently translated the audio.
-    // Trust the audio signal — the real speaker is langA.
-    if (nativeNorm === normB && normWhisper === normA) {
-      console.warn(`[LangDetect] auto-translate detected: whisper_audio=${normWhisper} ml_kit_text=${nativeNorm} → ${langA}`);
-      return langA;
-    }
-
-    console.warn(`[LangDetect] signal=native text="${text.slice(0, 20)}" → ${nativeLangResult}`);
-    return nativeLangResult;
-  }
-
-  // Signal 2: Whisper's audio-level language detection.
-  // Unreliable for short clips (< 2s) but useful when ML Kit is inconclusive.
-  if (normWhisper === normA) {
-    console.warn(`[LangDetect] signal=whisper text="${text.slice(0, 20)}" → ${langA}`);
-    return langA;
-  }
-  if (normWhisper === normB) {
-    console.warn(`[LangDetect] signal=whisper text="${text.slice(0, 20)}" → ${langB}`);
-    return langB;
-  }
-
-  // Signal 3: Translation heuristic (fallback)
-  console.warn(`[LangDetect] signal=heuristic text="${text.slice(0, 20)}"`);
-  return tryTranslationHeuristic(text, langA, langB, svc);
-  // Returns null if inconclusive — audio will be discarded
-}
-
-/**
- * Use native language identification APIs to detect the language.
- * Returns langA, langB, or null if inconclusive.
- */
-async function tryNativeLangId(
-  text: string,
-  normA: string,
-  normB: string,
-  svc: ITranslationService,
-): Promise<string | null> {
-  try {
-    const candidates = await svc.identifyLanguage(text);
-    if (candidates.length === 0) return null;
-
-    // Find the best match among our two configured languages
-    let scoreA = 0;
-    let scoreB = 0;
-    for (const c of candidates) {
-      const normC = c.language.split('-')[0].split('_')[0].toLowerCase();
-      if (normC === normA) scoreA = Math.max(scoreA, c.confidence);
-      if (normC === normB) scoreB = Math.max(scoreB, c.confidence);
-    }
-
-    // Need at least 0.2 confidence and clear winner (1.5x margin)
-    const minConfidence = 0.2;
-    if (scoreA >= minConfidence && scoreA > scoreB * 1.5) return normA;
-    if (scoreB >= minConfidence && scoreB > scoreA * 1.5) return normB;
-
-    // If both have similar scores but one is significantly higher
-    if (scoreA > 0 && scoreB > 0) {
-      if (scoreA > scoreB * 1.2) return normA;
-      if (scoreB > scoreA * 1.2) return normB;
-    }
-
-    // Single match with decent confidence
-    if (scoreA >= 0.4 && scoreB === 0) return normA;
-    if (scoreB >= 0.4 && scoreA === 0) return normB;
-  } catch {
-    // Native lang ID not available — continue to other signals
-  }
-
-  return null;
-}
-
-/**
- * Fallback: detect language by checking which translation direction changes the text.
- */
-async function tryTranslationHeuristic(
-  text: string,
-  langA: string,
-  langB: string,
-  svc: ITranslationService,
-): Promise<string | null> {
-  const transAB = await svc.translate(text, langA, langB).catch(() => ({ text }));
-  const transBA = await svc.translate(text, langB, langA).catch(() => ({ text }));
-
-  const normalizedText = text.toLowerCase().trim();
-  const changedAB = transAB.text.toLowerCase().trim() !== normalizedText;
-  const changedBA = transBA.text.toLowerCase().trim() !== normalizedText;
-
-  if (changedAB && !changedBA) return langA;
-  if (changedBA && !changedAB) return langB;
-
-  if (changedAB && changedBA) {
-    // Both changed — compare normalized edit distance
-    const diffAB = normalizedDifference(normalizedText, transAB.text.toLowerCase().trim());
-    const diffBA = normalizedDifference(normalizedText, transBA.text.toLowerCase().trim());
-    if (Math.abs(diffAB - diffBA) > 0.1) {
-      return diffAB > diffBA ? langA : langB;
-    }
-  }
-
-  return null;
-}
-
-/**
- * Normalized text difference using word-level comparison.
- * More robust than character-level for natural language.
- */
-function normalizedDifference(a: string, b: string): number {
-  const wordsA = a.split(/\s+/).filter(Boolean);
-  const wordsB = b.split(/\s+/).filter(Boolean);
-  const maxLen = Math.max(wordsA.length, wordsB.length);
-  if (maxLen === 0) return 0;
-
-  let matching = 0;
-  const remaining = new Set(wordsB);
-  for (const word of wordsA) {
-    if (remaining.has(word)) {
-      matching++;
-      remaining.delete(word);
-    }
-  }
-  return 1 - matching / maxLen;
-}
-
-/**
- * Quick text language detection using native APIs.
- * Returns langA, langB, or null if unclear.
- */
-async function detectTextLanguage(
-  text: string,
-  langA: string,
-  langB: string,
-  svc: ITranslationService,
-): Promise<string | null> {
-  const normA = langA.split('-')[0].split('_')[0].toLowerCase();
-  const normB = langB.split('-')[0].split('_')[0].toLowerCase();
-  return tryNativeLangId(text, normA, normB, svc);
-}
-

@@ -1,5 +1,5 @@
 import { Platform, PermissionsAndroid } from 'react-native';
-import * as RNFS from '@dr.pogodin/react-native-fs';
+import RNFS from 'react-native-fs';
 
 // react-native-audio-record: records raw PCM and saves to a WAV file
 // Docs: https://github.com/goodatlas/react-native-audio-record
@@ -9,6 +9,19 @@ const SAMPLE_RATE = 16000; // Required by Whisper
 const CHANNELS = 1;        // Mono
 const BITS_PER_SAMPLE = 16;
 
+// Android AudioSource constants:
+//   1 = MIC (raw, no processing)
+//   6 = VOICE_RECOGNITION (AGC on, noise suppression off — good for STT)
+//   7 = VOICE_COMMUNICATION (AGC + AEC + NS — best for conversations)
+//
+// VOICE_COMMUNICATION (7) is better for Parly because:
+//   - Automatic Gain Control normalizes volume for soft/far speakers
+//   - Acoustic Echo Cancellation helps when TTS plays from speaker
+//   - Noise suppression helps in noisy environments (restaurants, etc.)
+//
+// If audio quality is still too low on specific devices, try switching to 6.
+const ANDROID_AUDIO_SOURCE = 7;
+
 // react-native-audio-record prepends getFilesDir() to wavFile, so pass just the filename.
 const RECORDING_FILENAME = 'parly_recording.wav';
 export const RECORDING_PATH = `${RNFS.DocumentDirectoryPath}/${RECORDING_FILENAME}`;
@@ -17,7 +30,6 @@ export class AudioCaptureService {
   private recording = false;
   private initialized = false;
   private streaming = false;
-  private streamingHandler: ((data: string) => void) | null = null;
 
   private init(): void {
     if (this.initialized) return;
@@ -25,10 +37,15 @@ export class AudioCaptureService {
       sampleRate: SAMPLE_RATE,
       channels: CHANNELS,
       bitsPerSample: BITS_PER_SAMPLE,
-      audioSource: Platform.OS === 'android' ? 6 : 0, // 6 = VOICE_RECOGNITION on Android
+      audioSource: Platform.OS === 'android' ? ANDROID_AUDIO_SOURCE : 0,
       wavFile: RECORDING_FILENAME,
     });
     this.initialized = true;
+  }
+
+  /** Force re-init on next start (useful if audioSource settings change). */
+  reinit(): void {
+    this.initialized = false;
   }
 
   async requestPermission(): Promise<boolean> {
@@ -72,7 +89,6 @@ export class AudioCaptureService {
   startStreaming(onData: (base64Pcm: string) => void): void {
     if (this.recording || this.streaming) return;
     this.init();
-    this.streamingHandler = onData;
     AudioRecord.on('data', onData);
     this.streaming = true;
     this.recording = true;
@@ -84,12 +100,6 @@ export class AudioCaptureService {
     if (!this.streaming) return;
     this.streaming = false;
     this.recording = false;
-    if (this.streamingHandler) {
-      // react-native-audio-record uses EventEmitter internally but types omit removeListener
-      (AudioRecord as unknown as { removeListener(event: string, cb: Function): void })
-        .removeListener('data', this.streamingHandler);
-      this.streamingHandler = null;
-    }
     await AudioRecord.stop();
   }
 

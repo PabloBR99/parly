@@ -12,10 +12,23 @@ interface PcmChunk {
 }
 
 // ── Tuning constants ─────────────────────────────────────────────────────────
-const SILENCE_THRESHOLD = 0.015;        // RMS below this = silence
-const SPEECH_ONSET_MS = 250;            // Sustained energy to confirm speech
-const SILENCE_TIMEOUT_MS = 1200;        // Silence after speech to end utterance
-const PRE_ROLL_BYTES = 16000 * 2 * 0.4; // 400ms at 16kHz 16-bit mono = 12 800 bytes
+// LOWERED from 0.015 → 0.008: captures softer speech and devices with lower
+// mic gain. If you still get missed utterances, try 0.005.
+const SILENCE_THRESHOLD = 0.008;
+
+// RAISED from 250ms → 350ms: requires more sustained energy to confirm speech,
+// reducing false triggers from taps/bumps.
+const SPEECH_ONSET_MS = 350;
+
+// Silence after speech to end utterance (unchanged — 1.2s is good for pauses)
+const SILENCE_TIMEOUT_MS = 1200;
+
+// Pre-roll: 400ms of audio before detected speech onset
+const PRE_ROLL_BYTES = 16000 * 2 * 0.4; // 400ms at 16kHz 16-bit mono = 12800 bytes
+
+// MINIMUM segment length: Whisper needs at least ~0.8s of audio to produce
+// meaningful output. Segments shorter than this are discarded.
+const MIN_SEGMENT_BYTES = 16000 * 2 * 0.8; // 0.8s at 16kHz 16-bit mono = 25600 bytes
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -60,6 +73,7 @@ class VADService {
 
   // Accumulated speech PCM chunks (onset through offset)
   private speechChunks: string[] = [];
+  private speechBytes = 0;
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -86,6 +100,7 @@ class VADService {
     this.ringBufferBytes = 0;
     this.preRollChunks = [];
     this.speechChunks = [];
+    this.speechBytes = 0;
   }
 
   // ── Event subscription ───────────────────────────────────────────────────
@@ -108,6 +123,7 @@ class VADService {
     const rms = computeRms(base64Pcm);
     const isSpeech = rms > SILENCE_THRESHOLD;
     const now = Date.now();
+    const chunkBytes = base64ByteLength(base64Pcm);
 
     switch (this.state) {
       case 'silence':
@@ -117,20 +133,28 @@ class VADService {
           // Snapshot ring buffer (before current chunk) as pre-roll
           this.preRollChunks = this.ringBuffer.map(c => c.data);
           this.speechChunks = [base64Pcm];
+          this.speechBytes = chunkBytes;
         }
         break;
 
       case 'maybe_speech':
         this.speechChunks.push(base64Pcm);
+        this.speechBytes += chunkBytes;
         if (!isSpeech) {
           // False alarm
           this.state = 'silence';
           this.speechChunks = [];
+          this.speechBytes = 0;
           this.preRollChunks = [];
         } else if (now - this.stateEnteredAt >= SPEECH_ONSET_MS) {
           // Confirmed speech — prepend pre-roll
           this.state = 'speech';
           this.speechChunks = [...this.preRollChunks, ...this.speechChunks];
+          // Recalculate bytes including pre-roll
+          this.speechBytes = 0;
+          for (const c of this.speechChunks) {
+            this.speechBytes += base64ByteLength(c);
+          }
           this.preRollChunks = [];
           this.emit('speech_start');
         }
@@ -138,6 +162,7 @@ class VADService {
 
       case 'speech':
         this.speechChunks.push(base64Pcm);
+        this.speechBytes += chunkBytes;
         if (!isSpeech) {
           this.state = 'maybe_silence';
           this.stateEnteredAt = now;
@@ -146,14 +171,24 @@ class VADService {
 
       case 'maybe_silence':
         this.speechChunks.push(base64Pcm);
+        this.speechBytes += chunkBytes;
         if (isSpeech) {
           // Speech resumed (mid-sentence pause)
           this.state = 'speech';
         } else if (now - this.stateEnteredAt >= SILENCE_TIMEOUT_MS) {
           // Confirmed end of utterance
           this.state = 'silence';
-          this.emit('speech_end');
-          // Caller must collect chunks before next processChunk call
+
+          // Only emit if segment is long enough for Whisper to process
+          if (this.speechBytes >= MIN_SEGMENT_BYTES) {
+            this.emit('speech_end');
+          } else {
+            console.log(
+              `[VAD] Discarding short segment: ${this.speechBytes}B < ${MIN_SEGMENT_BYTES}B minimum`,
+            );
+            this.speechChunks = [];
+            this.speechBytes = 0;
+          }
         }
         break;
     }
@@ -163,6 +198,7 @@ class VADService {
   collectSpeechChunks(): string[] {
     const chunks = this.speechChunks;
     this.speechChunks = [];
+    this.speechBytes = 0;
     return chunks;
   }
 
@@ -192,6 +228,7 @@ class VADService {
     this.ringBufferBytes = 0;
     this.preRollChunks = [];
     this.speechChunks = [];
+    this.speechBytes = 0;
   }
 }
 
