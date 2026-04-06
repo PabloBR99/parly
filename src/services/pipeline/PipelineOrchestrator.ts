@@ -4,12 +4,15 @@ import { useSettingsStore } from '../../store/settingsStore';
 import { useModelStore } from '../../store/modelStore';
 import { whisperService } from '../stt/WhisperService';
 import { CanaryService, canaryService } from '../stt/CanaryService';
+import { isKrokoLanguage } from '../stt/StreamingSTTService';
+import { streamingPipeline } from './StreamingPipeline';
 import { zipvoiceService } from '../tts/ZipVoiceService';
 import { nativeTTSService } from '../tts/NativeTTSService';
 import { audioPlayerService } from '../tts/AudioPlayerService';
 import { UtteranceQueue } from './UtteranceQueue';
 import { readWavAsVoiceRef } from '../../utils/audioUtils';
 import { getTranslationService } from '../translation/TranslationServiceSingleton';
+import { downloadKrokoForLanguage } from '../models/ModelManager';
 import type { Utterance, PersonId } from '../../app/types';
 
 // ── Language discovery state machine ──────────────────────────────────────────
@@ -75,6 +78,7 @@ export function resetDiscovery(): void {
   langACandidate = '';
   langBCandidate = '';
   canaryService.release().catch(() => {}); // free ~414 MB; back to Whisper-only
+  streamingPipeline.release().catch(() => {}); // release streaming engines
   console.log('[Pipeline] Discovery state reset');
 }
 
@@ -116,6 +120,40 @@ export async function warmupTranslation(): Promise<void> {
     svc.downloadLanguagePair(detectedLangA, detectedLangB).catch(() => {}),
     svc.downloadLanguagePair(detectedLangB, detectedLangA).catch(() => {}),
   ]);
+}
+
+// ── Streaming pipeline setup ──────────────────────────────────────────────────
+
+/**
+ * Download any missing Kroko models and configure the streaming pipeline.
+ * Called on ACTIVE transition — runs in background, non-blocking.
+ */
+async function configureStreamingPipeline(langA: string, langB: string): Promise<void> {
+  console.log('[Pipeline] configureStreamingPipeline starting for', langA, '↔', langB);
+  try {
+    // Ensure models are downloaded for both languages
+    const downloads: Promise<void>[] = [];
+    if (isKrokoLanguage(langA)) downloads.push(downloadKrokoForLanguage(langA));
+    if (isKrokoLanguage(langB)) downloads.push(downloadKrokoForLanguage(langB));
+    await Promise.all(downloads);
+
+    // Both languages must be Kroko-supported for streaming
+    if (!isKrokoLanguage(langA) || !isKrokoLanguage(langB)) {
+      console.log('[Pipeline] Streaming not available: unsupported language pair', langA, langB);
+      return;
+    }
+
+    await streamingPipeline.configure(langA, langB);
+    console.log('[Pipeline] Streaming pipeline ready for', langA, '↔', langB);
+
+    // Free Whisper (~244MB) — no longer needed in ACTIVE phase since Kroko handles
+    // streaming and Whisper was only used during DISCOVERY. If streaming fails
+    // mid-utterance, the fallback will re-init Whisper on demand.
+    whisperService.release().catch(() => {});
+    console.log('[Pipeline] Whisper released to free memory for streaming');
+  } catch (e) {
+    console.error('[Pipeline] Streaming pipeline setup failed (falling back to offline):', e);
+  }
 }
 
 // ── Main orchestrator ─────────────────────────────────────────────────────────
@@ -343,13 +381,12 @@ export async function resolveAutoUtterance(audioPath: string): Promise<AutoResol
   // where each engine can ONLY transcribe in its own language. ML Kit picks the
   // winning transcript based on confidence.
   //
-  // CRITICAL: for supported pairs (en/es/de/fr) we NEVER fall through to Whisper
-  // in ACTIVE phase, even if Canary is still loading. We wait up to 10 s for the
-  // engines to initialise (files are already on-disk from ModelManager — this is
-  // only ONNX initialisation, not a network download). Dropping an utterance after
-  // 10 s is far preferable to a guaranteed mis-translation from Whisper auto-detect.
+  // In ACTIVE phase, use Canary dual-engine for offline transcription — UNLESS both
+  // languages are Kroko-supported (streaming pipeline handles those; Whisper is the
+  // offline fallback, saving ~180MB RAM by not loading Canary).
   const { personA: _pA, personB: _pB } = useSettingsStore.getState();
-  if (discoveryPhase === 'active' && CanaryService.supportsLanguagePair(_pA.language, _pB.language)) {
+  const krokoHandlesPair = isKrokoLanguage(_pA.language) && isKrokoLanguage(_pB.language);
+  if (discoveryPhase === 'active' && !krokoHandlesPair && CanaryService.supportsLanguagePair(_pA.language, _pB.language)) {
     // Wait for engines if they are still loading (loadForPair was fired at ACTIVE transition)
     if (!canaryService.isLoadedFor(_pA.language, _pB.language)) {
       console.log('[Pipeline] ACTIVE: Canary engines loading — waiting up to 10 s…');
@@ -509,9 +546,13 @@ export async function resolveAutoUtterance(audioPath: string): Promise<AutoResol
       useSettingsStore.getState().setPersonLanguage('person_b', detectedLangB);
       console.log('[Pipeline] langB committed →', detectedLangB, '— entering ACTIVE');
       warmupTranslation().catch(() => {});
-      // Start loading Canary engines in the background (runs during translate/TTS phase).
-      // Once ready, resolveAutoUtterance will use Canary instead of Whisper for ACTIVE turns.
-      canaryService.loadForPair(detectedLangA, detectedLangB).catch(() => {});
+      // Use streaming (Kroko) when both languages are supported — skip Canary to save ~180MB RAM.
+      // When Kroko is unavailable, fall back to Canary dual-engine for ACTIVE phase.
+      if (isKrokoLanguage(detectedLangA) && isKrokoLanguage(detectedLangB)) {
+        void configureStreamingPipeline(detectedLangA, detectedLangB);
+      } else {
+        canaryService.loadForPair(detectedLangA, detectedLangB).catch(() => {});
+      }
       return {
         speakerId: 'person_b',
         transcribedText: text,

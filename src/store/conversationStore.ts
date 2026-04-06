@@ -6,10 +6,18 @@ interface LanguageDetection {
   readonly timestamp: number;
 }
 
+export interface StreamingPartial {
+  readonly speakerId: PersonId;
+  readonly transcript: string;
+  readonly translation: string;
+  readonly stableTranslation: string;
+}
+
 interface ConversationState {
   readonly messages: readonly Message[];
   readonly activeSpeaker: PersonId | null;
   readonly pipelineStage: PipelineStage;
+  readonly streamingPartial: StreamingPartial | null;
   readonly detectedLangs: {
     readonly person_a: LanguageDetection | null;
     readonly person_b: LanguageDetection | null;
@@ -22,6 +30,7 @@ interface ConversationActions {
   removeMessage: (id: string) => void;
   setActiveSpeaker: (speaker: PersonId | null) => void;
   setPipelineStage: (stage: PipelineStage) => void;
+  setStreamingPartial: (partial: StreamingPartial | null) => void;
   setDetectedLang: (personId: PersonId, lang: string) => void;
   clearConversation: () => void;
 }
@@ -30,6 +39,7 @@ const initialState: ConversationState = {
   messages: [],
   activeSpeaker: null,
   pipelineStage: 'idle',
+  streamingPartial: null,
   detectedLangs: { person_a: null, person_b: null },
 };
 
@@ -51,6 +61,8 @@ export const useConversationStore = create<ConversationState & ConversationActio
 
   setPipelineStage: stage => set({ pipelineStage: stage }),
 
+  setStreamingPartial: partial => set({ streamingPartial: partial }),
+
   setDetectedLang: (personId, lang) =>
     set(state => ({
       detectedLangs: {
@@ -63,6 +75,7 @@ export const useConversationStore = create<ConversationState & ConversationActio
     messages: [],
     activeSpeaker: null,
     pipelineStage: 'idle',
+    streamingPartial: null,
     detectedLangs: { person_a: null, person_b: null },
   }),
 }));

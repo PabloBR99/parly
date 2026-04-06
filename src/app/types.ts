@@ -4,6 +4,7 @@ export type PipelineStage =
   | 'idle'
   | 'listening'
   | 'recording'
+  | 'streaming'
   | 'transcribing'
   | 'translating'
   | 'synthesizing'

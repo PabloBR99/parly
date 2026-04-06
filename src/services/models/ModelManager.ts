@@ -3,6 +3,7 @@ import { useModelStore } from '../../store/modelStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { whisperService } from '../stt/WhisperService';
 import { canaryService } from '../stt/CanaryService';
+import { streamingSTTService, KROKO_LANGUAGES, isKrokoLanguage } from '../stt/StreamingSTTService';
 import { zipvoiceService } from '../tts/ZipVoiceService';
 
 // ── Sherpa-ONNX Whisper small multilingual int8 — ~244MB ─────────────────────
@@ -79,6 +80,32 @@ const TOTAL_ZIPVOICE_MB = ZIPVOICE_FILES.reduce((s, f) => s + f.sizeEstimate, 0)
 
 // Set to false to skip ZipVoice and always use OS TTS fallback
 const ENABLE_ZIPVOICE = true;
+
+// ── Kroko streaming Zipformer INT8 — ~147MB per language ─────────────────────
+// Per-language streaming ASR models (Zipformer2 + Transducer).
+// Source: https://huggingface.co/hudaiapa88/sherpa-stt-onnx
+const KROKO_HF_BASE =
+  'https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main';
+const KROKO_MODEL_DIR = 'streaming-kroko';
+const KROKO_VARIANT = 'kroko_64l'; // 64-layer: ~200ms latency, ~5% WER, 1GB RAM
+
+interface KrokoFile {
+  readonly name: string;
+  readonly minSize: number;
+  readonly sizeEstimate: number; // MB
+}
+
+// Verified file sizes from HuggingFace (es/kroko_64l):
+//   encoder.int8.onnx = 153 MB, decoder.int8.onnx = 606 KB,
+//   joiner.int8.onnx = 337 KB, tokens.txt = 7 KB
+const KROKO_FILES: KrokoFile[] = [
+  { name: 'encoder.int8.onnx', minSize: 50 * 1024 * 1024,  sizeEstimate: 153  },
+  { name: 'decoder.int8.onnx', minSize: 100 * 1024,         sizeEstimate: 0.6  },
+  { name: 'joiner.int8.onnx',  minSize: 100 * 1024,         sizeEstimate: 0.3  },
+  { name: 'tokens.txt',        minSize: 1   * 1024,         sizeEstimate: 0.01 },
+];
+
+const TOTAL_KROKO_PER_LANG_MB = KROKO_FILES.reduce((s, f) => s + f.sizeEstimate, 0);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -163,6 +190,64 @@ async function downloadCanaryModel(
   }
 }
 
+async function downloadKrokoLanguage(
+  baseDir: string,
+  lang: string,
+  onProgress: (pct: number) => void,
+): Promise<void> {
+  const langDir = `${baseDir}/${lang}`;
+  await RNFS.mkdir(langDir);
+
+  let completedMB = 0;
+
+  for (const file of KROKO_FILES) {
+    const url = `${KROKO_HF_BASE}/${lang}/${KROKO_VARIANT}/${file.name}`;
+    const dest = `${langDir}/${file.name}`;
+
+    await downloadFile(url, dest, file.minSize, filePct => {
+      const fileMB = file.sizeEstimate * (filePct / 100);
+      onProgress(
+        Math.round(((completedMB + fileMB) / TOTAL_KROKO_PER_LANG_MB) * 100),
+      );
+    });
+
+    completedMB += file.sizeEstimate;
+    onProgress(Math.round((completedMB / TOTAL_KROKO_PER_LANG_MB) * 100));
+  }
+}
+
+/**
+ * Download Kroko streaming models for a set of languages.
+ * Called during init for all Kroko-supported languages configured in settings.
+ */
+async function downloadKrokoModels(
+  baseDir: string,
+  languages: readonly string[],
+  onProgress: (pct: number) => void,
+): Promise<void> {
+  await RNFS.mkdir(baseDir);
+
+  const krokoLangs = languages
+    .map(l => l.split('-')[0].toLowerCase())
+    .filter(isKrokoLanguage);
+
+  // Deduplicate
+  const uniqueLangs = [...new Set(krokoLangs)];
+  if (uniqueLangs.length === 0) return;
+
+  const totalMB = TOTAL_KROKO_PER_LANG_MB * uniqueLangs.length;
+  let completedMB = 0;
+
+  for (const lang of uniqueLangs) {
+    await downloadKrokoLanguage(baseDir, lang, langPct => {
+      const langMB = TOTAL_KROKO_PER_LANG_MB * (langPct / 100);
+      onProgress(Math.round(((completedMB + langMB) / totalMB) * 100));
+    });
+    completedMB += TOTAL_KROKO_PER_LANG_MB;
+    onProgress(Math.round((completedMB / totalMB) * 100));
+  }
+}
+
 async function getAvailableMemoryMB(): Promise<number> {
   try {
     const { NativeModules } = await import('react-native');
@@ -178,6 +263,70 @@ async function getAvailableMemoryMB(): Promise<number> {
 }
 
 // ── Public ────────────────────────────────────────────────────────────────────
+
+/**
+ * Download Kroko streaming model for a specific language on demand.
+ * Called when a new language is discovered in ACTIVE phase transition.
+ */
+let _krokoDownloadLock: Promise<void> | null = null;
+
+/**
+ * Download Kroko streaming model for a specific language on demand.
+ * Called when a new language is discovered in ACTIVE phase transition.
+ * Serialized to prevent concurrent downloads to the same directory.
+ */
+export async function downloadKrokoForLanguage(lang: string): Promise<void> {
+  const normalized = lang.split('-')[0].toLowerCase();
+  if (!isKrokoLanguage(normalized)) return;
+
+  // Serialize concurrent calls
+  while (_krokoDownloadLock) {
+    await _krokoDownloadLock;
+  }
+
+  const krokoDir = `${RNFS.DocumentDirectoryPath}/${KROKO_MODEL_DIR}`;
+  await RNFS.mkdir(krokoDir);
+
+  // Check ALL required files exist with minimum sizes (not just encoder)
+  const langDir = `${krokoDir}/${normalized}`;
+  let allPresent = true;
+  for (const file of KROKO_FILES) {
+    const filePath = `${langDir}/${file.name}`;
+    if (await RNFS.exists(filePath)) {
+      const { size } = await RNFS.stat(filePath);
+      if (size < file.minSize) {
+        allPresent = false;
+        break;
+      }
+    } else {
+      allPresent = false;
+      break;
+    }
+  }
+
+  if (allPresent) {
+    console.log(`[ModelManager] Kroko ${normalized} already downloaded`);
+    streamingSTTService.setModelBaseDir(krokoDir);
+    return;
+  }
+
+  console.log(`[ModelManager] Downloading Kroko ${normalized}...`);
+  const store = useModelStore.getState();
+  store.setKrokoStatus('downloading');
+
+  let resolve: () => void;
+  _krokoDownloadLock = new Promise<void>(r => { resolve = r; });
+
+  try {
+    await downloadKrokoLanguage(krokoDir, normalized, pct => store.setKrokoProgress(pct));
+    streamingSTTService.setModelBaseDir(krokoDir);
+    store.setKrokoStatus('ready');
+    console.log(`[ModelManager] Kroko ${normalized} download complete`);
+  } finally {
+    _krokoDownloadLock = null;
+    resolve!();
+  }
+}
 
 let _initPromise: Promise<void> | null = null;
 
@@ -249,6 +398,30 @@ async function _initModelsImpl(): Promise<void> {
       store.setCanaryError(msg);
       // Non-fatal — pipeline falls back to Whisper automatically
     }
+  }
+
+  // ── Kroko streaming (optional — streaming ASR for ACTIVE phase) ──────────
+  // Download for the languages configured in settings. Additional languages
+  // can be downloaded lazily when the language pair is discovered.
+  const krokoDir = `${RNFS.DocumentDirectoryPath}/${KROKO_MODEL_DIR}`;
+  const { personA: pA, personB: pB } = useSettingsStore.getState();
+  const krokoLangs = [pA.language, pB.language].filter(isKrokoLanguage);
+
+  if (krokoLangs.length > 0) {
+    store.setKrokoStatus('downloading');
+    try {
+      await downloadKrokoModels(krokoDir, krokoLangs, pct => store.setKrokoProgress(pct));
+      streamingSTTService.setModelBaseDir(krokoDir);
+      store.setKrokoStatus('ready');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      store.setKrokoStatus('error');
+      store.setKrokoError(msg);
+      // Non-fatal — pipeline falls back to offline ASR
+    }
+  } else {
+    store.setKrokoStatus('error');
+    store.setKrokoError('No Kroko-supported languages configured');
   }
 
   // ── ZipVoice (optional) ───────────────────────────────────────────────────

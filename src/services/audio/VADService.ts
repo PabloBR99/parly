@@ -22,8 +22,8 @@ const SILENCE_THRESHOLD = 0.008;
 // reducing false triggers from taps/bumps.
 const SPEECH_ONSET_MS = 350;
 
-// Silence after speech to end utterance (unchanged — 1.2s is good for pauses)
-const SILENCE_TIMEOUT_MS = 1200;
+// Silence after speech to end utterance — 900ms balances responsiveness vs mid-sentence pauses
+const SILENCE_TIMEOUT_MS = 900;
 
 // Pre-roll: 400ms of audio before detected speech onset
 const PRE_ROLL_BYTES = 16000 * 2 * 0.4; // 400ms at 16kHz 16-bit mono = 12800 bytes
