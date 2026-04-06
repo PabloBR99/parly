@@ -3,6 +3,7 @@ import { StatusBar } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ConversationScreen } from './screens/ConversationScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { initModels } from './services/models/ModelManager';
@@ -38,6 +39,7 @@ export default function App(): React.JSX.Element {
   }, []);
 
   return (
+    <GestureHandlerRootView style={gestureRootStyle}>
     <SafeAreaProvider>
       <StatusBar barStyle="light-content" backgroundColor="#000" />
       <NavigationContainer>
@@ -68,5 +70,8 @@ export default function App(): React.JSX.Element {
         </Stack.Navigator>
       </NavigationContainer>
     </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
+
+const gestureRootStyle = { flex: 1 };

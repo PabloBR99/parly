@@ -1,7 +1,7 @@
 // VADController — glue between AudioCaptureService, VADService, and PipelineOrchestrator.
 // Manages continuous listening, speech segment extraction, and anti-echo.
 
-import RNFS from 'react-native-fs';
+import { DocumentDirectoryPath } from '@dr.pogodin/react-native-fs';
 import { audioCaptureService } from './AudioCaptureService';
 import { vadService } from './VADService';
 import { writePcmToWav } from './WavWriter';
@@ -18,7 +18,7 @@ let resumeTimer: ReturnType<typeof setTimeout> | null = null;
 const POST_TTS_COOLDOWN_MS = 500;
 
 function nextSegmentPath(): string {
-  return `${RNFS.DocumentDirectoryPath}/vad_segment_${++segmentCounter}.wav`;
+  return `${DocumentDirectoryPath}/vad_segment_${++segmentCounter}.wav`;
 }
 
 export function startVADMode(): void {

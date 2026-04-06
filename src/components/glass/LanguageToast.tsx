@@ -48,9 +48,9 @@ export function LanguageToast({ lang, timestamp }: Props): React.JSX.Element {
 const styles = StyleSheet.create({
   text: {
     fontSize: 13,
-    color: 'rgba(255,255,255,0.25)',
+    color: 'rgba(255,255,255,0.28)',
     textAlign: 'center',
     letterSpacing: 0.5,
-    marginTop: 16,
+    marginTop: 12,
   },
 });

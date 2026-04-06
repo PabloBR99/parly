@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import {
   Pressable,
   StatusBar,
@@ -9,13 +9,12 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useModelStore } from '../store/modelStore';
+import { useConversationStore } from '../store/conversationStore';
 import { startVADMode, stopVADMode } from '../services/audio/VADController';
 import { initModels } from '../services/models/ModelManager';
 import { GlassPanel } from '../components/glass/GlassPanel';
 import { BreathingDivider } from '../components/glass/BreathingDivider';
-import { HistorySheet } from '../components/glass/HistorySheet';
 import { GlassLoadingOverlay } from '../components/shared/GlassLoadingOverlay';
-import { useConversationStore } from '../store/conversationStore';
 import type { RootStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Conversation'>;
@@ -24,14 +23,11 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   const whisperStatus = useModelStore(s => s.whisperStatus);
   const whisperError = useModelStore(s => s.whisperError);
   const whisperProgress = useModelStore(s => s.whisperProgress);
-  const activeSpeaker = useConversationStore(s => s.activeSpeaker);
   const pipelineStage = useConversationStore(s => s.pipelineStage);
   const insets = useSafeAreaInsets();
 
-  const [historyVisible, setHistoryVisible] = useState(false);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Auto-start VAD when models are ready
   useEffect(() => {
     if (whisperStatus === 'ready') {
       startVADMode();
@@ -41,21 +37,20 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
     };
   }, [whisperStatus]);
 
-  const handleDividerPressIn = useCallback(() => {
-    // Long-press (600ms) on divider → open settings
+  // Long-press (600ms) on the breathing dot → settings
+  const handleDotPressIn = useCallback(() => {
     longPressTimer.current = setTimeout(() => {
       navigation.navigate('Settings');
     }, 600);
   }, [navigation]);
 
-  const handleDividerPressOut = useCallback(() => {
+  const handleDotPressOut = useCallback(() => {
     if (longPressTimer.current) {
       clearTimeout(longPressTimer.current);
       longPressTimer.current = null;
     }
   }, []);
 
-  // Loading / error states
   if (whisperStatus === 'error') {
     return (
       <View style={styles.errorContainer}>
@@ -80,57 +75,28 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor="#000" />
+      <StatusBar barStyle="light-content" backgroundColor="#000" translucent />
 
       {/* Top half — person_b, rotated 180° so they read from across the table */}
-      <View
-        style={[
-          styles.half,
-          styles.topHalf,
-          { paddingBottom: insets.top },
-        ]}
-      >
+      <View style={[styles.half, { paddingBottom: insets.top }]}>
         <View style={styles.rotated}>
           <GlassPanel personId="person_b" />
         </View>
       </View>
 
-      {/* Breathing divider — long-press opens settings */}
+      {/* Breathing divider — audio-reactive line. Long-press opens settings. */}
       <Pressable
-        onPressIn={handleDividerPressIn}
-        onPressOut={handleDividerPressOut}
-        style={styles.dividerArea}
+        onPressIn={handleDotPressIn}
+        onPressOut={handleDotPressOut}
+        style={styles.dotArea}
       >
-        <BreathingDivider
-          activeSpeaker={activeSpeaker}
-          pipelineStage={pipelineStage}
-        />
+        <BreathingDivider pipelineStage={pipelineStage} />
       </Pressable>
 
       {/* Bottom half — person_a, normal orientation */}
-      <View
-        style={[
-          styles.half,
-          styles.bottomHalf,
-          { paddingBottom: insets.bottom },
-        ]}
-      >
+      <View style={[styles.half, { paddingBottom: insets.bottom }]}>
         <GlassPanel personId="person_a" />
       </View>
-
-      {/* Swipe-up history hint */}
-      <Pressable
-        style={styles.historyHint}
-        onPress={() => setHistoryVisible(true)}
-      >
-        <Text style={styles.historyHintText}>↑</Text>
-      </Pressable>
-
-      {/* History sheet overlay */}
-      <HistorySheet
-        visible={historyVisible}
-        onClose={() => setHistoryVisible(false)}
-      />
     </View>
   );
 }
@@ -143,19 +109,14 @@ const styles = StyleSheet.create({
   half: {
     flex: 1,
   },
-  topHalf: {
-    // no extra background — pure black
-  },
-  bottomHalf: {
-    // no extra background — pure black
-  },
   rotated: {
     flex: 1,
     transform: [{ rotate: '180deg' }],
   },
-  dividerArea: {
-    paddingVertical: 12,
+  dotArea: {
+    paddingVertical: 14,
     justifyContent: 'center',
+    alignItems: 'center',
   },
   errorContainer: {
     flex: 1,
@@ -186,20 +147,5 @@ const styles = StyleSheet.create({
   retryText: {
     fontSize: 14,
     color: 'rgba(255,255,255,0.5)',
-  },
-  historyHint: {
-    position: 'absolute',
-    bottom: 12,
-    alignSelf: 'center',
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  historyHintText: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.25)',
   },
 });

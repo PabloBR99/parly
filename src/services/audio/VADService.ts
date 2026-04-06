@@ -1,6 +1,8 @@
 // Voice Activity Detection — energy-based with ring buffer for pre-roll.
 // Detects speech onset/offset from streaming PCM and accumulates audio segments.
 
+import { useAudioLevelStore } from '../../store/audioLevelStore';
+
 export type VADEvent = 'speech_start' | 'speech_end';
 type VADCallback = (event: VADEvent) => void;
 
@@ -84,12 +86,14 @@ class VADService {
 
   stop(): void {
     this.active = false;
+    useAudioLevelStore.getState().setLevel(0);
     this.reset();
   }
 
   /** Pause detection (e.g., during TTS) without destroying state */
   pause(): void {
     this.active = false;
+    useAudioLevelStore.getState().setLevel(0);
   }
 
   /** Resume detection — clears buffers to avoid processing stale/echo audio */
@@ -121,6 +125,7 @@ class VADService {
     if (!this.active) return;
 
     const rms = computeRms(base64Pcm);
+    useAudioLevelStore.getState().setLevel(rms * 8);
     const isSpeech = rms > SILENCE_THRESHOLD;
     const now = Date.now();
     const chunkBytes = base64ByteLength(base64Pcm);

@@ -11,6 +11,7 @@ import {
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useSettingsStore } from '../store/settingsStore';
 import { useConversationStore } from '../store/conversationStore';
+import { resetDiscovery } from '../services/pipeline/PipelineOrchestrator';
 import { LanguageSelector } from '../components/conversation/LanguageSelector';
 import type { RootStackParamList } from '../navigation/types';
 
@@ -39,6 +40,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           style: 'destructive',
           onPress: () => {
             clearConversation();
+            resetDiscovery();
             navigation.goBack();
           },
         },

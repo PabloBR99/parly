@@ -1,46 +1,124 @@
-import { Platform } from 'react-native';
 import { nanoid } from 'nanoid/non-secure';
 import { useConversationStore } from '../../store/conversationStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useModelStore } from '../../store/modelStore';
 import { whisperService } from '../stt/WhisperService';
+import { CanaryService, canaryService } from '../stt/CanaryService';
 import { zipvoiceService } from '../tts/ZipVoiceService';
 import { nativeTTSService } from '../tts/NativeTTSService';
 import { audioPlayerService } from '../tts/AudioPlayerService';
 import { UtteranceQueue } from './UtteranceQueue';
 import { readWavAsVoiceRef } from '../../utils/audioUtils';
-import type { ITranslationService } from '../translation/TranslationService';
+import { getTranslationService } from '../translation/TranslationServiceSingleton';
 import type { Utterance, PersonId } from '../../app/types';
 
-// Cache after first load — dynamic imports are fast but not zero-cost on the hot path
-let _translationService: ITranslationService | null = null;
+// ── Language discovery state machine ──────────────────────────────────────────
 
-async function getTranslationService(): Promise<ITranslationService> {
-  if (_translationService) return _translationService;
-  if (Platform.OS === 'ios') {
-    _translationService = (await import('../translation/TranslationService.ios')).default;
-  } else {
-    _translationService = (await import('../translation/TranslationService.android')).default;
-  }
-  return _translationService;
+type DiscoveryPhase = 'discovering_a' | 'discovering_b' | 'active';
+
+let discoveryPhase: DiscoveryPhase = 'discovering_a';
+let detectedLangA = '';
+let detectedLangB = '';
+/**
+ * Candidate languages — set on the FIRST plausible detection (conf ≥ 0.4, len ≥ 3)
+ * even before the commit threshold is reached. Once set, ONLY the same language can
+ * commit for that slot. This prevents a later high-confidence utterance in a different
+ * language from stealing langA/langB (e.g. "What's your name?" at conf=0.9999 can't
+ * override a prior "Hola!" candidate even if "Hola!" didn't commit on its own).
+ */
+let langACandidate = '';
+let langBCandidate = '';
+/** Incremented on every resetDiscovery() so in-flight calls can detect stale sessions. */
+let discoveryGeneration = 0;
+
+/**
+ * Minimum ML Kit confidence to commit langA/langB for long utterances (≥ 15 chars).
+ */
+const DISCOVERY_CONFIDENCE = 0.85;
+
+/**
+ * Minimum ML Kit confidence to commit for short utterances (≥ 4 chars).
+ * Kept lower because ML Kit inherently gives less confidence to short words —
+ * "Hola!" scores ~0.72 despite being unambiguously Spanish.
+ */
+const DISCOVERY_CONFIDENCE_SHORT = 0.50;
+
+/**
+ * Minimum ML Kit confidence for per-utterance routing in ACTIVE phase.
+ */
+const ACTIVE_CONFIDENCE = 0.5;
+
+/**
+ * Minimum confidence to tentatively lock a language candidate.
+ * Low bar — the candidate only gates which language may later commit.
+ */
+const CANDIDATE_CONFIDENCE = 0.4;
+
+/**
+ * Minimum transcript length to set a language candidate or attempt a commit.
+ * Filters out single characters and noise ("ok" = 2, "sí" = 2).
+ */
+const MIN_CANDIDATE_CHARS = 3;
+
+/**
+ * Default output language while langB is still unknown.
+ * Person A's utterances will be translated into this language in DISCOVERING_B.
+ */
+const DEFAULT_LANG_B = 'en';
+
+/** Reset discovery — call when starting a new conversation session. */
+export function resetDiscovery(): void {
+  discoveryGeneration++;
+  discoveryPhase = 'discovering_a';
+  detectedLangA = '';
+  detectedLangB = '';
+  langACandidate = '';
+  langBCandidate = '';
+  canaryService.release().catch(() => {}); // free ~414 MB; back to Whisper-only
+  console.log('[Pipeline] Discovery state reset');
 }
 
 /**
- * Pre-loads the translation service and triggers model downloads for the active
- * language pair so the first real translation call returns instantly.
- * Call this after Whisper is ready (non-blocking — errors are swallowed).
+ * Returns true if lang/conf/len meet the bar to commit as langA or langB.
+ * Two tiers: short words need ≥ 0.50, long utterances need ≥ 0.85.
+ */
+function canCommitDiscovery(lang: string, conf: number, len: number): boolean {
+  if (!lang || len < MIN_CANDIDATE_CHARS) return false;
+  return (conf >= DISCOVERY_CONFIDENCE_SHORT && len >= 4) ||
+         (conf >= DISCOVERY_CONFIDENCE && len >= 15);
+}
+
+// ── Translation warmup ────────────────────────────────────────────────────────
+
+/**
+ * Pre-downloads ML Kit translation models for the active language pair.
+ *
+ * In VAD mode: no-op until both languages are discovered (ACTIVE phase).
+ * In PTT mode: warms up the user-configured language pair immediately.
+ * Called automatically on ACTIVE transition, and can be called from App.tsx after init.
  */
 export async function warmupTranslation(): Promise<void> {
   const svc = await getTranslationService();
-  const { personA, personB } = useSettingsStore.getState();
+
+  if (discoveryPhase !== 'active') {
+    // VAD mode has not yet discovered both languages — nothing to warm up.
+    // PTT mode: the user pre-configured their language pair, warm that up.
+    const { personA, personB, inputMode } = useSettingsStore.getState();
+    if (inputMode !== 'ptt') return;
+    await Promise.all([
+      svc.downloadLanguagePair(personA.language, personB.language).catch(() => {}),
+      svc.downloadLanguagePair(personB.language, personA.language).catch(() => {}),
+    ]);
+    return;
+  }
+
   await Promise.all([
-    svc.downloadLanguagePair(personA.language, personB.language).catch(() => {}),
-    svc.downloadLanguagePair(personB.language, personA.language).catch(() => {}),
+    svc.downloadLanguagePair(detectedLangA, detectedLangB).catch(() => {}),
+    svc.downloadLanguagePair(detectedLangB, detectedLangA).catch(() => {}),
   ]);
 }
 
-// Track last auto-detected speaker for turn-alternation fallback
-let lastAutoSpeaker: PersonId | null = null;
+// ── Main orchestrator ─────────────────────────────────────────────────────────
 
 class PipelineOrchestrator {
   private readonly queue = new UtteranceQueue();
@@ -49,12 +127,11 @@ class PipelineOrchestrator {
     this.queue.setHandler(u => this.processUtterance(u));
   }
 
+  /** Manual PTT mode — speaker and languages are known in advance. */
   submit(speakerId: PersonId, audioPath: string): void {
     const settings = useSettingsStore.getState();
-    const personConfig =
-      speakerId === 'person_a' ? settings.personA : settings.personB;
-    const otherConfig =
-      speakerId === 'person_a' ? settings.personB : settings.personA;
+    const personConfig = speakerId === 'person_a' ? settings.personA : settings.personB;
+    const otherConfig  = speakerId === 'person_a' ? settings.personB : settings.personA;
 
     const utterance: Utterance = {
       id: nanoid(),
@@ -63,18 +140,17 @@ class PipelineOrchestrator {
       sourceLang: personConfig.language,
       targetLang: otherConfig.language,
     };
-
     this.queue.enqueue(utterance);
   }
 
-  /** VAD mode — speaker will be auto-detected from translation direction. */
+  /** VAD mode — speaker and languages are discovered from the audio itself. */
   submitAuto(audioPath: string): void {
     const utterance: Utterance = {
       id: nanoid(),
       speakerId: 'person_a', // placeholder — resolved after transcription
       audioPath,
-      sourceLang: 'auto',    // signals auto-detection mode
-      targetLang: '',        // resolved after language detection
+      sourceLang: 'auto',   // signals auto-detection mode
+      targetLang: '',       // resolved after language detection
     };
     this.queue.enqueue(utterance);
   }
@@ -86,40 +162,28 @@ class PipelineOrchestrator {
   private async processUtterance(utterance: Utterance): Promise<void> {
     const { addMessage, updateMessage, setPipelineStage } =
       useConversationStore.getState();
-    const settings = useSettingsStore.getState();
     const messageId = utterance.id;
-
     const isAutoMode = utterance.sourceLang === 'auto';
+
     let speakerId = utterance.speakerId;
     let sourceLang = utterance.sourceLang;
     let targetLang = utterance.targetLang;
     let preTranscribedText: string | null = null;
-    let preTranslatedText: string | null = null;
 
-    // ── Auto-detect speaker via translation direction ─────────────────────
+    // ── Auto-detect: resolve speaker and languages ────────────────────────────
     if (isAutoMode) {
       setPipelineStage('transcribing');
       try {
-        const resolved = await detectSpeakerViaTranslation(
-          utterance.audioPath,
-          settings.personA.language,
-          settings.personB.language,
-        );
+        const resolved = await resolveAutoUtterance(utterance.audioPath);
         if (!resolved) {
           setPipelineStage('idle');
           return;
         }
-
-        speakerId = resolved.speakerId;
-        preTranscribedText = resolved.originalText;
-        preTranslatedText = resolved.translatedText;
-        sourceLang = resolved.sourceLang;
-        targetLang = resolved.targetLang;
-        lastAutoSpeaker = speakerId;
-        console.log('[Pipeline] Speaker resolved →', {
-          speakerId, sourceLang, targetLang,
-          confidence: resolved.confidence,
-        });
+        speakerId        = resolved.speakerId;
+        preTranscribedText = resolved.transcribedText;
+        sourceLang       = resolved.sourceLang;
+        targetLang       = resolved.targetLang;
+        console.log('[Pipeline] Resolved →', { speakerId, sourceLang, targetLang, phase: discoveryPhase });
       } catch (e) {
         console.error('[Pipeline] Auto-detect failed:', e);
         setPipelineStage('idle');
@@ -128,7 +192,9 @@ class PipelineOrchestrator {
     }
 
     const listenerConfig =
-      speakerId === 'person_a' ? settings.personB : settings.personA;
+      speakerId === 'person_a'
+        ? useSettingsStore.getState().personB
+        : useSettingsStore.getState().personA;
 
     addMessage({
       id: messageId,
@@ -139,17 +205,14 @@ class PipelineOrchestrator {
       timestamp: Date.now(),
     });
 
-    // Stage 1: STT (skip if already transcribed during auto-detect)
+    // Stage 1: STT — skip if already transcribed during auto-detect
     setPipelineStage('transcribing');
     let transcribedText: string;
     if (preTranscribedText) {
       transcribedText = preTranscribedText;
     } else {
       try {
-        const result = await whisperService.transcribe(
-          utterance.audioPath,
-          sourceLang,
-        );
+        const result = await whisperService.transcribe(utterance.audioPath, sourceLang);
         const cleaned = result.text.trim();
         if (!cleaned || isWhisperNoise(cleaned)) {
           useConversationStore.getState().removeMessage(messageId);
@@ -165,32 +228,27 @@ class PipelineOrchestrator {
       }
     }
 
-    // Stage 2: Translation (skip if auto-detect already provided it)
+    // Stage 2: Translation
     setPipelineStage('translating');
     let translatedText: string;
-    if (preTranslatedText && !isSimilar(preTranslatedText, transcribedText)) {
-      translatedText = preTranslatedText;
-      console.log('[Pipeline] Translation (from auto-detect) →', { translatedText });
+    try {
+      const svc = await getTranslationService();
+      const translation = await svc.translate(transcribedText, sourceLang, targetLang);
+      translatedText = translation.text;
+      console.log('[Pipeline] Translation OK →', {
+        from: sourceLang, to: targetLang,
+        input: transcribedText, output: translatedText,
+      });
       updateMessage(messageId, { translatedText, stage: 'done' });
-    } else {
-      try {
-        const svc = await getTranslationService();
-        const translation = await svc.translate(transcribedText, sourceLang, targetLang);
-        translatedText = translation.text;
-        console.log('[Pipeline] Translation OK →', { from: sourceLang, to: targetLang, input: transcribedText, output: translatedText });
-        updateMessage(messageId, { translatedText, stage: 'done' });
-      } catch (e) {
-        console.error('[Pipeline] Translation FAILED →', { from: sourceLang, to: targetLang, input: transcribedText, error: e });
-        updateMessage(messageId, {
-          translatedText: transcribedText,
-          stage: 'error',
-        });
-        translatedText = transcribedText;
-      }
+    } catch (e) {
+      console.error('[Pipeline] Translation FAILED →', {
+        from: sourceLang, to: targetLang, input: transcribedText, error: e,
+      });
+      updateMessage(messageId, { translatedText: transcribedText, stage: 'error' });
+      translatedText = transcribedText;
     }
 
     // Stage 3: TTS
-    console.log('[Pipeline] TTS →', { translatedText, targetLang, voice: listenerConfig.voice });
     if (!useSettingsStore.getState().autoPlay) {
       setPipelineStage('idle');
       return;
@@ -224,31 +282,15 @@ class PipelineOrchestrator {
 
 export const pipelineOrchestrator = new PipelineOrchestrator();
 
-// ── Text normalization & comparison ──────────────────────────────────────────
+// ── Noise filter ──────────────────────────────────────────────────────────────
 
-/** Normalize text for comparison: lowercase, strip punctuation/whitespace. */
-function normalize(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[.,;:!?¡¿'"«»""''…\-–—()\[\]{}]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/** Check if Whisper output is noise/silence markers. */
 function isWhisperNoise(text: string): boolean {
   const t = text.trim();
-  // Brackets: [BLANK_AUDIO], [Music], [silence], etc.
   if (/^\[.*\]$/.test(t)) return true;
-  // Parentheses: (music), (silence), etc.
   if (/^\(.*\)$/.test(t)) return true;
-  // Common Whisper hallucinations on silence
   if (/^(\.+|,+|\s+)$/.test(t)) return true;
-  // Repeated single characters (common hallucination)
   if (/^(.)\1{3,}$/.test(t.replace(/\s/g, ''))) return true;
-  // Too short to be meaningful (single word < 3 chars)
   if (t.length < 3) return true;
-  // Common Whisper noise strings
   const noisePatterns = [
     'thank you', 'thanks for watching', 'subscribe',
     'gracias por ver', 'suscríbete',
@@ -258,176 +300,275 @@ function isWhisperNoise(text: string): boolean {
   return false;
 }
 
-/**
- * Check if two texts are essentially the same after normalization.
- * Uses character-level similarity — texts are "similar" if >80% of characters match.
- */
-function isSimilar(a: string, b: string, threshold = 0.80): boolean {
-  const na = normalize(a);
-  const nb = normalize(b);
-  if (na === nb) return true;
-  if (na.length === 0 || nb.length === 0) return false;
+// ── Language discovery ────────────────────────────────────────────────────────
 
-  // Quick check: if one contains the other
-  if (na.includes(nb) || nb.includes(na)) return true;
-
-  // Character-level similarity (good enough, avoids expensive Levenshtein)
-  const sim = charSimilarity(na, nb);
-  return sim >= threshold;
-}
-
-/** Rough character-level similarity: ratio of matching chars in order. */
-function charSimilarity(a: string, b: string): number {
-  const maxLen = Math.max(a.length, b.length);
-  if (maxLen === 0) return 1;
-
-  // LCS-like count of matching characters
-  let matches = 0;
-  let bIdx = 0;
-  for (let i = 0; i < a.length && bIdx < b.length; i++) {
-    if (a[i] === b[bIdx]) {
-      matches++;
-      bIdx++;
-    }
-  }
-  return matches / maxLen;
-}
-
-// ── Speaker detection for VAD mode ───────────────────────────────────────────
-
-interface AutoDetectResult {
+export interface AutoResolveResult {
   readonly speakerId: PersonId;
-  readonly originalText: string;
-  readonly translatedText: string;
+  readonly transcribedText: string;
   readonly sourceLang: string;
   readonly targetLang: string;
-  readonly confidence: 'high' | 'medium' | 'low';
 }
 
 /**
- * Determine who spoke using ML Kit/iOS Translation as a language detector.
+ * Resolve who spoke and in what language using a 3-phase discovery state machine.
  *
- * Strategy:
- *  1. Transcribe with Whisper auto → get raw text (ignore language tag).
- *  2. Translate in BOTH directions via native translation.
- *  3. Compare NORMALIZED texts using similarity metric (not exact match).
- *  4. The direction that produces a DIFFERENT text = correct translation direction.
- *  5. Return the translation too so processUtterance can skip Stage 2.
+ * DISCOVERING_A — no language known yet:
+ *   Transcribe → identifyLanguage. If confidence ≥ 0.85 and text ≥ 15 chars:
+ *   set langA, advance to DISCOVERING_B, route as person_a → translate to DEFAULT_LANG_B.
+ *   Otherwise ignore (can't route without knowing langA).
  *
- * Key improvement over v1: uses normalized similarity comparison instead of
- * exact string equality, which avoids false positives from capitalization,
- * punctuation, or minor formatting differences.
+ * DISCOVERING_B — langA known, waiting for langB:
+ *   If detected lang ≠ langA with confidence ≥ 0.85 and text ≥ 15 chars:
+ *     set langB, advance to ACTIVE, route as person_b.
+ *   If detected lang = langA with confidence ≥ 0.5:
+ *     route as person_a → translate to DEFAULT_LANG_B (still unknown what lang person_b speaks).
+ *   Otherwise ignore.
+ *
+ * ACTIVE — both languages known:
+ *   Identify language → langA: person_a → translate to langB.
+ *   Identify language → langB: person_b → translate to langA.
+ *   Any other language or low confidence: ignore.
  */
-async function detectSpeakerViaTranslation(
-  audioPath: string,
-  langA: string,
-  langB: string,
-): Promise<AutoDetectResult | null> {
-  // Transcribe — ignore the language tag, just get the text
+export async function resolveAutoUtterance(audioPath: string): Promise<AutoResolveResult | null> {
+  // Snapshot the generation counter before the first await.
+  // resetDiscovery() increments it, so any reset that occurs while this function
+  // is suspended will be detected even if the phase happens to be the same value.
+  const genAtEntry = discoveryGeneration;
+
+  // ── ACTIVE + Canary: dual language-hinted transcription ─────────────────────
+  //
+  // Whisper (auto-detect) can silently translate audio into the wrong language
+  // (e.g. Spanish audio → English transcript), which then misroutes the utterance.
+  // Canary solves this by running two engines in parallel — one per language —
+  // where each engine can ONLY transcribe in its own language. ML Kit picks the
+  // winning transcript based on confidence.
+  //
+  // CRITICAL: for supported pairs (en/es/de/fr) we NEVER fall through to Whisper
+  // in ACTIVE phase, even if Canary is still loading. We wait up to 10 s for the
+  // engines to initialise (files are already on-disk from ModelManager — this is
+  // only ONNX initialisation, not a network download). Dropping an utterance after
+  // 10 s is far preferable to a guaranteed mis-translation from Whisper auto-detect.
+  const { personA: _pA, personB: _pB } = useSettingsStore.getState();
+  if (discoveryPhase === 'active' && CanaryService.supportsLanguagePair(_pA.language, _pB.language)) {
+    // Wait for engines if they are still loading (loadForPair was fired at ACTIVE transition)
+    if (!canaryService.isLoadedFor(_pA.language, _pB.language)) {
+      console.log('[Pipeline] ACTIVE: Canary engines loading — waiting up to 10 s…');
+      const ready = await canaryService.waitForLoad(10_000);
+      if (discoveryGeneration !== genAtEntry) return null;
+      if (!ready) {
+        console.log('[Pipeline] ACTIVE: Canary not ready after 10 s — dropping utterance');
+        return null;
+      }
+    }
+
+    const dual = await canaryService.transcribeBoth(audioPath);
+    if (discoveryGeneration !== genAtEntry) return null;
+
+    if (!dual) return null; // engines released mid-call (session reset)
+
+    const svc = await getTranslationService();
+    const [candidatesA, candidatesB] = await Promise.all([
+      dual.textA && !isWhisperNoise(dual.textA)
+        ? svc.identifyLanguage(dual.textA).catch(() => [])
+        : Promise.resolve([]),
+      dual.textB && !isWhisperNoise(dual.textB)
+        ? svc.identifyLanguage(dual.textB).catch(() => [])
+        : Promise.resolve([]),
+    ]);
+    if (discoveryGeneration !== genAtEntry) return null;
+
+    // Match on exact code or BCP-47 subtag (e.g. 'es' matches 'es-419' but not 'esl')
+    const matchLang = (tag: string, code: string) =>
+      tag === code || tag.startsWith(code + '-');
+
+    const confA = candidatesA.find(c => matchLang(c.language, dual.langA))?.confidence ?? 0;
+    const confB = candidatesB.find(c => matchLang(c.language, dual.langB))?.confidence ?? 0;
+    console.log('[Pipeline] ACTIVE Canary →', {
+      textA: dual.textA, confA,
+      textB: dual.textB, confB,
+    });
+
+    if (confA < ACTIVE_CONFIDENCE && confB < ACTIVE_CONFIDENCE) {
+      console.log('[Pipeline] ACTIVE: Canary both below threshold, dropping');
+      return null;
+    }
+
+    // Drop only when the result is genuinely ambiguous: small margin AND winner isn't confident.
+    // A winner with ≥ 0.95 confidence is always trusted — both engines can score high
+    // (e.g. confA=0.9999, confB=0.9989) when Spanish audio hits a well-trained model,
+    // but the Spanish engine still wins clearly in absolute terms.
+    const useA = confA > confB;
+    const winnerConf = useA ? confA : confB;
+    const CONF_MARGIN = 0.05;
+    if (winnerConf < 0.95 && Math.abs(confA - confB) < CONF_MARGIN) {
+      console.log('[Pipeline] ACTIVE: Canary tie (confA:', confA, 'confB:', confB, '), dropping');
+      return null;
+    }
+    const text    = useA ? dual.textA : dual.textB;
+    const topLang = useA ? dual.langA : dual.langB;
+
+    if (!text || isWhisperNoise(text)) return null;
+
+    const { personA, personB } = useSettingsStore.getState();
+    if (topLang === personA.language) {
+      return { speakerId: 'person_a', transcribedText: text, sourceLang: personA.language, targetLang: personB.language };
+    }
+    if (topLang === personB.language) {
+      return { speakerId: 'person_b', transcribedText: text, sourceLang: personB.language, targetLang: personA.language };
+    }
+    console.log('[Pipeline] ACTIVE: Canary topLang', topLang, 'not in known pair, dropping');
+    return null;
+  }
+
+  // ── Whisper: auto-detect (DISCOVERY + ACTIVE fallback) ───────────────────────
   const result = await whisperService.transcribe(audioPath);
   const text = result.text.trim();
-
   if (!text || isWhisperNoise(text)) return null;
 
-  console.log('[Pipeline] Transcribed →', { text, whisperLang: result.language });
+  // Bail if the session was reset while we were transcribing
+  if (discoveryGeneration !== genAtEntry) return null;
 
-  // Translate in both directions
+  console.log('[Pipeline] Transcribed →', { text, phase: discoveryPhase });
+
+  // Identify language via ML Kit
   const svc = await getTranslationService();
+  const candidates = await svc.identifyLanguage(text).catch(() => []);
+  const topLang = (candidates[0]?.language ?? '').split('-')[0].toLowerCase();
+  const topConf = candidates[0]?.confidence ?? 0;
 
-  const [transAB, transBA] = await Promise.all([
-    svc.translate(text, langA, langB).catch(() => ({ text })),
-    svc.translate(text, langB, langA).catch(() => ({ text })),
-  ]);
+  // Bail again if reset happened during identifyLanguage
+  if (discoveryGeneration !== genAtEntry) return null;
 
-  // Compare using normalized similarity (NOT exact match)
-  const simAB = charSimilarity(normalize(text), normalize(transAB.text));
-  const simBA = charSimilarity(normalize(text), normalize(transBA.text));
+  console.log('[Pipeline] identifyLanguage →', { topLang, topConf, phase: discoveryPhase });
 
-  // A translation that CHANGED the text has LOW similarity to the original
-  // A translation that kept it the same has HIGH similarity
-  const UNCHANGED_THRESHOLD = 0.75; // above this = text didn't really change
-
-  const unchangedAB = simAB >= UNCHANGED_THRESHOLD;
-  const unchangedBA = simBA >= UNCHANGED_THRESHOLD;
-
-  console.log('[Pipeline] Direction test →', {
-    [`${langA}→${langB}`]: { result: transAB.text, similarity: simAB.toFixed(2), unchanged: unchangedAB },
-    [`${langB}→${langA}`]: { result: transBA.text, similarity: simBA.toFixed(2), unchanged: unchangedBA },
-  });
-
-  // Case 1: A→B changed, B→A didn't → text is in langA → person A spoke
-  if (!unchangedAB && unchangedBA) {
-    return {
-      speakerId: 'person_a',
-      originalText: text,
-      translatedText: transAB.text,
-      sourceLang: langA,
-      targetLang: langB,
-      confidence: 'high',
-    };
-  }
-
-  // Case 2: B→A changed, A→B didn't → text is in langB → person B spoke
-  if (!unchangedBA && unchangedAB) {
-    return {
-      speakerId: 'person_b',
-      originalText: text,
-      translatedText: transBA.text,
-      sourceLang: langB,
-      targetLang: langA,
-      confidence: 'high',
-    };
-  }
-
-  // Case 3: Both changed → pick the direction with MORE change (lower similarity)
-  if (!unchangedAB && !unchangedBA) {
-    const isA = simAB < simBA; // lower similarity = more change = correct direction
-    console.log('[Pipeline] Both changed — picking', isA ? langA : langB, 'as source');
-    return {
-      speakerId: isA ? 'person_a' : 'person_b',
-      originalText: text,
-      translatedText: isA ? transAB.text : transBA.text,
-      sourceLang: isA ? langA : langB,
-      targetLang: isA ? langB : langA,
-      confidence: 'medium',
-    };
-  }
-
-  // Case 4: Neither changed — use Whisper's language hint + alternation fallback
-  console.log('[Pipeline] Neither direction changed text — using fallback');
-
-  // Try Whisper's detected language as a weak signal
-  const whisperLang = result.language?.split('-')[0]?.toLowerCase();
-  if (whisperLang === langA) {
-    return {
-      speakerId: 'person_a',
-      originalText: text,
-      translatedText: text, // no translation available
-      sourceLang: langA,
-      targetLang: langB,
-      confidence: 'low',
-    };
-  }
-  if (whisperLang === langB) {
-    return {
-      speakerId: 'person_b',
-      originalText: text,
-      translatedText: text,
-      sourceLang: langB,
-      targetLang: langA,
-      confidence: 'low',
-    };
-  }
-
-  // Last resort: alternate speakers
-  const speaker: PersonId =
-    lastAutoSpeaker === 'person_a' ? 'person_b' : 'person_a';
-  return {
-    speakerId: speaker,
-    originalText: text,
-    translatedText: text,
-    sourceLang: speaker === 'person_a' ? langA : langB,
-    targetLang: speaker === 'person_a' ? langB : langA,
-    confidence: 'low',
+  // Helper: safe interim target when langB is unknown.
+  // Translates to DEFAULT_LANG_B (en) unless langA is already 'en', in which case
+  // pick the first user-configured language that differs from langA.
+  const interimTarget = (): string => {
+    const la = detectedLangA || topLang;
+    if (la !== DEFAULT_LANG_B) return DEFAULT_LANG_B;
+    const { personA, personB } = useSettingsStore.getState();
+    const fallback = [personB.language, personA.language].find(l => l !== la);
+    return fallback ?? 'es';
   };
+
+  // ── DISCOVERING_A ────────────────────────────────────────────────────────
+  // Always route as person_a so the user sees feedback immediately.
+  // Candidate lock: lock langACandidate on the first plausible detection so
+  // a later high-confidence utterance in a different language cannot steal langA.
+  if (discoveryPhase === 'discovering_a') {
+    // Lock candidate on first plausible detection (low bar)
+    if (!langACandidate && topLang && topConf >= CANDIDATE_CONFIDENCE && text.length >= MIN_CANDIDATE_CHARS) {
+      langACandidate = topLang;
+      console.log('[Pipeline] langA candidate locked →', langACandidate, '(conf:', topConf, ')');
+    }
+
+    // Only commit the candidate language — never a different language
+    const effectiveLang = langACandidate || topLang;
+    const canCommit = topLang === effectiveLang && canCommitDiscovery(topLang, topConf, text.length);
+
+    if (canCommit) {
+      detectedLangA = topLang;
+      discoveryPhase = 'discovering_b';
+      useSettingsStore.getState().setPersonLanguage('person_a', detectedLangA);
+      console.log('[Pipeline] langA committed →', detectedLangA);
+    } else {
+      console.log('[Pipeline] DISCOVERING_A: routing without commit (conf:', topConf, 'len:', text.length, 'candidate:', langACandidate, ')');
+    }
+    // Always show as person_a — sourceLang is best guess
+    const srcLang = detectedLangA || effectiveLang || 'auto';
+    return {
+      speakerId: 'person_a',
+      transcribedText: text,
+      sourceLang: srcLang,
+      targetLang: interimTarget(),
+    };
+  }
+
+  // ── DISCOVERING_B ────────────────────────────────────────────────────────
+  // Always route — show person_b if different lang detected, person_a otherwise.
+  // Same candidate-lock pattern as discovering_a: lock langBCandidate on first
+  // detection of a language different from langA.
+  if (discoveryPhase === 'discovering_b') {
+    const isDifferentDetection = topLang && topLang !== detectedLangA;
+
+    // Lock langB candidate on first plausible different-language detection
+    if (!langBCandidate && isDifferentDetection && topConf >= CANDIDATE_CONFIDENCE && text.length >= MIN_CANDIDATE_CHARS) {
+      langBCandidate = topLang;
+      console.log('[Pipeline] langB candidate locked →', langBCandidate, '(conf:', topConf, ')');
+    }
+
+    const isDifferentLang = langBCandidate
+      ? topLang === langBCandidate   // only the locked candidate qualifies as "different"
+      : isDifferentDetection;
+    const canCommit = isDifferentLang && canCommitDiscovery(topLang, topConf, text.length);
+
+    if (canCommit) {
+      detectedLangB = topLang;
+      discoveryPhase = 'active';
+      useSettingsStore.getState().setPersonLanguage('person_b', detectedLangB);
+      console.log('[Pipeline] langB committed →', detectedLangB, '— entering ACTIVE');
+      warmupTranslation().catch(() => {});
+      // Start loading Canary engines in the background (runs during translate/TTS phase).
+      // Once ready, resolveAutoUtterance will use Canary instead of Whisper for ACTIVE turns.
+      canaryService.loadForPair(detectedLangA, detectedLangB).catch(() => {});
+      return {
+        speakerId: 'person_b',
+        transcribedText: text,
+        sourceLang: detectedLangB,
+        targetLang: detectedLangA,
+      };
+    }
+
+    // Different language detected but not enough confidence to commit — tentative person_b
+    if (isDifferentLang && topConf >= ACTIVE_CONFIDENCE) {
+      console.log('[Pipeline] DISCOVERING_B: tentative person_b (lang:', topLang, 'conf:', topConf, ')');
+      return {
+        speakerId: 'person_b',
+        transcribedText: text,
+        sourceLang: topLang,
+        targetLang: detectedLangA,
+      };
+    }
+
+    // Same language as A, or too low confidence — route as person A
+    console.log('[Pipeline] DISCOVERING_B: routing as person_a (lang:', topLang, 'conf:', topConf, ')');
+    return {
+      speakerId: 'person_a',
+      transcribedText: text,
+      sourceLang: detectedLangA,
+      targetLang: interimTarget(),
+    };
+  }
+
+  // ── ACTIVE ───────────────────────────────────────────────────────────────
+  // Read from settingsStore so manual overrides in Settings take effect immediately.
+  // During discovery, setPersonLanguage() keeps settingsStore in sync with module state.
+  const { personA, personB } = useSettingsStore.getState();
+  const activeLangA = personA.language;
+  const activeLangB = personB.language;
+
+  if (topConf < ACTIVE_CONFIDENCE) {
+    console.log('[Pipeline] ACTIVE: ignoring low-confidence detection (conf:', topConf, ')');
+    return null;
+  }
+  if (topLang === activeLangA) {
+    return {
+      speakerId: 'person_a',
+      transcribedText: text,
+      sourceLang: activeLangA,
+      targetLang: activeLangB,
+    };
+  }
+  if (topLang === activeLangB) {
+    return {
+      speakerId: 'person_b',
+      transcribedText: text,
+      sourceLang: activeLangB,
+      targetLang: activeLangA,
+    };
+  }
+  console.log('[Pipeline] ACTIVE: ignoring unknown language', topLang,
+    '(known:', activeLangA, '/', activeLangB, ')');
+  return null;
 }

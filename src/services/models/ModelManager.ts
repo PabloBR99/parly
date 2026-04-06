@@ -2,7 +2,7 @@ import * as RNFS from '@dr.pogodin/react-native-fs';
 import { useModelStore } from '../../store/modelStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { whisperService } from '../stt/WhisperService';
-import { canaryService, CanaryService } from '../stt/CanaryService';
+import { canaryService } from '../stt/CanaryService';
 import { zipvoiceService } from '../tts/ZipVoiceService';
 
 // ── Sherpa-ONNX Whisper small multilingual int8 — ~244MB ─────────────────────
@@ -169,11 +169,11 @@ async function getAvailableMemoryMB(): Promise<number> {
     const mb: number | undefined = await NativeModules.ParlyMemory?.getAvailableMemoryMB?.();
     if (mb == null) {
       console.warn('[ModelManager] ParlyMemory module unavailable, assuming constrained memory');
-      return 512;
+      return 0; // skip ZipVoice when we can't measure — safer than assuming 512MB
     }
     return mb;
   } catch {
-    return 512;
+    return 0;
   }
 }
 
@@ -228,19 +228,20 @@ async function _initModelsImpl(): Promise<void> {
     throw e; // Whisper is required — propagate
   }
 
-  // ── Canary (optional, preferred STT for en/es/de/fr pairs) ──────────────
-  const { personA, personB } = useSettingsStore.getState();
-  const canaryDir = `${RNFS.DocumentDirectoryPath}/${CANARY_MODEL_DIR}`;
-
-  if (!CanaryService.supportsLanguagePair(personA.language, personB.language)) {
+  // ── Canary (optional — en/es/de/fr pairs; lazy-loaded when ACTIVE phase starts) ──
+  // Only download files here. Engines are created lazily by canaryService.loadForPair()
+  // when the actual language pair is discovered, so both engines are never held in RAM
+  // simultaneously with Whisper for longer than the brief transition moment.
+  const availableMBAfterWhisper = await getAvailableMemoryMB();
+  if (availableMBAfterWhisper < 450) {
     store.setCanaryStatus('error');
-    store.setCanaryError('Par de idiomas no cubierto por Canary — usando Whisper.');
+    store.setCanaryError(`RAM insuficiente (${availableMBAfterWhisper}MB) — Canary no disponible.`);
   } else {
     store.setCanaryStatus('downloading');
+    const canaryDir = `${RNFS.DocumentDirectoryPath}/${CANARY_MODEL_DIR}`;
     try {
       await downloadCanaryModel(canaryDir, pct => store.setCanaryProgress(pct));
-      store.setCanaryStatus('loading');
-      await canaryService.load(canaryDir, personA.language, personB.language);
+      canaryService.setModelDir(canaryDir);
       store.setCanaryStatus('ready');
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);

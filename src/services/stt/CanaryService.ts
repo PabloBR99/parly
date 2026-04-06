@@ -46,6 +46,8 @@ export class CanaryService {
   private engineB: SttEngine | null = null;
   private loadedLangA: string | null = null;
   private loadedLangB: string | null = null;
+  private modelDir: string | null = null;
+  private _loadPromise: Promise<void> | null = null;
 
   /** True when both languages of the pair are in the Canary language set. */
   static supportsLanguagePair(langA: string, langB: string): boolean {
@@ -56,6 +58,55 @@ export class CanaryService {
 
   get isReady(): boolean {
     return this.engineA !== null && this.engineB !== null;
+  }
+
+  /** Store the on-disk model directory so loadForPair() can use it. */
+  setModelDir(dir: string): void {
+    this.modelDir = dir;
+  }
+
+  /** True if engines are loaded for this exact language pair (either order). */
+  isLoadedFor(langA: string, langB: string): boolean {
+    const a = norm(langA);
+    const b = norm(langB);
+    return (
+      this.isReady &&
+      ((this.loadedLangA === a && this.loadedLangB === b) ||
+       (this.loadedLangA === b && this.loadedLangB === a))
+    );
+  }
+
+  /**
+   * Await the in-flight loadForPair() promise (if any) up to timeoutMs.
+   * Returns true if both engines are ready when this resolves, false otherwise.
+   * Call this in ACTIVE phase when isLoadedFor() is false but engines are loading.
+   */
+  async waitForLoad(timeoutMs: number): Promise<boolean> {
+    if (this.isReady) return true;
+    if (!this._loadPromise) return false;
+    await Promise.race([
+      this._loadPromise.catch(() => {}),
+      new Promise<void>(resolve => setTimeout(resolve, timeoutMs)),
+    ]);
+    return this.isReady;
+  }
+
+  /**
+   * Lazily load two Canary engines for the given language pair.
+   * Concurrent calls are deduplicated — a second call while loading is already
+   * in flight just awaits the same promise rather than starting a parallel load.
+   */
+  async loadForPair(langA: string, langB: string): Promise<void> {
+    if (!this.modelDir) return;
+    if (!CanaryService.supportsLanguagePair(langA, langB)) return;
+    if (this.isLoadedFor(langA, langB)) return;
+    if (this._loadPromise) return this._loadPromise;
+    this._loadPromise = this.load(this.modelDir, langA, langB);
+    try {
+      await this._loadPromise;
+    } finally {
+      this._loadPromise = null;
+    }
   }
 
   /**
