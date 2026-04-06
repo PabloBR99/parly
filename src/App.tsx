@@ -59,7 +59,7 @@ export default function App(): React.JSX.Element {
             component={SettingsScreen}
             options={{
               headerShown: true,
-              headerStyle: { backgroundColor: '#0a0a0a' },
+              headerStyle: { backgroundColor: '#000000' },
               headerTintColor: 'rgba(255,255,255,0.5)',
               headerTitleStyle: { fontWeight: '400', fontSize: 16 },
               headerTitle: 'Ajustes',

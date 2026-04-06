@@ -143,14 +143,14 @@ async function configureStreamingPipeline(langA: string, langB: string): Promise
       return;
     }
 
+    // Free Whisper BEFORE loading Kroko to avoid OOM (~244MB + 306MB = 550MB peak).
+    // Whisper is no longer needed: Kroko handles ACTIVE streaming, and if streaming
+    // fails mid-utterance the offline fallback can re-init Whisper on demand.
+    console.log('[Pipeline] Releasing Whisper to free memory before Kroko engine load');
+    await whisperService.release();
+
     await streamingPipeline.configure(langA, langB);
     console.log('[Pipeline] Streaming pipeline ready for', langA, '↔', langB);
-
-    // Free Whisper (~244MB) — no longer needed in ACTIVE phase since Kroko handles
-    // streaming and Whisper was only used during DISCOVERY. If streaming fails
-    // mid-utterance, the fallback will re-init Whisper on demand.
-    whisperService.release().catch(() => {});
-    console.log('[Pipeline] Whisper released to free memory for streaming');
   } catch (e) {
     console.error('[Pipeline] Streaming pipeline setup failed (falling back to offline):', e);
   }

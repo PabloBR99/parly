@@ -9,6 +9,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useConversationStore } from '../../store/conversationStore';
+import type { StreamingPartial } from '../../store/conversationStore';
 import type { PersonId } from '../../app/types';
 import { HistoryList } from './HistoryList';
 
@@ -18,12 +19,20 @@ interface Props {
 
 /**
  * Derives the subtitle text to display for this person's half.
- * Separated from the component so it stays pure and testable.
+ * Incorporates streaming partials — shows real-time transcription/translation
+ * from the other person while they're speaking.
  */
 function useSubtitleContent(personId: PersonId) {
   const messages = useConversationStore(s => s.messages);
+  const streamingPartial = useConversationStore(s => s.streamingPartial);
 
   return useMemo(() => {
+    // Streaming partial from the OTHER person → show live translation to this viewer
+    const partial: StreamingPartial | null =
+      streamingPartial && streamingPartial.speakerId !== personId
+        ? streamingPartial
+        : null;
+
     // Completed translations FROM the other person
     const received = messages.filter(
       m => m.speakerId !== personId && m.stage === 'done',
@@ -35,27 +44,38 @@ function useSubtitleContent(personId: PersonId) {
     const ownMessages = messages.filter(m => m.speakerId === personId);
     const latestOwn = ownMessages.at(-1);
 
+    // Streaming partial takes priority — show live translation
+    if (partial) {
+      const mainText = partial.translation || partial.transcript;
+      return {
+        mainText,
+        originalText: partial.translation ? partial.transcript : null,
+        ghostText: latestReceived?.translatedText ?? null,
+        isStreaming: true,
+      };
+    }
+
     if (latestReceived) {
       return {
         mainText: latestReceived.translatedText ?? latestReceived.originalText,
         originalText: latestReceived.originalText,
         ghostText: prevReceived?.translatedText ?? null,
+        isStreaming: false,
       };
     }
     if (latestOwn) {
-      // No response yet — confirm what the viewer said (no subtitle needed)
-      return { mainText: latestOwn.originalText, originalText: null, ghostText: null };
+      return { mainText: latestOwn.originalText, originalText: null, ghostText: null, isStreaming: false };
     }
-    return { mainText: null, originalText: null, ghostText: null };
-  }, [messages, personId]);
+    return { mainText: null, originalText: null, ghostText: null, isStreaming: false };
+  }, [messages, personId, streamingPartial]);
 }
 
 /**
  * One person's half content area.
  *
- * Pinch OUT (scale > 1.3) → open history
+ * Pinch outward → toggle history on/off
+ * Pinch OUT (scale > 1.5) → open history
  * Pinch IN  (scale < 0.7) → close history
- * Pinch that doesn't cross threshold → snap back, no state change
  *
  * Font files required in android/app/src/main/assets/fonts/:
  *   Inter-Light.ttf, Inter-Regular.ttf
@@ -69,7 +89,7 @@ export function SubtitleView({ personId }: Props): React.JSX.Element {
     [messages],
   );
 
-  const { mainText, originalText, ghostText } = useSubtitleContent(personId);
+  const { mainText, originalText, ghostText, isStreaming } = useSubtitleContent(personId);
 
   // --- Shared values (UI-thread safe) ---
   const pinchScale = useSharedValue(1);
@@ -113,10 +133,10 @@ export function SubtitleView({ personId }: Props): React.JSX.Element {
   // --- Pinch gesture ---
   const pinchGesture = Gesture.Pinch()
     .onUpdate((e) => {
-      pinchScale.value = Math.min(Math.max(e.scale, 0.8), 1.5);
+      pinchScale.value = e.scale;
     })
     .onEnd((e) => {
-      if (!isHistoryOpen.value && e.scale > 1.3 && hasMessages.value) {
+      if (!isHistoryOpen.value && e.scale > 1.5 && hasMessages.value) {
         pinchScale.value = withTiming(1, { duration: 200 });
         runOnJS(openHistory)();
       } else if (isHistoryOpen.value && e.scale < 0.7) {
@@ -155,12 +175,15 @@ export function SubtitleView({ personId }: Props): React.JSX.Element {
   useEffect(() => {
     if (mainText !== prevMain.current) {
       prevMain.current = mainText;
-      mainOpacity.value = 0;
-      mainTranslateY.value = 12;
-      mainOpacity.value = withTiming(1, { duration: 400, easing: Easing.out(Easing.ease) });
-      mainTranslateY.value = withTiming(0, { duration: 400, easing: Easing.out(Easing.ease) });
+      // Skip entrance animation during streaming — updates are too rapid
+      if (!isStreaming) {
+        mainOpacity.value = 0;
+        mainTranslateY.value = 12;
+        mainOpacity.value = withTiming(1, { duration: 400, easing: Easing.out(Easing.ease) });
+        mainTranslateY.value = withTiming(0, { duration: 400, easing: Easing.out(Easing.ease) });
+      }
     }
-  }, [mainText, mainOpacity, mainTranslateY]);
+  }, [mainText, mainOpacity, mainTranslateY, isStreaming]);
 
   const mainTextAnimStyle = useAnimatedStyle(() => ({
     opacity: mainOpacity.value,
@@ -182,7 +205,11 @@ export function SubtitleView({ personId }: Props): React.JSX.Element {
               ) : null}
 
               <Animated.Text
-                style={[styles.main, mainTextAnimStyle]}
+                style={[
+                  styles.main,
+                  mainTextAnimStyle,
+                  isStreaming && styles.streaming,
+                ]}
                 numberOfLines={4}
               >
                 {mainText}
@@ -237,6 +264,10 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 30,
     letterSpacing: -0.3,
+  },
+  streaming: {
+    color: 'rgba(255,255,255,0.60)',
+    fontStyle: 'italic',
   },
   original: {
     fontFamily: 'Inter-Regular',

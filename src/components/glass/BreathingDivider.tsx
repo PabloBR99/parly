@@ -26,10 +26,11 @@ function startBreathing(
   cancelAnimation(scaleX);
 
   if (stage === 'idle' || stage === 'listening') {
+    // Resting breath — ~6% opacity, barely visible. Something alive, not designed.
     opacity.value = withRepeat(
       withSequence(
-        withTiming(0.5, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
-        withTiming(0.15, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
+        withTiming(0.10, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
+        withTiming(0.03, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
       ),
       -1,
       false,
@@ -37,7 +38,7 @@ function startBreathing(
     scaleX.value = withRepeat(
       withSequence(
         withTiming(1.0, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
-        withTiming(0.6, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
+        withTiming(0.85, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
       ),
       -1,
       false,
@@ -61,8 +62,8 @@ function startBreathing(
 }
 
 export function BreathingDivider({ pipelineStage }: Props): React.JSX.Element {
-  const opacity = useSharedValue(0.15);
-  const scaleX = useSharedValue(0.6);
+  const opacity = useSharedValue(0.06);
+  const scaleX = useSharedValue(0.85);
   const audioLevel = useAudioLevelStore(s => s.level);
   const isReactive = useRef(false);
   const silenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -86,8 +87,9 @@ export function BreathingDivider({ pipelineStage }: Props): React.JSX.Element {
       }
 
       // Map level directly to visual properties — no easing, instant response
-      opacity.value = 0.15 + audioLevel * 0.85;
-      scaleX.value = 0.6 + audioLevel * 0.4;
+      // loud = bright, quiet = dim. The line IS the voice.
+      opacity.value = 0.06 + audioLevel * 0.94;
+      scaleX.value = 0.85 + audioLevel * 0.15;
     } else if (isReactive.current && !silenceTimer.current) {
       // Level dropped — debounce before returning to idle breathing
       silenceTimer.current = setTimeout(() => {

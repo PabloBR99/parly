@@ -75,7 +75,7 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
 
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor="#000" translucent />
+      <StatusBar hidden />
 
       {/* Top half — person_b, rotated 180° so they read from across the table */}
       <View style={[styles.half, { paddingBottom: insets.top }]}>
@@ -120,20 +120,20 @@ const styles = StyleSheet.create({
   },
   errorContainer: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: '#000000',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 32,
     gap: 16,
   },
   errorTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: 'rgba(255,255,255,0.7)',
+    fontSize: 15,
+    fontWeight: '400',
+    color: 'rgba(255,255,255,0.50)',
   },
   errorMsg: {
     fontSize: 13,
-    color: 'rgba(255,255,255,0.3)',
+    color: 'rgba(255,255,255,0.25)',
     textAlign: 'center',
   },
   retryBtn: {
@@ -141,11 +141,11 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 28,
     borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.10)',
   },
   retryText: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.5)',
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.40)',
   },
 });

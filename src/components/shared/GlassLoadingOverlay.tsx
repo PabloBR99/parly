@@ -16,34 +16,24 @@ interface Props {
 }
 
 /**
- * Minimal loading screen for the Glass UI.
- * Black background, single breathing orb, subtle progress ring, one-line status.
+ * Minimal loading screen — pure black, single breathing dot, one-line status.
+ * The dot IS the app. 5px white, opacity 0.15→0.50, pulsing like a heartbeat.
  */
 export function GlassLoadingOverlay({ status, progress }: Props): React.JSX.Element {
-  const scale = useSharedValue(1);
-  const opacity = useSharedValue(0.25);
+  const opacity = useSharedValue(0.15);
 
   useEffect(() => {
-    scale.value = withRepeat(
-      withSequence(
-        withTiming(1.08, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
-        withTiming(1.0, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
-      ),
-      -1,
-      false,
-    );
     opacity.value = withRepeat(
       withSequence(
-        withTiming(0.6, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
-        withTiming(0.25, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
+        withTiming(0.50, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
+        withTiming(0.15, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
       ),
       -1,
       false,
     );
-  }, [scale, opacity]);
+  }, [opacity]);
 
-  const orbStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
+  const dotStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
   }));
 
@@ -51,9 +41,7 @@ export function GlassLoadingOverlay({ status, progress }: Props): React.JSX.Elem
 
   return (
     <View style={styles.container}>
-      <Animated.View style={[styles.ring, orbStyle]}>
-        <View style={styles.dot} />
-      </Animated.View>
+      <Animated.View style={[styles.dot, dotStyle]} />
 
       <Text style={styles.label}>{statusText}</Text>
 
@@ -68,9 +56,9 @@ export function GlassLoadingOverlay({ status, progress }: Props): React.JSX.Elem
 
 function statusLabel(status: ModelStatus, progress: number): string {
   switch (status) {
-    case 'not_downloaded': return 'Preparando…';
-    case 'downloading': return progress > 0 ? `${Math.round(progress)}%` : 'Descargando…';
-    case 'loading': return 'Cargando…';
+    case 'not_downloaded': return 'Preparando\u2026';
+    case 'downloading': return progress > 0 ? `${Math.round(progress)}%` : 'Descargando\u2026';
+    case 'loading': return 'Cargando\u2026';
     case 'error': return 'Error';
     default: return '';
   }
@@ -84,20 +72,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 20,
   },
-  ring: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.3)',
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#ffffff',
   },
   label: {
     fontSize: 13,

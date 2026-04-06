@@ -11,12 +11,11 @@ import Animated, {
 } from 'react-native-reanimated';
 
 /**
- * Single breathing dot — the heartbeat divider between the two halves.
- * Opacity 0.15→0.50, scale 1.0→1.3, 4 000ms cycle.
+ * Single breathing dot — 5px white, pulsing like a heartbeat at rest.
+ * Opacity 0.15→0.50, 4 000ms cycle. No scale — just opacity.
  */
 export function BreathingDot(): React.JSX.Element {
   const opacity = useSharedValue(0.15);
-  const scale = useSharedValue(1);
 
   useEffect(() => {
     opacity.value = withRepeat(
@@ -27,23 +26,13 @@ export function BreathingDot(): React.JSX.Element {
       -1,
       false,
     );
-    scale.value = withRepeat(
-      withSequence(
-        withTiming(1.3, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
-        withTiming(1.0, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
-      ),
-      -1,
-      false,
-    );
     return () => {
       cancelAnimation(opacity);
-      cancelAnimation(scale);
     };
-  }, [opacity, scale]);
+  }, [opacity]);
 
   const dotStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
-    transform: [{ scale: scale.value }],
   }));
 
   return (
@@ -60,9 +49,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.35)',
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#ffffff',
   },
 });

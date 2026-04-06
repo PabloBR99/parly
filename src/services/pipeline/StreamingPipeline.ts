@@ -108,10 +108,9 @@ class StreamingPipeline {
     this.langA = langA.split('-')[0].toLowerCase();
     this.langB = langB.split('-')[0].toLowerCase();
 
-    await Promise.all([
-      streamingSTTService.loadEngine(this.langA),
-      streamingSTTService.loadEngine(this.langB),
-    ]);
+    // Load sequentially to reduce peak memory (each encoder is ~153MB)
+    await streamingSTTService.loadEngine(this.langA);
+    await streamingSTTService.loadEngine(this.langB);
     console.log('[StreamingPipeline] Configured for', this.langA, '↔', this.langB);
   }
 

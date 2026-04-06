@@ -89,8 +89,8 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           <Switch
             value={autoPlay}
             onValueChange={setAutoPlay}
-            trackColor={{ false: '#374151', true: '#2563eb' }}
-            thumbColor="#f9fafb"
+            trackColor={{ false: '#222222', true: 'rgba(255,255,255,0.40)' }}
+            thumbColor="#ffffff"
           />
         </View>
 
@@ -136,7 +136,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0f0f0f',
+    backgroundColor: '#000000',
   },
   content: {
     padding: 20,
@@ -144,7 +144,7 @@ const styles = StyleSheet.create({
     paddingBottom: 48,
   },
   section: {
-    backgroundColor: '#1f2937',
+    backgroundColor: '#0d0d0d',
     borderRadius: 16,
     padding: 20,
     gap: 16,
@@ -152,7 +152,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#6b7280',
+    color: 'rgba(255,255,255,0.30)',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
@@ -168,15 +168,15 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 15,
     fontWeight: '500',
-    color: '#f9fafb',
+    color: 'rgba(255,255,255,0.85)',
   },
   hint: {
     fontSize: 12,
-    color: '#6b7280',
+    color: 'rgba(255,255,255,0.25)',
   },
   divider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: '#374151',
+    backgroundColor: 'rgba(255,255,255,0.08)',
   },
   stepsBlock: {
     gap: 8,
@@ -187,41 +187,41 @@ const styles = StyleSheet.create({
   },
   stepBtn: {
     flex: 1,
-    backgroundColor: '#374151',
+    backgroundColor: '#161616',
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: 'transparent',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
   },
   stepBtnActive: {
-    borderColor: '#2563eb',
-    backgroundColor: '#1e3a5f',
+    borderColor: 'rgba(255,255,255,0.40)',
+    backgroundColor: '#1a1a1a',
   },
   stepLabel: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#9ca3af',
+    color: 'rgba(255,255,255,0.30)',
   },
   stepLabelActive: {
-    color: '#60a5fa',
+    color: 'rgba(255,255,255,0.92)',
   },
   stepsHint: {
     fontSize: 12,
-    color: '#6b7280',
+    color: 'rgba(255,255,255,0.25)',
     textAlign: 'center',
   },
   dangerBtn: {
-    backgroundColor: '#7f1d1d',
+    backgroundColor: '#1a0000',
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#dc2626',
+    borderColor: 'rgba(220,38,38,0.40)',
   },
   dangerBtnText: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#fca5a5',
+    color: 'rgba(220,38,38,0.70)',
   },
 });

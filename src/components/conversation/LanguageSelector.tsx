@@ -46,7 +46,7 @@ export function LanguageSelector({ value, onChange, lang, inverted }: Props): Re
       <Pressable style={styles.trigger} onPress={() => setOpen(true)}>
         <Text style={styles.flag}>{current.flag}</Text>
         <Text style={styles.name}>{current.name}</Text>
-        <Text style={styles.chevron}>›</Text>
+        <Text style={styles.chevron}>{'\u203A'}</Text>
       </Pressable>
 
       <Modal visible={open} transparent animationType={inverted ? 'fade' : 'slide'}>
@@ -55,7 +55,7 @@ export function LanguageSelector({ value, onChange, lang, inverted }: Props): Re
             <TextInput
               style={styles.search}
               placeholder={s.searchLanguage}
-              placeholderTextColor="#6b7280"
+              placeholderTextColor="rgba(255,255,255,0.25)"
               value={search}
               onChangeText={setSearch}
               autoFocus
@@ -67,7 +67,7 @@ export function LanguageSelector({ value, onChange, lang, inverted }: Props): Re
                 <Pressable style={styles.item} onPress={() => select(item)}>
                   <Text style={styles.itemFlag}>{item.flag}</Text>
                   <Text style={styles.itemName}>{item.name}</Text>
-                  {item.code === value && <Text style={styles.check}>✓</Text>}
+                  {item.code === value && <Text style={styles.check}>{'\u2713'}</Text>}
                 </Pressable>
               )}
             />
@@ -90,18 +90,18 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   flag: { fontSize: 22 },
-  name: { fontSize: 15, color: '#f9fafb', fontWeight: '500' },
-  chevron: { fontSize: 18, color: '#6b7280', marginLeft: 2 },
+  name: { fontSize: 15, color: 'rgba(255,255,255,0.85)', fontWeight: '500' },
+  chevron: { fontSize: 18, color: 'rgba(255,255,255,0.25)', marginLeft: 2 },
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'rgba(0,0,0,0.75)',
     justifyContent: 'flex-end',
   },
   backdropInverted: {
     justifyContent: 'flex-start',
   },
   sheet: {
-    backgroundColor: '#1f2937',
+    backgroundColor: '#0d0d0d',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     maxHeight: '70%',
@@ -116,11 +116,11 @@ const styles = StyleSheet.create({
   },
   search: {
     margin: 16,
-    backgroundColor: '#374151',
+    backgroundColor: '#161616',
     borderRadius: 10,
     paddingHorizontal: 14,
     paddingVertical: 10,
-    color: '#f9fafb',
+    color: 'rgba(255,255,255,0.85)',
     fontSize: 15,
   },
   item: {
@@ -131,15 +131,15 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   itemFlag: { fontSize: 24 },
-  itemName: { flex: 1, fontSize: 16, color: '#f9fafb' },
-  check: { fontSize: 18, color: '#2563eb' },
+  itemName: { flex: 1, fontSize: 16, color: 'rgba(255,255,255,0.85)' },
+  check: { fontSize: 18, color: 'rgba(255,255,255,0.70)' },
   closeBtn: {
     marginTop: 8,
     marginHorizontal: 16,
-    backgroundColor: '#374151',
+    backgroundColor: '#161616',
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
   },
-  closeTxt: { color: '#f9fafb', fontSize: 16, fontWeight: '600' },
+  closeTxt: { color: 'rgba(255,255,255,0.50)', fontSize: 16, fontWeight: '600' },
 });
