@@ -6,18 +6,27 @@ import {
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useSettingsStore } from '../store/settingsStore';
 import { useConversationStore } from '../store/conversationStore';
+import { useNetworkStore } from '../store/networkStore';
 import { resetDiscovery } from '../services/pipeline/PipelineOrchestrator';
 import { LanguageSelector } from '../components/conversation/LanguageSelector';
 import type { RootStackParamList } from '../navigation/types';
+import type { SttTransport } from '../store/settingsStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
 
 const TTS_STEPS_OPTIONS = [5, 10, 15, 20] as const;
+
+const TRANSPORT_OPTIONS: ReadonlyArray<{ value: SttTransport; label: string; hint: string }> = [
+  { value: 'auto', label: 'Auto', hint: 'Online si hay red, offline si no' },
+  { value: 'online', label: 'Online', hint: 'Solo Voxtral (requiere API key)' },
+  { value: 'offline', label: 'Offline', hint: 'Solo Whisper, nunca toca red' },
+];
 
 export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const autoPlay = useSettingsStore(s => s.autoPlay);
@@ -27,6 +36,11 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const setPersonLanguage = useSettingsStore(s => s.setPersonLanguage);
   const langA = useSettingsStore(s => s.personA.language);
   const langB = useSettingsStore(s => s.personB.language);
+  const sttTransport = useSettingsStore(s => s.sttTransport);
+  const setSttTransport = useSettingsStore(s => s.setSttTransport);
+  const mistralApiKey = useSettingsStore(s => s.mistralApiKey);
+  const setMistralApiKey = useSettingsStore(s => s.setMistralApiKey);
+  const networkState = useNetworkStore(s => s.state);
   const clearConversation = useConversationStore(s => s.clearConversation);
 
   const handleClearConversation = () => {
@@ -75,6 +89,58 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
             lang={langB}
           />
         </View>
+      </View>
+
+      {/* Transcripción — online/offline */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Transcripción</Text>
+          <View style={[styles.netPill, styles[`netPill_${networkState}`]]}>
+            <View style={[styles.netDot, styles[`netDot_${networkState}`]]} />
+            <Text style={styles.netPillText}>
+              {networkState === 'online' ? 'online' : networkState === 'offline' ? 'offline' : '…'}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.stepsBlock}>
+          <Text style={styles.label}>Modo</Text>
+          <View style={styles.stepsRow}>
+            {TRANSPORT_OPTIONS.map(opt => (
+              <Pressable
+                key={opt.value}
+                style={[styles.stepBtn, sttTransport === opt.value && styles.stepBtnActive]}
+                onPress={() => setSttTransport(opt.value)}>
+                <Text style={[styles.stepLabel, sttTransport === opt.value && styles.stepLabelActive]}>
+                  {opt.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          <Text style={styles.stepsHint}>
+            {TRANSPORT_OPTIONS.find(o => o.value === sttTransport)?.hint ?? ''}
+          </Text>
+        </View>
+
+        {sttTransport !== 'offline' && (
+          <>
+            <View style={styles.divider} />
+            <View style={styles.keyBlock}>
+              <Text style={styles.label}>Mistral API key</Text>
+              <Text style={styles.hint}>Necesaria para Voxtral. Solo en memoria — se pierde al cerrar.</Text>
+              <TextInput
+                style={styles.keyInput}
+                value={mistralApiKey}
+                onChangeText={setMistralApiKey}
+                placeholder="sk-…"
+                placeholderTextColor="rgba(255,255,255,0.20)"
+                autoCapitalize="none"
+                autoCorrect={false}
+                secureTextEntry
+              />
+            </View>
+          </>
+        )}
       </View>
 
       {/* TTS */}
@@ -149,12 +215,71 @@ const styles = StyleSheet.create({
     padding: 20,
     gap: 16,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   sectionTitle: {
     fontSize: 13,
     fontWeight: '600',
     color: 'rgba(255,255,255,0.30)',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  netPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  netPill_online: {
+    backgroundColor: 'rgba(34,197,94,0.10)',
+  },
+  netPill_offline: {
+    backgroundColor: 'rgba(250,204,21,0.10)',
+  },
+  netPill_unknown: {
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  netDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.30)',
+  },
+  netDot_online: {
+    backgroundColor: '#22c55e',
+  },
+  netDot_offline: {
+    backgroundColor: '#facc15',
+  },
+  netDot_unknown: {
+    backgroundColor: 'rgba(255,255,255,0.30)',
+  },
+  netPillText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.60)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  keyBlock: {
+    gap: 8,
+  },
+  keyInput: {
+    backgroundColor: '#161616',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    fontFamily: 'monospace',
   },
   row: {
     flexDirection: 'row',
