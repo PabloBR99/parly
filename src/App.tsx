@@ -13,6 +13,7 @@ import { memoryMonitor } from './services/memory/MemoryMonitor';
 import { useModelStore } from './store/modelStore';
 import { audioCaptureService } from './services/audio/AudioCaptureService';
 import { initNetworkMonitor, disposeNetworkMonitor } from './services/network/monitor';
+import { createMistralProbe } from './services/network/mistralProbe';
 import type { RootStackParamList } from './navigation/types';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -38,9 +39,9 @@ export default function App(): React.JSX.Element {
     memoryMonitor.start(15_000);
 
     // Network monitor — drives online/offline routing in the STT resolver.
-    // Start immediately; the first probe resolves the 'unknown' state within ~3s,
-    // well before the first utterance is likely to arrive.
-    const networkMonitor = initNetworkMonitor();
+    // Probes Mistral directly so 'online' means "Voxtral is reachable", not
+    // just "any internet". Starts immediately; first probe resolves within ~3s.
+    const networkMonitor = initNetworkMonitor({ probe: createMistralProbe() });
     networkMonitor.start();
 
     return () => {
