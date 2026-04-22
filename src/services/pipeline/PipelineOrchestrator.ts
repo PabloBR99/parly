@@ -3,7 +3,11 @@ import { useConversationStore } from '../../store/conversationStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useModelStore } from '../../store/modelStore';
 import { whisperService } from '../stt/WhisperService';
-import { CanaryService, canaryService } from '../stt/CanaryService';
+import { resolveSttAdapter } from '../stt/SttAdapterResolver';
+import { offlineSttAdapter } from '../stt/OfflineSttAdapter';
+import { probeNetworkNow } from '../network/monitor';
+// Canary disabled in v3.0 — audio-first LID will replace dual-engine workaround
+// import { CanaryService, canaryService } from '../stt/CanaryService';
 import { isKrokoLanguage } from '../stt/StreamingSTTService';
 import { streamingPipeline } from './StreamingPipeline';
 import { zipvoiceService } from '../tts/ZipVoiceService';
@@ -12,8 +16,10 @@ import { audioPlayerService } from '../tts/AudioPlayerService';
 import { UtteranceQueue } from './UtteranceQueue';
 import { readWavAsVoiceRef } from '../../utils/audioUtils';
 import { getTranslationService } from '../translation/TranslationServiceSingleton';
+import { audioLIDService } from '../lid/AudioLIDService';
 import { downloadKrokoForLanguage } from '../models/ModelManager';
-import type { Utterance, PersonId } from '../../app/types';
+import { memoryMonitor } from '../memory/MemoryMonitor';
+import type { Utterance, PersonId, TranscriptionResult } from '../../app/types';
 
 // ── Language discovery state machine ──────────────────────────────────────────
 
@@ -77,6 +83,7 @@ export function resetDiscovery(): void {
   detectedLangB = '';
   langACandidate = '';
   langBCandidate = '';
+  pendingStreamingConfig = null;
   canaryService.release().catch(() => {}); // free ~414 MB; back to Whisper-only
   streamingPipeline.release().catch(() => {}); // release streaming engines
   console.log('[Pipeline] Discovery state reset');
@@ -125,6 +132,26 @@ export async function warmupTranslation(): Promise<void> {
 // ── Streaming pipeline setup ──────────────────────────────────────────────────
 
 /**
+ * Deferred streaming pipeline configuration.
+ * Set during ACTIVE transition, consumed by processUtterance AFTER TTS finishes
+ * to avoid OOM from concurrent Kroko engine load (~306MB) + TTS playback.
+ */
+let pendingStreamingConfig: { langA: string; langB: string } | null = null;
+
+/** Consume and run any deferred streaming pipeline setup, unless discovery was reset. */
+export async function flushPendingStreamingConfig(): Promise<void> {
+  const pending = pendingStreamingConfig;
+  if (!pending) return;
+  pendingStreamingConfig = null;
+  const gen = discoveryGeneration;
+  await configureStreamingPipeline(pending.langA, pending.langB);
+  if (discoveryGeneration !== gen) {
+    console.log('[Pipeline] Discovery reset during streaming config — releasing');
+    streamingPipeline.release().catch(() => {});
+  }
+}
+
+/**
  * Download any missing Kroko models and configure the streaming pipeline.
  * Called on ACTIVE transition — runs in background, non-blocking.
  */
@@ -149,10 +176,54 @@ async function configureStreamingPipeline(langA: string, langB: string): Promise
     console.log('[Pipeline] Releasing Whisper to free memory before Kroko engine load');
     await whisperService.release();
 
+    // Native memory deallocation from sherpa-onnx destroy() is async — the JS
+    // promise resolves before the native heap actually frees ~244MB. Without a
+    // pause, loading Kroko engines on top of not-yet-freed Whisper memory causes
+    // peak ~550MB → Android HWUI thread gets its mutexes destroyed → SIGABRT.
+    console.log('[Pipeline] Waiting for native memory reclamation after Whisper release');
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    // Check available memory before loading ~306MB of Kroko engines
+    const availableMB = await memoryMonitor.getAvailableMB();
+    console.log('[Pipeline] Available memory before Kroko load:', availableMB, 'MB');
+    if (availableMB < 400) {
+      console.warn('[Pipeline] Insufficient memory for Kroko engines (' + availableMB + 'MB < 400MB) — staying on offline pipeline');
+      return;
+    }
+
     await streamingPipeline.configure(langA, langB);
     console.log('[Pipeline] Streaming pipeline ready for', langA, '↔', langB);
   } catch (e) {
     console.error('[Pipeline] Streaming pipeline setup failed (falling back to offline):', e);
+  }
+}
+
+// ── STT with fallback ─────────────────────────────────────────────────────────
+
+/**
+ * Transcribe via the resolved adapter, with transparent fallback to offline
+ * when the online adapter fails AND the user is on 'auto'. Explicit 'online'
+ * or 'offline' choices are respected — we never silently swap in those cases.
+ *
+ * On online failure we also poke the NetworkMonitor so its state flips to
+ * 'offline' faster than the next scheduled probe would, preventing the next
+ * utterance from re-hitting online and failing again.
+ */
+async function transcribeWithFallback(
+  audioPath: string,
+  language?: string,
+): Promise<TranscriptionResult> {
+  const adapter = resolveSttAdapter();
+  try {
+    return await adapter.transcribe(audioPath, language);
+  } catch (e) {
+    const { sttTransport } = useSettingsStore.getState();
+    if (adapter.name === 'online' && sttTransport === 'auto') {
+      console.warn('[Pipeline] Online STT failed, falling back to offline:', e);
+      probeNetworkNow();
+      return offlineSttAdapter.transcribe(audioPath, language);
+    }
+    throw e;
   }
 }
 
@@ -250,7 +321,7 @@ class PipelineOrchestrator {
       transcribedText = preTranscribedText;
     } else {
       try {
-        const result = await whisperService.transcribe(utterance.audioPath, sourceLang);
+        const result = await transcribeWithFallback(utterance.audioPath, sourceLang);
         const cleaned = result.text.trim();
         if (!cleaned || isWhisperNoise(cleaned)) {
           useConversationStore.getState().removeMessage(messageId);
@@ -289,6 +360,7 @@ class PipelineOrchestrator {
     // Stage 3: TTS
     if (!useSettingsStore.getState().autoPlay) {
       setPipelineStage('idle');
+      await flushPendingStreamingConfig();
       return;
     }
 
@@ -315,6 +387,8 @@ class PipelineOrchestrator {
     }
 
     setPipelineStage('idle');
+
+    await flushPendingStreamingConfig();
   }
 }
 
@@ -373,110 +447,34 @@ export async function resolveAutoUtterance(audioPath: string): Promise<AutoResol
   // is suspended will be detected even if the phase happens to be the same value.
   const genAtEntry = discoveryGeneration;
 
-  // ── ACTIVE + Canary: dual language-hinted transcription ─────────────────────
-  //
-  // Whisper (auto-detect) can silently translate audio into the wrong language
-  // (e.g. Spanish audio → English transcript), which then misroutes the utterance.
-  // Canary solves this by running two engines in parallel — one per language —
-  // where each engine can ONLY transcribe in its own language. ML Kit picks the
-  // winning transcript based on confidence.
-  //
-  // In ACTIVE phase, use Canary dual-engine for offline transcription — UNLESS both
-  // languages are Kroko-supported (streaming pipeline handles those; Whisper is the
-  // offline fallback, saving ~180MB RAM by not loading Canary).
-  const { personA: _pA, personB: _pB } = useSettingsStore.getState();
-  const krokoHandlesPair = isKrokoLanguage(_pA.language) && isKrokoLanguage(_pB.language);
-  if (discoveryPhase === 'active' && !krokoHandlesPair && CanaryService.supportsLanguagePair(_pA.language, _pB.language)) {
-    // Wait for engines if they are still loading (loadForPair was fired at ACTIVE transition)
-    if (!canaryService.isLoadedFor(_pA.language, _pB.language)) {
-      console.log('[Pipeline] ACTIVE: Canary engines loading — waiting up to 10 s…');
-      const ready = await canaryService.waitForLoad(10_000);
-      if (discoveryGeneration !== genAtEntry) return null;
-      if (!ready) {
-        console.log('[Pipeline] ACTIVE: Canary not ready after 10 s — dropping utterance');
-        return null;
-      }
-    }
-
-    const dual = await canaryService.transcribeBoth(audioPath);
-    if (discoveryGeneration !== genAtEntry) return null;
-
-    if (!dual) return null; // engines released mid-call (session reset)
-
-    const svc = await getTranslationService();
-    const [candidatesA, candidatesB] = await Promise.all([
-      dual.textA && !isWhisperNoise(dual.textA)
-        ? svc.identifyLanguage(dual.textA).catch(() => [])
-        : Promise.resolve([]),
-      dual.textB && !isWhisperNoise(dual.textB)
-        ? svc.identifyLanguage(dual.textB).catch(() => [])
-        : Promise.resolve([]),
-    ]);
-    if (discoveryGeneration !== genAtEntry) return null;
-
-    // Match on exact code or BCP-47 subtag (e.g. 'es' matches 'es-419' but not 'esl')
-    const matchLang = (tag: string, code: string) =>
-      tag === code || tag.startsWith(code + '-');
-
-    const confA = candidatesA.find(c => matchLang(c.language, dual.langA))?.confidence ?? 0;
-    const confB = candidatesB.find(c => matchLang(c.language, dual.langB))?.confidence ?? 0;
-    console.log('[Pipeline] ACTIVE Canary →', {
-      textA: dual.textA, confA,
-      textB: dual.textB, confB,
-    });
-
-    if (confA < ACTIVE_CONFIDENCE && confB < ACTIVE_CONFIDENCE) {
-      console.log('[Pipeline] ACTIVE: Canary both below threshold, dropping');
-      return null;
-    }
-
-    // Drop only when the result is genuinely ambiguous: small margin AND winner isn't confident.
-    // A winner with ≥ 0.95 confidence is always trusted — both engines can score high
-    // (e.g. confA=0.9999, confB=0.9989) when Spanish audio hits a well-trained model,
-    // but the Spanish engine still wins clearly in absolute terms.
-    const useA = confA > confB;
-    const winnerConf = useA ? confA : confB;
-    const CONF_MARGIN = 0.05;
-    if (winnerConf < 0.95 && Math.abs(confA - confB) < CONF_MARGIN) {
-      console.log('[Pipeline] ACTIVE: Canary tie (confA:', confA, 'confB:', confB, '), dropping');
-      return null;
-    }
-    const text    = useA ? dual.textA : dual.textB;
-    const topLang = useA ? dual.langA : dual.langB;
-
-    if (!text || isWhisperNoise(text)) return null;
-
-    const { personA, personB } = useSettingsStore.getState();
-    if (topLang === personA.language) {
-      return { speakerId: 'person_a', transcribedText: text, sourceLang: personA.language, targetLang: personB.language };
-    }
-    if (topLang === personB.language) {
-      return { speakerId: 'person_b', transcribedText: text, sourceLang: personB.language, targetLang: personA.language };
-    }
-    console.log('[Pipeline] ACTIVE: Canary topLang', topLang, 'not in known pair, dropping');
-    return null;
-  }
-
-  // ── Whisper: auto-detect (DISCOVERY + ACTIVE fallback) ───────────────────────
-  const result = await whisperService.transcribe(audioPath);
+  // ── STT: transcribe + language identification ───────────────────────────────
+  // Adapter-routed (offline Whisper or online Voxtral) with transparent fallback
+  // to offline when online fails in 'auto' mode. ML Kit text LID is the primary
+  // signal — it's reliable when the transcription is correct. The adapter's
+  // result.language is only a tiebreaker when ML Kit is unsure. A dedicated
+  // audio LID model (ECAPA-TDNN or similar) is needed for production.
+  const result = await transcribeWithFallback(audioPath);
   const text = result.text.trim();
   if (!text || isWhisperNoise(text)) return null;
 
   // Bail if the session was reset while we were transcribing
   if (discoveryGeneration !== genAtEntry) return null;
 
-  console.log('[Pipeline] Transcribed →', { text, phase: discoveryPhase });
+  const sttLang = (result.language || '').split('-')[0].toLowerCase();
+  console.log('[Pipeline] Transcribed →', { text, sttLang, phase: discoveryPhase });
 
-  // Identify language via ML Kit
+  // ML Kit text LID — primary signal for all phases
   const svc = await getTranslationService();
   const candidates = await svc.identifyLanguage(text).catch(() => []);
-  const topLang = (candidates[0]?.language ?? '').split('-')[0].toLowerCase();
-  const topConf = candidates[0]?.confidence ?? 0;
+  const mlKitLang = (candidates[0]?.language ?? '').split('-')[0].toLowerCase();
+  const mlKitConf = candidates[0]?.confidence ?? 0;
 
-  // Bail again if reset happened during identifyLanguage
   if (discoveryGeneration !== genAtEntry) return null;
+  console.log('[Pipeline] ML Kit LID →', { mlKitLang, mlKitConf });
 
-  console.log('[Pipeline] identifyLanguage →', { topLang, topConf, phase: discoveryPhase });
+  // Use ML Kit as primary. sttLang is only a tiebreaker when ML Kit is unsure.
+  const topLang = mlKitConf >= 0.4 ? mlKitLang : (sttLang || mlKitLang);
+  const topConf = mlKitConf >= 0.4 ? mlKitConf : (sttLang ? 0.6 : mlKitConf);
 
   // Helper: safe interim target when langB is unknown.
   // Translates to DEFAULT_LANG_B (en) unless langA is already 'en', in which case
@@ -546,13 +544,6 @@ export async function resolveAutoUtterance(audioPath: string): Promise<AutoResol
       useSettingsStore.getState().setPersonLanguage('person_b', detectedLangB);
       console.log('[Pipeline] langB committed →', detectedLangB, '— entering ACTIVE');
       warmupTranslation().catch(() => {});
-      // Use streaming (Kroko) when both languages are supported — skip Canary to save ~180MB RAM.
-      // When Kroko is unavailable, fall back to Canary dual-engine for ACTIVE phase.
-      if (isKrokoLanguage(detectedLangA) && isKrokoLanguage(detectedLangB)) {
-        void configureStreamingPipeline(detectedLangA, detectedLangB);
-      } else {
-        canaryService.loadForPair(detectedLangA, detectedLangB).catch(() => {});
-      }
       return {
         speakerId: 'person_b',
         transcribedText: text,
@@ -583,17 +574,47 @@ export async function resolveAutoUtterance(audioPath: string): Promise<AutoResol
   }
 
   // ── ACTIVE ───────────────────────────────────────────────────────────────
-  // Read from settingsStore so manual overrides in Settings take effect immediately.
-  // During discovery, setPersonLanguage() keeps settingsStore in sync with module state.
+  // Audio LID (Silero lang_classifier_95) routes speakers when available.
+  // It identifies the SPOKEN language from raw PCM — immune to Whisper's
+  // translate bug (e.g. Spanish audio → English text still routes correctly).
+  // Falls back to ML Kit text LID when audio LID is not loaded.
   const { personA, personB } = useSettingsStore.getState();
   const activeLangA = personA.language;
   const activeLangB = personB.language;
 
-  if (topConf < ACTIVE_CONFIDENCE) {
-    console.log('[Pipeline] ACTIVE: ignoring low-confidence detection (conf:', topConf, ')');
+  let activeLang = topLang;
+  let activeConf = topConf;
+
+  if (audioLIDService.isLoaded) {
+    const predictions = await audioLIDService.identifyLanguageFromFile(audioPath, 3);
+    if (discoveryGeneration !== genAtEntry) return null;
+
+    if (predictions.length > 0) {
+      // Find the best match among the known language pair
+      const matchA = predictions.find(p => p.language === activeLangA);
+      const matchB = predictions.find(p => p.language === activeLangB);
+      const confA = matchA?.confidence ?? 0;
+      const confB = matchB?.confidence ?? 0;
+
+      if (confA > 0 || confB > 0) {
+        activeLang = confA >= confB ? activeLangA : activeLangB;
+        activeConf = Math.max(confA, confB);
+        console.log('[Pipeline] ACTIVE AudioLID →', {
+          activeLang, activeConf: activeConf.toFixed(3),
+          confA: confA.toFixed(3), confB: confB.toFixed(3),
+          mlKit: topLang,
+        });
+      } else {
+        console.log('[Pipeline] ACTIVE AudioLID: no match in known pair, falling back to ML Kit');
+      }
+    }
+  }
+
+  if (activeConf < ACTIVE_CONFIDENCE) {
+    console.log('[Pipeline] ACTIVE: ignoring low-confidence detection (conf:', activeConf, ')');
     return null;
   }
-  if (topLang === activeLangA) {
+  if (activeLang === activeLangA) {
     return {
       speakerId: 'person_a',
       transcribedText: text,
@@ -601,7 +622,7 @@ export async function resolveAutoUtterance(audioPath: string): Promise<AutoResol
       targetLang: activeLangB,
     };
   }
-  if (topLang === activeLangB) {
+  if (activeLang === activeLangB) {
     return {
       speakerId: 'person_b',
       transcribedText: text,
@@ -609,7 +630,7 @@ export async function resolveAutoUtterance(audioPath: string): Promise<AutoResol
       targetLang: activeLangA,
     };
   }
-  console.log('[Pipeline] ACTIVE: ignoring unknown language', topLang,
+  console.log('[Pipeline] ACTIVE: ignoring unknown language', activeLang,
     '(known:', activeLangA, '/', activeLangB, ')');
   return null;
 }

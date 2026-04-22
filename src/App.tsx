@@ -12,6 +12,7 @@ import { nativeTTSService } from './services/tts/NativeTTSService';
 import { memoryMonitor } from './services/memory/MemoryMonitor';
 import { useModelStore } from './store/modelStore';
 import { audioCaptureService } from './services/audio/AudioCaptureService';
+import { initNetworkMonitor, disposeNetworkMonitor } from './services/network/monitor';
 import type { RootStackParamList } from './navigation/types';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -35,7 +36,17 @@ export default function App(): React.JSX.Element {
       });
 
     memoryMonitor.start(15_000);
-    return () => memoryMonitor.stop();
+
+    // Network monitor — drives online/offline routing in the STT resolver.
+    // Start immediately; the first probe resolves the 'unknown' state within ~3s,
+    // well before the first utterance is likely to arrive.
+    const networkMonitor = initNetworkMonitor();
+    networkMonitor.start();
+
+    return () => {
+      memoryMonitor.stop();
+      disposeNetworkMonitor();
+    };
   }, []);
 
   return (
