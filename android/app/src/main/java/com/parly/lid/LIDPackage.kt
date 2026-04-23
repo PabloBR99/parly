@@ -1,13 +1,13 @@
-package com.parly.audio
+package com.parly.lid
 
 import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 
-class AudioPackage : ReactPackage {
+class LIDPackage : ReactPackage {
     override fun createNativeModules(context: ReactApplicationContext): List<NativeModule> =
-        listOf(AudioModule(context), MemoryModule(context), SileroVADModule(context), SileroVADDirectModule(context), NativeAudioModule(context))
+        listOf(SileroLIDModule(context))
 
     override fun createViewManagers(context: ReactApplicationContext): List<ViewManager<*, *>> =
         emptyList()

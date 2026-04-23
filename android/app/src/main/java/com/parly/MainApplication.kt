@@ -8,6 +8,7 @@ import com.facebook.react.ReactNativeApplicationEntryPoint.loadReactNative
 import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import com.parly.translation.TranslationPackage
 import com.parly.audio.AudioPackage
+import com.parly.lid.LIDPackage
 
 class MainApplication : Application(), ReactApplication {
 
@@ -18,6 +19,7 @@ class MainApplication : Application(), ReactApplication {
         PackageList(this).packages.apply {
           add(TranslationPackage())
           add(AudioPackage())
+          add(LIDPackage())
         },
     )
   }

@@ -35,6 +35,7 @@ export class ReTranslator {
   private prevTranscript = '';
   private translationHistory: string[] = [];
   private committedStablePrefix = '';
+  private spokenUpTo = '';
   private translating = false;
   private pendingTranscript: string | null = null;
   private idleResolve: (() => void) | null = null;
@@ -46,6 +47,7 @@ export class ReTranslator {
     this.prevTranscript = '';
     this.translationHistory = [];
     this.committedStablePrefix = '';
+    this.spokenUpTo = '';
     this.translating = false;
     this.pendingTranscript = null;
     this.idleResolve = null;
@@ -90,6 +92,34 @@ export class ReTranslator {
     if (!this.committedStablePrefix) return fullTranslation;
     if (fullTranslation.startsWith(this.committedStablePrefix)) {
       return fullTranslation.slice(this.committedStablePrefix.length).trim();
+    }
+    return fullTranslation;
+  }
+
+  /**
+   * Mark content as dispatched to the StreamingTTSScheduler.
+   * Content is queued (not yet audibly played) — used to compute the final
+   * remainder after ASR finalization so we don't double-dispatch.
+   */
+  markAsDispatched(prefix: string): void {
+    if (prefix.length > this.spokenUpTo.length && prefix.startsWith(this.spokenUpTo)) {
+      this.spokenUpTo = prefix;
+    }
+  }
+
+  /**
+   * Get the portion of a full translation not yet dispatched to TTS.
+   * Used after final translation to determine what still needs speaking.
+   *
+   * NOTE: If the final translation diverges from the dispatched prefix
+   * (re-translation chose different wording), the full translation is
+   * returned. This may cause partial repetition — a known limitation
+   * of the re-translation approach for TTS.
+   */
+  getUnspokenRemainder(fullTranslation: string): string {
+    if (!this.spokenUpTo) return fullTranslation;
+    if (fullTranslation.startsWith(this.spokenUpTo)) {
+      return fullTranslation.slice(this.spokenUpTo.length).trim();
     }
     return fullTranslation;
   }

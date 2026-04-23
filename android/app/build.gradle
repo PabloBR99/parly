@@ -115,6 +115,15 @@ dependencies {
     implementation("com.google.mlkit:language-id:17.0.6")
     implementation("com.google.android.gms:play-services-base:18.5.0")
 
+    // sherpa-onnx bundles ONNX Runtime and sherpa-onnx Java classes as local JARs
+    // (implementation scope = not transitive). We need compile-time visibility for:
+    // - OpusMTModule (OrtSession, OnnxTensor) — ONNX Runtime Java API
+    // - SileroVADDirect (OrtSession, OnnxTensor) — ONNX Runtime Java API
+    // compileOnly avoids duplicate classes at runtime.
+    def sherpaOnnxBuild = file("${rootDir}/../node_modules/react-native-sherpa-onnx/android/build")
+    compileOnly fileTree(dir: "${sherpaOnnxBuild}/onnxruntime-classes", include: '*.jar')
+    compileOnly fileTree(dir: "${sherpaOnnxBuild}/sherpa-onnx-classes", include: '*.jar')
+
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
     } else {

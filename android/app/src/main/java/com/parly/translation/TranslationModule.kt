@@ -19,6 +19,14 @@ class TranslationModule(reactContext: ReactApplicationContext) :
     private val translatorCache = mutableMapOf<String, com.google.mlkit.nl.translate.Translator>()
     // Track pairs whose models are confirmed downloaded — skip downloadModelIfNeeded overhead
     private val readyPairs = mutableSetOf<String>()
+    // Reuse language ID client — creating/closing per call triggers native init_google double-init abort
+    private val languageIdClient by lazy {
+        LanguageIdentification.getClient(
+            LanguageIdentificationOptions.Builder()
+                .setConfidenceThreshold(0.3f)
+                .build()
+        )
+    }
 
     private fun pairKey(fromLang: String, toLang: String) = "$fromLang|$toLang"
 
@@ -114,12 +122,7 @@ class TranslationModule(reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun identifyLanguage(text: String, promise: Promise) {
-        val client = LanguageIdentification.getClient(
-            LanguageIdentificationOptions.Builder()
-                .setConfidenceThreshold(0.3f)
-                .build()
-        )
-        client.identifyPossibleLanguages(text)
+        languageIdClient.identifyPossibleLanguages(text)
             .addOnSuccessListener { results ->
                 val arr = Arguments.createArray()
                 for (lang in results) {
@@ -130,11 +133,9 @@ class TranslationModule(reactContext: ReactApplicationContext) :
                     arr.pushMap(map)
                 }
                 promise.resolve(arr)
-                client.close()
             }
             .addOnFailureListener { e ->
                 promise.reject("LANG_ID_ERROR", e.message, e)
-                client.close()
             }
     }
 

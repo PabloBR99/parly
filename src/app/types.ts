@@ -8,6 +8,7 @@ export type PipelineStage =
   | 'transcribing'
   | 'translating'
   | 'synthesizing'
+  | 'streaming_tts'
   | 'playing';
 export type ModelStatus =
   | 'not_downloaded'

@@ -13,10 +13,12 @@ import { nanoid } from 'nanoid/non-secure';
 import type { SttStream } from 'react-native-sherpa-onnx/stt';
 import { streamingSTTService } from '../stt/StreamingSTTService';
 import { ReTranslator } from './ReTranslator';
+import { WaitKTranslator } from './WaitKTranslator';
 import { useConversationStore } from '../../store/conversationStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useModelStore } from '../../store/modelStore';
 import { nativeTTSService } from '../tts/NativeTTSService';
+import { streamingTTSScheduler } from '../tts/StreamingTTSScheduler';
 import { getTranslationService } from '../translation/TranslationServiceSingleton';
 import type { PersonId } from '../../app/types';
 
@@ -72,12 +74,16 @@ class StreamingPipeline {
   private streamB: SttStream | null = null;
   private reTranslatorA = new ReTranslator();
   private reTranslatorB = new ReTranslator();
+  private waitKTranslatorA = new WaitKTranslator();
+  private waitKTranslatorB = new WaitKTranslator();
   private bestStream: SttStream | null = null;
   private bestSpeaker: PersonId | null = null;
   private bestTextSoFar = '';
   private lastPartialA = '';
   private lastPartialB = '';
   private generation = 0;
+  /** Set synchronously to prevent concurrent feedAudioChunk calls from starting the scheduler twice. */
+  private ttsSchedulerStarted = false;
 
   /**
    * Serialization lock for start/end/cancel operations.
@@ -108,8 +114,13 @@ class StreamingPipeline {
     this.langA = langA.split('-')[0].toLowerCase();
     this.langB = langB.split('-')[0].toLowerCase();
 
-    // Load sequentially to reduce peak memory (each encoder is ~153MB)
+    // Load sequentially to reduce peak memory (each encoder is ~153MB).
+    // Pause between loads lets native allocator settle — without this,
+    // back-to-back ONNX Runtime session inits can fragment the native heap
+    // and trigger HWUI mutex corruption under memory pressure.
     await streamingSTTService.loadEngine(this.langA);
+    console.log('[StreamingPipeline] First engine loaded, pausing for native memory to settle');
+    await new Promise(resolve => setTimeout(resolve, 500));
     await streamingSTTService.loadEngine(this.langB);
     console.log('[StreamingPipeline] Configured for', this.langA, '↔', this.langB);
   }
@@ -130,6 +141,7 @@ class StreamingPipeline {
       this.bestTextSoFar = '';
       this.lastPartialA = '';
       this.lastPartialB = '';
+      this.ttsSchedulerStarted = false;
 
       // Await stream creation — 'starting' state prevents concurrent access
       const [sA, sB] = await Promise.all([
@@ -149,6 +161,13 @@ class StreamingPipeline {
       this.streamB = sB;
       this.reTranslatorA.start(this.langA, this.langB);
       this.reTranslatorB.start(this.langB, this.langA);
+
+      // Initialize wait-k translators (used for TTS when waitK > 0)
+      const waitK = useSettingsStore.getState().waitK;
+      if (waitK > 0) {
+        this.waitKTranslatorA.start(this.langA, this.langB, waitK);
+        this.waitKTranslatorB.start(this.langB, this.langA, waitK);
+      }
 
       this.state = 'streaming';
       useConversationStore.getState().setPipelineStage('streaming');
@@ -216,6 +235,47 @@ class StreamingPipeline {
           translation: update.fullTranslation,
           stableTranslation: update.stablePrefix,
         });
+
+        // Dispatch translated content to TTS scheduler for incremental playback.
+        // Two paths: wait-k (forward-only translation → TTS) or re-translation stable prefix.
+        const settings = useSettingsStore.getState();
+        if (this.bestSpeaker && settings.autoPlay) {
+          const waitK = settings.waitK;
+
+          if (waitK > 0) {
+            // Wait-k path: feed partial transcript to WaitKTranslator
+            const waitKTranslator = this.bestSpeaker === 'person_a'
+              ? this.waitKTranslatorA : this.waitKTranslatorB;
+            const newContent = await waitKTranslator.onPartial(currentText);
+            if (gen !== this.generation) return;
+
+            if (newContent) {
+              // Lazily start TTS scheduler
+              if (!this.ttsSchedulerStarted) {
+                this.ttsSchedulerStarted = true;
+                const targetLang = this.bestSpeaker === 'person_a' ? this.langB : this.langA;
+                const listenerConfig = this.bestSpeaker === 'person_a'
+                  ? settings.personB : settings.personA;
+                streamingTTSScheduler.start(targetLang, listenerConfig.voice);
+              }
+              streamingTTSScheduler.feedStableContent(newContent);
+              // Mark as dispatched on ReTranslator too (for remainder calculation)
+              const committedSoFar = waitKTranslator.getCommittedOutput();
+              reTranslator.markAsDispatched(committedSoFar);
+            }
+          } else if (update.newStableContent) {
+            // Re-translation path: stable prefix drives TTS
+            if (!this.ttsSchedulerStarted) {
+              this.ttsSchedulerStarted = true;
+              const targetLang = this.bestSpeaker === 'person_a' ? this.langB : this.langA;
+              const listenerConfig = this.bestSpeaker === 'person_a'
+                ? settings.personB : settings.personA;
+              streamingTTSScheduler.start(targetLang, listenerConfig.voice);
+            }
+            streamingTTSScheduler.feedStableContent(update.newStableContent);
+            reTranslator.markAsDispatched(update.stablePrefix);
+          }
+        }
       } else {
         useConversationStore.getState().setStreamingPartial({
           speakerId: this.bestSpeaker,
@@ -322,23 +382,56 @@ class StreamingPipeline {
         return;
       }
 
-      // TTS
+      // TTS — use streaming scheduler if active, otherwise fall back to full speak
       if (!settings.autoPlay) {
+        streamingTTSScheduler.cancel();
         store.setPipelineStage('idle');
         this.state = 'idle';
         return;
       }
 
-      store.setPipelineStage('synthesizing');
       const listenerConfig = speakerId === 'person_a' ? settings.personB : settings.personA;
 
-      try {
-        await nativeTTSService.speak(translatedText, targetLang, listenerConfig.voice);
-      } catch (e) {
-        console.error('[StreamingPipeline] TTS failed:', e);
+      if (this.ttsSchedulerStarted) {
+        // If wait-k was active, finalize it so any remaining tokens get translated
+        const waitK = settings.waitK;
+        if (waitK > 0) {
+          const waitKTranslator = speakerId === 'person_a'
+            ? this.waitKTranslatorA : this.waitKTranslatorB;
+          const waitKRemainder = await waitKTranslator.finalize(finalText);
+          if (waitKRemainder && gen === this.generation) {
+            streamingTTSScheduler.feedStableContent(waitKRemainder);
+            const reTranslator = speakerId === 'person_a'
+              ? this.reTranslatorA : this.reTranslatorB;
+            reTranslator.markAsDispatched(waitKTranslator.getCommittedOutput());
+          }
+        }
+
+        // Compute what still needs TTS: full translation minus already-dispatched content
+        const reTranslator = speakerId === 'person_a'
+          ? this.reTranslatorA : this.reTranslatorB;
+        const remainder = reTranslator.getUnspokenRemainder(translatedText);
+
+        try {
+          await streamingTTSScheduler.feedFinalRemainder(remainder);
+        } catch (e) {
+          console.error('[StreamingPipeline] Streaming TTS failed:', e);
+        }
+        // Deactivate scheduler now that all fragments have been played
+        streamingTTSScheduler.cancel();
+        this.ttsSchedulerStarted = false;
+      } else {
+        // Fallback: no streaming TTS was active, speak the full translation
+        store.setPipelineStage('synthesizing');
+        try {
+          await nativeTTSService.speak(translatedText, targetLang, listenerConfig.voice);
+        } catch (e) {
+          console.error('[StreamingPipeline] TTS failed:', e);
+        }
       }
 
       if (gen !== this.generation) {
+        streamingTTSScheduler.cancel();
         this.state = 'idle';
         return;
       }
@@ -370,6 +463,8 @@ class StreamingPipeline {
   /** Cancel without acquiring the lock — caller must hold it. */
   private async cancelUtteranceUnsafe(): Promise<void> {
     this.generation++;
+    this.ttsSchedulerStarted = false;
+    streamingTTSScheduler.cancel();
     if (this.streamA) {
       await streamingSTTService.releaseStream(this.streamA);
       this.streamA = null;
