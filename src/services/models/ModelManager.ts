@@ -5,6 +5,12 @@ import { whisperService } from '../stt/WhisperService';
 import { canaryService } from '../stt/CanaryService';
 import { streamingSTTService, KROKO_LANGUAGES, isKrokoLanguage } from '../stt/StreamingSTTService';
 import { zipvoiceService } from '../tts/ZipVoiceService';
+import { sileroVADService } from '../audio/SileroVADService';
+import { setSileroModelPath } from '../audio/VADController';
+import { audioLIDService } from '../lid/AudioLIDService';
+import { getAllModelsForLanguages, OPUS_MT_MODEL_SIZE_MB } from '../translation/OpusMTModels';
+import type { OpusMTModelInfo } from '../translation/OpusMTModels';
+import { resetTranslationService } from '../translation/TranslationServiceSingleton';
 
 // ── Sherpa-ONNX Whisper small multilingual int8 — ~244MB ─────────────────────
 // Significantly better WER and language detection than base.
@@ -106,6 +112,80 @@ const KROKO_FILES: KrokoFile[] = [
 ];
 
 const TOTAL_KROKO_PER_LANG_MB = KROKO_FILES.reduce((s, f) => s + f.sizeEstimate, 0);
+
+// ── Silero VAD — ~1.8MB ──────────────────────────────────────────────────────
+// Neural VAD model — MUST use the sherpa-onnx-compatible version, not upstream snakers4.
+// The upstream silero_vad.onnx has a different graph structure that causes native crashes
+// (pthread_mutex_lock on destroyed mutex) when loaded via sherpa-onnx's Vad class.
+const SILERO_VAD_URL =
+  'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx';
+const SILERO_VAD_FILENAME = 'silero_vad.onnx';
+const SILERO_VAD_MIN_SIZE = 1 * 1024 * 1024; // ~1.8MB
+
+// ── Silero Language Identification — ~16.2MB ─────────────────────────────────
+// Audio-based LID: identifies spoken language from raw PCM, immune to Whisper
+// translate bug. 95 languages, raw 16kHz input, no FBank preprocessing needed.
+const SILERO_LID_HF_BASE =
+  'https://huggingface.co/deepghs/silero-lang95-onnx/resolve/main';
+const SILERO_LID_DIR = 'silero-lid';
+const SILERO_LID_MODEL = 'lang_classifier_95.onnx';
+const SILERO_LID_DICT = 'lang_dict_95.json';
+const SILERO_LID_MIN_SIZE = 15 * 1024 * 1024; // ~16.2MB
+
+// ── OpusMT Helsinki-NLP MarianMT ONNX INT8 — ~75-100MB per pair ─────────────
+// Direct translation models for EN↔{ES,FR,DE}. Non-EN pairs pivot through EN.
+// Source: https://huggingface.co/Helsinki-NLP
+const OPUS_MT_BASE_DIR = 'opus-mt';
+const OPUS_MT_HF_BASE = 'https://huggingface.co/Helsinki-NLP';
+
+async function downloadOpusMTModel(
+  model: OpusMTModelInfo,
+  baseDir: string,
+  onProgress: (pct: number) => void,
+): Promise<void> {
+  const modelDir = `${baseDir}/${model.dirName}`;
+  await RNFS.mkdir(modelDir);
+
+  let completedMB = 0;
+  const totalMB = OPUS_MT_MODEL_SIZE_MB;
+
+  for (const file of model.files) {
+    // HuggingFace resolve URL for ONNX models
+    const url = `${OPUS_MT_HF_BASE}/${model.dirName}/resolve/main/onnx/${file.name}`;
+    const dest = `${modelDir}/${file.name}`;
+
+    await downloadFile(url, dest, file.minSize, filePct => {
+      const fileMB = file.sizeEstimate * (filePct / 100);
+      onProgress(Math.round(((completedMB + fileMB) / totalMB) * 100));
+    });
+
+    completedMB += file.sizeEstimate;
+    onProgress(Math.round((completedMB / totalMB) * 100));
+  }
+}
+
+async function downloadOpusMTModels(
+  languages: readonly string[],
+  onProgress: (pct: number) => void,
+): Promise<void> {
+  const baseDir = `${RNFS.DocumentDirectoryPath}/${OPUS_MT_BASE_DIR}`;
+  await RNFS.mkdir(baseDir);
+
+  const models = getAllModelsForLanguages(languages);
+  if (models.length === 0) return;
+
+  const totalMB = OPUS_MT_MODEL_SIZE_MB * models.length;
+  let completedMB = 0;
+
+  for (const model of models) {
+    await downloadOpusMTModel(model, baseDir, modelPct => {
+      const modelMB = OPUS_MT_MODEL_SIZE_MB * (modelPct / 100);
+      onProgress(Math.round(((completedMB + modelMB) / totalMB) * 100));
+    });
+    completedMB += OPUS_MT_MODEL_SIZE_MB;
+    onProgress(Math.round((completedMB / totalMB) * 100));
+  }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -377,78 +457,65 @@ async function _initModelsImpl(): Promise<void> {
     throw e; // Whisper is required — propagate
   }
 
-  // ── Canary (optional — en/es/de/fr pairs; lazy-loaded when ACTIVE phase starts) ──
-  // Only download files here. Engines are created lazily by canaryService.loadForPair()
-  // when the actual language pair is discovered, so both engines are never held in RAM
-  // simultaneously with Whisper for longer than the brief transition moment.
-  const availableMBAfterWhisper = await getAvailableMemoryMB();
-  if (availableMBAfterWhisper < 450) {
-    store.setCanaryStatus('error');
-    store.setCanaryError(`RAM insuficiente (${availableMBAfterWhisper}MB) — Canary no disponible.`);
-  } else {
-    store.setCanaryStatus('downloading');
-    const canaryDir = `${RNFS.DocumentDirectoryPath}/${CANARY_MODEL_DIR}`;
-    try {
-      await downloadCanaryModel(canaryDir, pct => store.setCanaryProgress(pct));
-      canaryService.setModelDir(canaryDir);
-      store.setCanaryStatus('ready');
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      store.setCanaryStatus('error');
-      store.setCanaryError(msg);
-      // Non-fatal — pipeline falls back to Whisper automatically
-    }
-  }
-
-  // ── Kroko streaming (optional — streaming ASR for ACTIVE phase) ──────────
-  // Download for the languages configured in settings. Additional languages
-  // can be downloaded lazily when the language pair is discovered.
-  const krokoDir = `${RNFS.DocumentDirectoryPath}/${KROKO_MODEL_DIR}`;
-  const { personA: pA, personB: pB } = useSettingsStore.getState();
-  const krokoLangs = [pA.language, pB.language].filter(isKrokoLanguage);
-
-  if (krokoLangs.length > 0) {
-    store.setKrokoStatus('downloading');
-    try {
-      await downloadKrokoModels(krokoDir, krokoLangs, pct => store.setKrokoProgress(pct));
-      streamingSTTService.setModelBaseDir(krokoDir);
-      store.setKrokoStatus('ready');
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      store.setKrokoStatus('error');
-      store.setKrokoError(msg);
-      // Non-fatal — pipeline falls back to offline ASR
-    }
-  } else {
-    store.setKrokoStatus('error');
-    store.setKrokoError('No Kroko-supported languages configured');
-  }
-
-  // ── ZipVoice (optional) ───────────────────────────────────────────────────
-  if (!ENABLE_ZIPVOICE) {
-    store.setZipvoiceStatus('error');
-    store.setZipvoiceError('ZipVoice deshabilitado — usando TTS del sistema.');
-    return;
-  }
-
-  const availableMB = await getAvailableMemoryMB();
-  if (availableMB < 500) {
-    store.setZipvoiceStatus('error');
-    store.setZipvoiceError(`RAM insuficiente (${availableMB}MB) — usando TTS del sistema.`);
-    return;
-  }
-
-  const zipvoiceDir = `${RNFS.DocumentDirectoryPath}/${ZIPVOICE_MODEL_DIR}`;
-  store.setZipvoiceStatus('downloading');
+  // ── Silero VAD — via direct ONNX Runtime (bypasses sherpa-onnx Vad class) ───
+  // The sherpa-onnx Vad() constructor SIGABRTs on the QNN build. SileroVADDirect
+  // uses ONNX Runtime Java API directly (same pattern as OpusMTModule) to avoid this.
+  const sileroPath = `${RNFS.DocumentDirectoryPath}/${SILERO_VAD_FILENAME}`;
   try {
-    await downloadZipvoiceModel(zipvoiceDir, pct => store.setZipvoiceProgress(pct));
-    store.setZipvoiceStatus('loading');
-    await zipvoiceService.load(zipvoiceDir);
-    store.setZipvoiceStatus('ready');
+    await downloadFile(SILERO_VAD_URL, sileroPath, SILERO_VAD_MIN_SIZE, () => {});
+    await sileroVADService.load(sileroPath);
+    setSileroModelPath(sileroPath);
+    console.log('[ModelManager] Silero VAD ready (direct ONNX Runtime)');
+  } catch (e) {
+    console.warn('[ModelManager] Silero VAD download/load failed — energy VAD will be used:', e);
+  }
+
+  // ── Silero LID — audio-based language identification (16.2MB) ───────────────
+  // Identifies spoken language from raw PCM. Runs in ACTIVE phase before Whisper
+  // to fix the translate bug (Whisper translating Spanish→English text).
+  const lidDir = `${RNFS.DocumentDirectoryPath}/${SILERO_LID_DIR}`;
+  try {
+    await RNFS.mkdir(lidDir);
+    const modelDest = `${lidDir}/${SILERO_LID_MODEL}`;
+    const dictDest = `${lidDir}/${SILERO_LID_DICT}`;
+    await downloadFile(`${SILERO_LID_HF_BASE}/${SILERO_LID_MODEL}`, modelDest, SILERO_LID_MIN_SIZE, () => {});
+    await downloadFile(`${SILERO_LID_HF_BASE}/${SILERO_LID_DICT}`, dictDest, 100, () => {});
+    await audioLIDService.load(modelDest, dictDest);
+    console.log('[ModelManager] Silero LID ready (audio-based language identification)');
+  } catch (e) {
+    console.warn('[ModelManager] Silero LID download/load failed — ML Kit text LID will be used:', e);
+  }
+
+  // ── Canary — DISABLED (v3.0: replaced by audio-first LID + Whisper) ────────
+  // Canary (207MB) + Whisper (244MB) together cause OOM/SIGABRT on mid-range
+  // devices. Audio-first LID (Phase 2) will eliminate this workaround entirely.
+  store.setCanaryStatus('error');
+  store.setCanaryError('Canary deshabilitado — v3.0 usa Whisper + ML Kit LID.');
+
+  // ── Kroko streaming — DISABLED (v3.0: will be replaced by lighter Zipformer) ─
+  // Kroko models are 153MB/lang — too heavy alongside Whisper on 6GB devices.
+  store.setKrokoStatus('error');
+  store.setKrokoError('Kroko deshabilitado — v3.0 usará Zipformer ligero.');
+
+  // ── OpusMT (optional — offline translation for EN↔{ES,FR,DE}) ──────────────
+  // Download models for the configured language pair.
+  const { personA, personB } = useSettingsStore.getState();
+  const opusMTLangs = [personA.language, personB.language];
+  store.setOpusMTStatus('downloading');
+  try {
+    await downloadOpusMTModels(opusMTLangs, pct => store.setOpusMTProgress(pct));
+    store.setOpusMTStatus('ready');
+    // Reset singleton so next call picks up OpusMT instead of ML Kit
+    resetTranslationService();
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    store.setZipvoiceStatus('error');
-    store.setZipvoiceError(msg);
-    // Non-fatal — pipeline uses NativeTTS fallback automatically
+    store.setOpusMTStatus('error');
+    store.setOpusMTError(msg);
+    // Non-fatal — pipeline falls back to ML Kit translation
   }
+
+  // ── ZipVoice — DISABLED (v3.0: will be replaced by Piper/Kokoro TTS) ─────
+  // ZipVoice (104MB) is too heavy. Piper (~30MB) will replace it in Phase 3.
+  store.setZipvoiceStatus('error');
+  store.setZipvoiceError('ZipVoice deshabilitado — v3.0 usará Piper TTS.');
 }

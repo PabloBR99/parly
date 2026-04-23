@@ -84,7 +84,7 @@ export function resetDiscovery(): void {
   langACandidate = '';
   langBCandidate = '';
   pendingStreamingConfig = null;
-  canaryService.release().catch(() => {}); // free ~414 MB; back to Whisper-only
+  // Canary disabled in v3.0 — no release() call needed (would reference undefined import)
   streamingPipeline.release().catch(() => {}); // release streaming engines
   console.log('[Pipeline] Discovery state reset');
 }
