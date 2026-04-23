@@ -14,6 +14,8 @@ import { useModelStore } from './store/modelStore';
 import { audioCaptureService } from './services/audio/AudioCaptureService';
 import { initNetworkMonitor, disposeNetworkMonitor } from './services/network/monitor';
 import { createMistralProbe } from './services/network/mistralProbe';
+import { loadMistralApiKey, saveMistralApiKey } from './services/storage/secureStorage';
+import { useSettingsStore } from './store/settingsStore';
 import type { RootStackParamList } from './navigation/types';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -38,6 +40,22 @@ export default function App(): React.JSX.Element {
 
     memoryMonitor.start(15_000);
 
+    // Hydrate the Mistral API key from secure storage BEFORE starting the
+    // network monitor — otherwise the first probe would go unauthenticated
+    // and the resolver would delay the online decision by one cycle.
+    let unsubscribeApiKeyPersist: (() => void) | null = null;
+    void loadMistralApiKey().then(key => {
+      if (key) useSettingsStore.getState().setMistralApiKey(key);
+      // Persist subsequent user edits. Fire-and-forget; errors are logged.
+      let lastSaved = key;
+      unsubscribeApiKeyPersist = useSettingsStore.subscribe(state => {
+        if (state.mistralApiKey !== lastSaved) {
+          lastSaved = state.mistralApiKey;
+          void saveMistralApiKey(lastSaved);
+        }
+      });
+    });
+
     // Network monitor — drives online/offline routing in the STT resolver.
     // Probes Mistral directly so 'online' means "Voxtral is reachable", not
     // just "any internet". Starts immediately; first probe resolves within ~3s.
@@ -47,6 +65,7 @@ export default function App(): React.JSX.Element {
     return () => {
       memoryMonitor.stop();
       disposeNetworkMonitor();
+      unsubscribeApiKeyPersist?.();
     };
   }, []);
 

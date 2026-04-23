@@ -127,7 +127,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
             <View style={styles.divider} />
             <View style={styles.keyBlock}>
               <Text style={styles.label}>Mistral API key</Text>
-              <Text style={styles.hint}>Necesaria para Voxtral. Solo en memoria — se pierde al cerrar.</Text>
+              <Text style={styles.hint}>Necesaria para Voxtral. Se guarda cifrada en el keychain del dispositivo.</Text>
               <TextInput
                 style={styles.keyInput}
                 value={mistralApiKey}
