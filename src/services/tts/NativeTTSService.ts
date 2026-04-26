@@ -1,5 +1,4 @@
 import Tts from 'react-native-tts';
-import type { VoiceId } from '../../app/types';
 
 const SPEECH_RATE = 0.5;
 
@@ -41,7 +40,7 @@ class NativeTTSService {
     }
   }
 
-  async speak(text: string, language: string, _voice: VoiceId): Promise<void> {
+  async speak(text: string, language: string): Promise<void> {
     if (!this.initialized) await this.init();
 
     const baseLang = language.split('-')[0].split('_')[0].toLowerCase();

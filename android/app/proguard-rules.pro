@@ -9,12 +9,10 @@
 
 # Add any project specific keep options here:
 
-# ONNX Runtime — keep JNI bindings
--keep class ai.onnxruntime.** { *; }
--keepclassmembers class ai.onnxruntime.** { *; }
+# react-native-tts — JNI bindings via @ReactMethod, keep package
+-keep class net.no_mad.tts.** { *; }
+-keepclassmembers class net.no_mad.tts.** { *; }
 
-# sherpa-onnx — JNI looks up Kotlin data class fields by name
-# (decodingMethod, etc.). R8 obfuscation breaks GetFieldID.
--keep class com.k2fsa.sherpa.onnx.** { *; }
--keepclassmembers class com.k2fsa.sherpa.onnx.** { *; }
--keep class com.sherpaonnx.** { *; }
+# react-native-audio-record — JNI bindings, keep package
+-keep class com.goodatlas.audiorecord.** { *; }
+-keepclassmembers class com.goodatlas.audiorecord.** { *; }

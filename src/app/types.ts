@@ -1,56 +1,10 @@
+/** Identifier for one of the two conversation participants. */
 export type PersonId = 'person_a' | 'person_b';
-export type VoiceId = 'casual_male' | 'casual_female';
-export type PipelineStage =
-  | 'idle'
-  | 'listening'
-  | 'recording'
-  | 'streaming'
-  | 'transcribing'
-  | 'translating'
-  | 'synthesizing'
-  | 'streaming_tts'
-  | 'playing';
-export type ModelStatus =
-  | 'not_downloaded'
-  | 'downloading'
-  | 'loading'
-  | 'ready'
-  | 'error';
 
-export interface PersonConfig {
-  readonly language: string; // BCP-47, e.g. "es", "en", "de"
-  readonly voice: VoiceId;
-  readonly displayName: string;
-}
-
-export interface Message {
-  readonly id: string;
-  readonly speakerId: PersonId;
-  readonly originalText: string;
-  readonly translatedText: string | null;
-  readonly stage: 'transcribing' | 'translating' | 'done' | 'error';
-  readonly timestamp: number;
-}
-
-export interface Utterance {
-  readonly id: string;
-  readonly speakerId: PersonId;
-  readonly audioPath: string; // path to recorded WAV file
-  readonly sourceLang: string;
-  readonly targetLang: string;
-}
-
-export interface TranscriptionResult {
-  readonly text: string;
-  readonly language: string;
-}
-
-export interface TranslationResult {
-  readonly text: string;
-}
-
+/** A picker option in the language list. */
 export interface Language {
-  readonly code: string; // BCP-47
-  readonly name: string;
-  readonly flag: string; // emoji
+  readonly code: string;     // BCP-47 short, e.g. 'es', 'en', 'zh', 'ar'
+  readonly name: string;     // English name, e.g. 'Spanish'
+  readonly endonym: string;  // native script, e.g. 'Español', '中文', 'العربية'
+  readonly emoji: string;    // representative flag/script emoji
 }
