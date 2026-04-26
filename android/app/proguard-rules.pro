@@ -12,3 +12,9 @@
 # ONNX Runtime — keep JNI bindings
 -keep class ai.onnxruntime.** { *; }
 -keepclassmembers class ai.onnxruntime.** { *; }
+
+# sherpa-onnx — JNI looks up Kotlin data class fields by name
+# (decodingMethod, etc.). R8 obfuscation breaks GetFieldID.
+-keep class com.k2fsa.sherpa.onnx.** { *; }
+-keepclassmembers class com.k2fsa.sherpa.onnx.** { *; }
+-keep class com.sherpaonnx.** { *; }
