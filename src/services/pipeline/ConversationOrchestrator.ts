@@ -285,7 +285,10 @@ export class ConversationOrchestrator {
     const trimmed = finalText.trim();
     if (trimmed.length === 0) {
       // Silence / empty transcription. End cleanly with empty translation.
-      store.updateTurn(turnId, {
+      // CRITICAL: use endTurn (not updateTurn) — endTurn is what clears
+      // activeTurnId in the store. Otherwise the next mic press's UI guard
+      // sees a stale activeTurn and refuses to start.
+      store.endTurn(turnId, {
         sourceText: '',
         translatedText: '',
         stage: 'done',
@@ -358,7 +361,10 @@ export class ConversationOrchestrator {
     await new Promise<void>((r) => setTimeout(r, 250));
     if (turnId !== this.activeTurnId) return;
 
-    store.updateTurn(turnId, { stage: 'done' });
+    // CRITICAL: endTurn (not updateTurn) so activeTurnId is cleared.
+    // Otherwise the next mic press is blocked by the UI's "is a turn
+    // already running?" guard.
+    store.endTurn(turnId, { stage: 'done' });
     this.completeTurn(turnId);
   }
 

@@ -132,9 +132,30 @@ describe('ConversationOrchestrator', () => {
       }),
     );
     expect(m.ttsCalls).toEqual([{ text: 'Hello world.', language: 'en' }]);
-    const turns = useConversationStore.getState().turns;
-    expect(turns[0].stage).toBe('done');
-    expect(turns[0].translatedText).toBe('Hello world.');
+    const state = useConversationStore.getState();
+    expect(state.turns[0].stage).toBe('done');
+    expect(state.turns[0].translatedText).toBe('Hello world.');
+    // CRITICAL: activeTurnId must clear so the next mic press isn't blocked.
+    expect(state.activeTurnId).toBeNull();
+  });
+
+  it('clears activeTurnId after empty-transcription turn', async () => {
+    const m = makeMocks();
+    const o = new ConversationOrchestrator(m);
+    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+
+    const turnPromise = o.beginTurn({
+      speakerId: 'person_a',
+      sourceLang: 'es',
+      targetLang: 'en',
+    });
+    await Promise.resolve();
+    expect(useConversationStore.getState().activeTurnId).not.toBeNull();
+    await o.endTurn();
+    m.fireVoxtralFinal('   ');
+    await turnPromise;
+
+    expect(useConversationStore.getState().activeTurnId).toBeNull();
   });
 
   it('queues multiple TTS chunks and awaits all before completing', async () => {

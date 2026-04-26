@@ -77,7 +77,12 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
 
   const handleMicPressIn = (speakerId: PersonId) => {
     if (noKey) return;
-    if (activeTurn) return; // someone else is mid-turn
+    // Guard against double-fire: only block if there's a turn that's still
+    // ACTIVE (not done/error). Defensive — the orchestrator also guards on
+    // its own state — but covers any drift between store and orchestrator.
+    if (activeTurn && activeTurn.stage !== 'done' && activeTurn.stage !== 'error') {
+      return;
+    }
     const sourceLang = speakerId === 'person_a' ? personA.language : personB.language;
     const targetLang = speakerId === 'person_a' ? personB.language : personA.language;
     if (!sourceLang || !targetLang) return;
