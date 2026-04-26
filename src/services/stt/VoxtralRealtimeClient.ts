@@ -1,4 +1,4 @@
-// OnlineStreamingSttService — Voxtral realtime transcription via WebSocket.
+// VoxtralRealtimeClient — Voxtral realtime transcription via WebSocket.
 //
 // Wire protocol reverse-engineered from mistralai/client-ts (MIT-licensed):
 //   https://github.com/mistralai/client-ts/blob/main/src/extra/realtime/connection.ts
@@ -78,7 +78,7 @@ const defaultWsFactory: WebSocketFactory = (url, headers) => {
   return new (WebSocket as any)(url, undefined, { headers });
 };
 
-export class OnlineStreamingSttService {
+export class VoxtralRealtimeClient {
   private ws: WebSocketLike | null = null;
   private state: StreamingState = 'idle';
   private callbacks: StreamingCallbacks | null = null;

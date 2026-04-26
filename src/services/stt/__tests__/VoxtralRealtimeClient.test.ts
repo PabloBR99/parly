@@ -1,5 +1,5 @@
 /**
- * OnlineStreamingSttService tests — WebSocket fully mocked via factory injection.
+ * VoxtralRealtimeClient tests — WebSocket fully mocked via factory injection.
  */
 
 jest.mock('react-native', () => ({
@@ -7,7 +7,7 @@ jest.mock('react-native', () => ({
   NativeModules: {},
 }));
 
-import { OnlineStreamingSttService, type WebSocketLike, type WebSocketFactory } from '../OnlineStreamingSttService';
+import { VoxtralRealtimeClient, type WebSocketLike, type WebSocketFactory } from '../VoxtralRealtimeClient';
 
 // ── Fake WebSocket ────────────────────────────────────────────────────────────
 
@@ -70,10 +70,10 @@ function recording() {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-describe('OnlineStreamingSttService', () => {
+describe('VoxtralRealtimeClient', () => {
   it('opens the WebSocket with Bearer auth and model query param', async () => {
     const fake = createFakeWs();
-    const svc = new OnlineStreamingSttService(fake.factory);
+    const svc = new VoxtralRealtimeClient(fake.factory);
     const rec = recording();
 
     const startPromise = svc.start({ apiKey: 'sk-test' }, rec.callbacks);
@@ -89,7 +89,7 @@ describe('OnlineStreamingSttService', () => {
 
   it('sends session.update with pcm_s16le @ 16kHz on open', async () => {
     const fake = createFakeWs();
-    const svc = new OnlineStreamingSttService(fake.factory);
+    const svc = new VoxtralRealtimeClient(fake.factory);
     const rec = recording();
 
     const startPromise = svc.start({ apiKey: 'sk' }, rec.callbacks);
@@ -108,7 +108,7 @@ describe('OnlineStreamingSttService', () => {
 
   it('queues audio fed before session.created and drains on ready', async () => {
     const fake = createFakeWs();
-    const svc = new OnlineStreamingSttService(fake.factory);
+    const svc = new VoxtralRealtimeClient(fake.factory);
     const rec = recording();
 
     const startPromise = svc.start({ apiKey: 'sk' }, rec.callbacks);
@@ -131,7 +131,7 @@ describe('OnlineStreamingSttService', () => {
 
   it('accumulates text.delta events and fires onPartial with running total', async () => {
     const fake = createFakeWs();
-    const svc = new OnlineStreamingSttService(fake.factory);
+    const svc = new VoxtralRealtimeClient(fake.factory);
     const rec = recording();
 
     const startPromise = svc.start({ apiKey: 'sk' }, rec.callbacks);
@@ -147,7 +147,7 @@ describe('OnlineStreamingSttService', () => {
 
   it('fires onFinal on transcription.done with accumulated text when event omits it', async () => {
     const fake = createFakeWs();
-    const svc = new OnlineStreamingSttService(fake.factory);
+    const svc = new VoxtralRealtimeClient(fake.factory);
     const rec = recording();
 
     const startPromise = svc.start({ apiKey: 'sk' }, rec.callbacks);
@@ -164,7 +164,7 @@ describe('OnlineStreamingSttService', () => {
 
   it('prefers transcription.done.text over accumulated when provided', async () => {
     const fake = createFakeWs();
-    const svc = new OnlineStreamingSttService(fake.factory);
+    const svc = new VoxtralRealtimeClient(fake.factory);
     const rec = recording();
 
     const startPromise = svc.start({ apiKey: 'sk' }, rec.callbacks);
@@ -182,7 +182,7 @@ describe('OnlineStreamingSttService', () => {
     jest.useFakeTimers();
     try {
       const fake = createFakeWs();
-      const svc = new OnlineStreamingSttService(fake.factory);
+      const svc = new VoxtralRealtimeClient(fake.factory);
       const rec = recording();
 
       const startPromise = svc.start({ apiKey: 'sk' }, rec.callbacks);
@@ -195,7 +195,7 @@ describe('OnlineStreamingSttService', () => {
 
   it('rejects start() on error event before session.created', async () => {
     const fake = createFakeWs();
-    const svc = new OnlineStreamingSttService(fake.factory);
+    const svc = new VoxtralRealtimeClient(fake.factory);
     const rec = recording();
 
     const startPromise = svc.start({ apiKey: 'sk-bad' }, rec.callbacks);
@@ -210,7 +210,7 @@ describe('OnlineStreamingSttService', () => {
 
   it('rejects start() if WebSocket closes before session.created', async () => {
     const fake = createFakeWs();
-    const svc = new OnlineStreamingSttService(fake.factory);
+    const svc = new VoxtralRealtimeClient(fake.factory);
     const rec = recording();
 
     const startPromise = svc.start({ apiKey: 'sk' }, rec.callbacks);
@@ -222,7 +222,7 @@ describe('OnlineStreamingSttService', () => {
 
   it('fires onError for runtime errors after session.created', async () => {
     const fake = createFakeWs();
-    const svc = new OnlineStreamingSttService(fake.factory);
+    const svc = new VoxtralRealtimeClient(fake.factory);
     const rec = recording();
 
     const startPromise = svc.start({ apiKey: 'sk' }, rec.callbacks);
@@ -241,7 +241,7 @@ describe('OnlineStreamingSttService', () => {
 
   it('end() sends input_audio.flush + input_audio.end and waits for done', async () => {
     const fake = createFakeWs();
-    const svc = new OnlineStreamingSttService(fake.factory);
+    const svc = new VoxtralRealtimeClient(fake.factory);
     const rec = recording();
 
     const startPromise = svc.start({ apiKey: 'sk' }, rec.callbacks);
@@ -263,7 +263,7 @@ describe('OnlineStreamingSttService', () => {
 
   it('cancel() closes without firing onFinal', async () => {
     const fake = createFakeWs();
-    const svc = new OnlineStreamingSttService(fake.factory);
+    const svc = new VoxtralRealtimeClient(fake.factory);
     const rec = recording();
 
     const startPromise = svc.start({ apiKey: 'sk' }, rec.callbacks);
@@ -280,7 +280,7 @@ describe('OnlineStreamingSttService', () => {
 
   it('ignores non-string frames and malformed JSON gracefully', async () => {
     const fake = createFakeWs();
-    const svc = new OnlineStreamingSttService(fake.factory);
+    const svc = new VoxtralRealtimeClient(fake.factory);
     const rec = recording();
 
     const startPromise = svc.start({ apiKey: 'sk' }, rec.callbacks);
