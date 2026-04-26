@@ -352,6 +352,12 @@ export class ConversationOrchestrator {
     await Promise.all(this.ttsChunkPromises);
     if (turnId !== this.activeTurnId) return;
 
+    // Tail silence — Android's audio sink can still be flushing the last
+    // few PCM frames after `tts-finish` fires. A short hold prevents the
+    // very tail from leaking into the next mic press.
+    await new Promise<void>((r) => setTimeout(r, 250));
+    if (turnId !== this.activeTurnId) return;
+
     store.updateTurn(turnId, { stage: 'done' });
     this.completeTurn(turnId);
   }

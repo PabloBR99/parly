@@ -16,3 +16,7 @@
 # react-native-audio-record — JNI bindings, keep package
 -keep class com.goodatlas.audiorecord.** { *; }
 -keepclassmembers class com.goodatlas.audiorecord.** { *; }
+
+# react-native-keychain — stores the Mistral API key in Android Keystore
+-keep class com.oblador.keychain.** { *; }
+-keepclassmembers class com.oblador.keychain.** { *; }
