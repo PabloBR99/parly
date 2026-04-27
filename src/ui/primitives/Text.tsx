@@ -10,9 +10,13 @@ type Variant =
   | 'display'
   | 'displayLarge'
   | 'displayHuge'
+  | 'displayHero'
   | 'body'
   | 'bodySmall'
   | 'caption'
+  | 'serif'
+  | 'serifSmall'
+  | 'serifTiny'
   | 'mono'
   | 'monoSmall'
   | 'button';

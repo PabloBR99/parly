@@ -1,21 +1,21 @@
-// SettingsScreen — configuration surface, with a non-technical user (Mom-
-// test) onboarding flow when no API key is configured yet.
+// SettingsScreen — configuration surface, with a non-technical user
+// (Mom-test) onboarding flow when no API key is configured yet.
 //
 // First run (no key):
-//   "Bienvenido" header + 3 guided steps in plain Spanish:
+//   "Welcome" header + 3 guided steps in plain English:
 //     1. Open the Mistral console (Linking.openURL).
 //     2. Copy the key from "Create new key".
 //     3. Paste here, verify, then go back to the conversation.
 //   Lower (technical) sections are HIDDEN to keep the welcome focused.
 //
 // Returning user (key set):
-//   Compact "Conectado a Mistral" card with COMPROBAR (re-run validation)
-//   and CAMBIAR CLAVE (clear → re-enter onboarding). Conversation cleanup
+//   Compact "Connected to Mistral" card with `check` (re-run validation)
+//   and `change key` (clear → re-enter onboarding). Conversation cleanup
 //   and diagnostics are revealed below.
 //
-// Idiomas se cambian desde la pantalla de conversación (chip pulsable
-// en cada panel). El modelo de traducción está fijado a Mistral Small
-// para esta build — no se ofrece selector.
+// Languages are picked from the conversation screen (tap the chip on
+// each side). The translation model is fixed to Mistral Small for this
+// build — no selector exposed.
 
 import React, { useState } from 'react';
 import {
@@ -158,7 +158,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
               {validating ? (
                 <ActivityIndicator color={color.fgMuted} size="small" />
               ) : (
-                <Text variant="mono" tone="fgMuted">CHECK</Text>
+                <Text variant="serifSmall" tone="fgMuted">check</Text>
               )}
             </Pressable>
           </View>
@@ -172,8 +172,8 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
             accessibilityRole="button"
             accessibilityLabel="Change key"
             style={({ pressed }) => [styles.replaceLink, pressed && styles.replaceLinkPressed]}>
-            <Text variant="mono" tone="fgFaint" style={styles.replaceLabel}>
-              CHANGE KEY
+            <Text variant="serifSmall" tone="fgFaint" style={styles.replaceLabel}>
+              change key
             </Text>
           </Pressable>
         </Section>
@@ -202,8 +202,8 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         </>
       )}
 
-      <Text variant="mono" tone="fgGhost" style={styles.versionTag}>
-        PARLY v4.2 — DIPLOMATIC
+      <Text variant="serif" tone="fgGhost" style={styles.versionTag}>
+        PARLY — DUSK
       </Text>
     </ScrollView>
   );
@@ -617,8 +617,8 @@ const styles = StyleSheet.create({
     padding: space.md,
     borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: 'rgba(124,217,160,0.30)',
-    backgroundColor: 'rgba(124,217,160,0.06)',
+    borderColor: 'rgba(127,216,201,0.30)',
+    backgroundColor: 'rgba(127,216,201,0.06)',
   },
   successLine: {
     fontWeight: '500',
@@ -664,7 +664,5 @@ const styles = StyleSheet.create({
   replaceLinkPressed: {
     opacity: 0.5,
   },
-  replaceLabel: {
-    letterSpacing: 1.6,
-  },
+  replaceLabel: {},
 });

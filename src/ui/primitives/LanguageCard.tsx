@@ -80,8 +80,8 @@ export function LanguageCard({
               <Text variant="bodySmall" tone="fgFaint">
                 {language!.name}
               </Text>
-              <Text variant="mono" tone="fgGhost" style={styles.code}>
-                {language!.code.toUpperCase()}
+              <Text variant="serifSmall" tone="fgGhost" style={styles.code}>
+                {language!.code.toLowerCase()}
               </Text>
             </View>
           </View>
@@ -144,6 +144,5 @@ const styles = StyleSheet.create({
   },
   code: {
     marginLeft: 'auto',
-    letterSpacing: 1.2,
   },
 });

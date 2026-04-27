@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Parly — Dusk · concept</title>
+<style>
+  /* ── page ─────────────────────────────────────────────────────────── */
+  html, body {
+    margin: 0; padding: 0;
+    background:
+      radial-gradient(ellipse at 30% 20%, #1a1320 0%, transparent 55%),
+      radial-gradient(ellipse at 70% 80%, #131822 0%, transparent 55%),
+      #07070A;
+    min-height: 100%;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+  body {
+    display: grid;
+    place-items: center;
+    padding: 60px 24px;
+    box-sizing: border-box;
+  }
+  .stage {
+    display: flex;
+    gap: 64px;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    max-width: 1100px;
+  }
+
+  /* ── caption ──────────────────────────────────────────────────────── */
+  .caption {
+    max-width: 360px;
+    color: rgba(255,255,255,0.55);
+    font-size: 13.5px;
+    line-height: 1.7;
+  }
+  .caption .eyebrow {
+    font-size: 11px;
+    letter-spacing: 2.4px;
+    color: rgba(255,255,255,0.40);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .caption h1 {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-style: italic;
+    font-weight: 400;
+    font-size: 32px;
+    line-height: 1.25;
+    letter-spacing: -0.6px;
+    color: #fff;
+    margin: 0 0 20px 0;
+  }
+  .caption p { margin: 0 0 14px 0; }
+  .caption .swatch {
+    display: inline-block;
+    width: 9px; height: 9px; border-radius: 50%;
+    margin-right: 8px;
+    transform: translateY(0px);
+  }
+  .caption .meta {
+    margin-top: 28px;
+    font-size: 10.5px;
+    letter-spacing: 1.6px;
+    color: rgba(255,255,255,0.30);
+    text-transform: uppercase;
+  }
+
+  /* ── phone ────────────────────────────────────────────────────────── */
+  .phone {
+    position: relative;
+    width: 380px;
+    height: 800px;
+    border-radius: 52px;
+    overflow: hidden;
+    background:
+      linear-gradient(180deg,
+        #0A0E14 0%,
+        #0B0C13 38%,
+        #0C0B12 50%,
+        #0D0B11 62%,
+        #0E0A10 100%);
+    box-shadow:
+      0 0 0 1.5px rgba(255,255,255,0.06),
+      0 80px 140px -40px rgba(0,0,0,0.85),
+      0 30px 60px -20px rgba(168,178,255,0.05),
+      0 30px 60px 20px rgba(255,179,122,0.04);
+  }
+  /* faint outer rim glow on the phone, like sunset bouncing off a black slab */
+  .phone::before {
+    content:''; position: absolute; inset: 0;
+    border-radius: inherit;
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.07),
+      inset 0 -1px 0 rgba(255,179,122,0.04);
+    pointer-events: none;
+    z-index: 6;
+  }
+
+  /* ── dusk seam ────────────────────────────────────────────────────── */
+  .seam {
+    position: absolute; left: 0; right: 0; top: 50%;
+    height: 80px; transform: translateY(-50%);
+    background:
+      linear-gradient(180deg,
+        rgba(168,178,255,0.00) 0%,
+        rgba(168,178,255,0.07) 35%,
+        rgba(255,179,122,0.07) 65%,
+        rgba(255,179,122,0.00) 100%);
+    filter: blur(8px);
+    pointer-events: none;
+    z-index: 1;
+  }
+  .seam::after {
+    content:'';
+    position: absolute; left: 12%; right: 12%; top: 50%;
+    height: 1px;
+    background: linear-gradient(90deg,
+      transparent, rgba(255,255,255,0.10) 20%,
+      rgba(255,255,255,0.18) 50%,
+      rgba(255,255,255,0.10) 80%, transparent);
+    transform: translateY(-50%);
+    animation: seam-shimmer 8s ease-in-out infinite alternate;
+  }
+  @keyframes seam-shimmer {
+    0%   { opacity: 0.5; transform: translateY(-50%) scaleX(0.92); }
+    100% { opacity: 0.9; transform: translateY(-50%) scaleX(1.00); }
+  }
+
+  /* ── halves ───────────────────────────────────────────────────────── */
+  .half {
+    position: absolute; left: 0; right: 0;
+    height: 50%;
+    padding: 28px 30px;
+    display: flex; flex-direction: column;
+    z-index: 2;
+    box-sizing: border-box;
+  }
+  .half.top { top: 0; transform: rotate(180deg); }
+  .half.bot { bottom: 0; }
+
+  /* source line (small, near the seam) */
+  .source {
+    min-height: 38px;
+  }
+  .source .label {
+    display: block;
+    font-family: Georgia, serif; font-style: italic;
+    font-size: 10px; letter-spacing: 1.4px;
+    color: rgba(255,255,255,0.28);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .source .text {
+    display: block;
+    font-size: 13px; line-height: 1.5;
+    color: rgba(255,255,255,0.42);
+  }
+
+  /* big translated text */
+  .big {
+    flex: 1;
+    padding: 12px 0 4px 0;
+    display: flex; align-items: flex-start;
+  }
+  .big-text {
+    color: #FFFFFF;
+    font-size: 32px;
+    line-height: 40px;
+    font-weight: 300;
+    letter-spacing: -0.5px;
+  }
+
+  /* identity strip */
+  .identity {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .chip {
+    display: flex;
+    align-items: center;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.09);
+    background: rgba(255,255,255,0.015);
+  }
+  .chip .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    margin-right: 9px;
+  }
+  .chip .endonym {
+    font-size: 10.5px; letter-spacing: 1.5px;
+    color: rgba(255,255,255,0.62);
+    text-transform: uppercase;
+  }
+  .chip .code {
+    margin-left: 10px;
+    font-family: Georgia, serif; font-style: italic;
+    font-size: 13px;
+    color: rgba(255,255,255,0.42);
+  }
+
+  /* PTT slot — bloom + disc */
+  .ptt-slot {
+    position: relative;
+    height: 200px;
+    display: grid;
+    place-items: center;
+    margin: -8px 0;
+  }
+  .bloom {
+    position: absolute;
+    width: 320px; height: 320px;
+    border-radius: 50%;
+    filter: blur(30px);
+    mix-blend-mode: screen;
+    pointer-events: none;
+    opacity: 0.85;
+  }
+  /* warm bloom — apricot / peach / terracotta */
+  .bloom.warm {
+    background:
+      radial-gradient(circle at 32% 38%, #FFB37A 0%, transparent 42%),
+      radial-gradient(circle at 68% 62%, #FF8E76 0%, transparent 48%),
+      radial-gradient(circle at 50% 80%, #E26F5C 0%, transparent 52%);
+    animation: breathe-warm 5.4s infinite ease-in-out alternate;
+  }
+  /* cool bloom — periwinkle / seafoam / iris */
+  .bloom.cool {
+    background:
+      radial-gradient(circle at 62% 32%, #A8B2FF 0%, transparent 42%),
+      radial-gradient(circle at 32% 68%, #7FD8C9 0%, transparent 48%),
+      radial-gradient(circle at 72% 78%, #9C8AE6 0%, transparent 52%);
+    animation: breathe-cool 6.0s infinite ease-in-out alternate;
+  }
+  @keyframes breathe-warm {
+    0%   { transform: scale(0.92) translate(-3px, 4px) rotate(0deg);  opacity: 0.72; }
+    100% { transform: scale(1.06) translate(4px, -2px) rotate(8deg);  opacity: 0.95; }
+  }
+  @keyframes breathe-cool {
+    0%   { transform: scale(0.94) translate(3px, 3px) rotate(0deg);   opacity: 0.70; }
+    100% { transform: scale(1.04) translate(-4px, -3px) rotate(-6deg);opacity: 0.92; }
+  }
+
+  /* the disc (the "object") */
+  .disc {
+    position: relative;
+    width: 96px; height: 96px;
+    border-radius: 50%;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+    border: 1px solid rgba(255,255,255,0.10);
+    display: grid;
+    place-items: center;
+    box-shadow:
+      inset 0 1px 1px rgba(255,255,255,0.07),
+      0 8px 24px rgba(0,0,0,0.55);
+  }
+  .disc::after {
+    /* a quiet inner halo, like an old polished button */
+    content:''; position: absolute; inset: 6px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, rgba(255,255,255,0.06), transparent 60%);
+    pointer-events: none;
+  }
+  .disc .tick {
+    position: absolute; top: 32px;
+    width: 14px; height: 1.5px; border-radius: 1px;
+    background: rgba(255,255,255,0.40);
+  }
+  .disc .lang {
+    font-family: Georgia, serif; font-style: italic;
+    font-size: 14px;
+    color: rgba(255,255,255,0.62);
+    letter-spacing: 1.2px;
+    margin-top: 14px;
+  }
+
+  /* edge chrome (at the speaker's near edge of the phone) */
+  .edge {
+    display: flex; align-items: center; justify-content: center;
+    gap: 10px;
+    color: rgba(255,255,255,0.35);
+    font-family: Georgia, serif; font-style: italic;
+    font-size: 11px; letter-spacing: 1.5px;
+    padding-top: 12px;
+  }
+  .edge .net {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #7FD8C9;
+    box-shadow: 0 0 10px rgba(127,216,201,0.7);
+  }
+
+  /* version tag, low at the foot */
+  .versiontag {
+    position: absolute; left: 0; right: 0; bottom: 18px;
+    text-align: center;
+    font-family: Georgia, serif; font-style: italic;
+    font-size: 10.5px; letter-spacing: 1.8px;
+    color: rgba(255,255,255,0.20);
+    z-index: 5;
+  }
+  .versiontag em { font-style: italic; }
+
+  /* gentle inner vignette — keeps focus on the seam */
+  .vignette {
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.55) 100%);
+    pointer-events: none;
+    mix-blend-mode: multiply;
+    z-index: 4;
+  }
+</style>
+</head>
+<body>
+  <div class="stage">
+
+    <!-- caption -->
+    <div class="caption">
+      <div class="eyebrow">PARLY — DUSK</div>
+      <h1>Two suns meeting<br/>at the edge of the day.</h1>
+      <p>The phone is the table. Each speaker is a sun at one of its edges.</p>
+      <p>
+        <span class="swatch" style="background:#FFB37A;"></span>
+        <strong style="color:#FFB37A;font-weight:500;">Warm bloom</strong>
+        — apricot, peach, terracotta. The user's side.
+      </p>
+      <p>
+        <span class="swatch" style="background:#A8B2FF;"></span>
+        <strong style="color:#A8B2FF;font-weight:500;">Cool bloom</strong>
+        — periwinkle, seafoam, iris. The partner's side.
+      </p>
+      <p>The seam at the centre is where their lights meet. Not a divider — an encounter. The translation stays pure white; colour lives in the atmosphere, never in the words.</p>
+      <p>The disc is no longer a polished puck — it is a watercolour stain that breathes with your voice. Asymmetric, never a laser ring.</p>
+      <p class="meta">Static mockup · concept exploration</p>
+    </div>
+
+    <!-- phone -->
+    <div class="phone">
+
+      <!-- TOP HALF — partner (cool, rotated for them to read) -->
+      <div class="half top">
+        <div class="source">
+          <span class="label">English · what user said</span>
+          <span class="text">Would you like a coffee?</span>
+        </div>
+        <div class="big">
+          <div class="big-text">¿Te apetece un café?</div>
+        </div>
+        <div class="identity">
+          <div class="chip">
+            <span class="dot" style="background:#A8B2FF;"></span>
+            <span class="endonym">Español</span>
+            <span class="code">es</span>
+          </div>
+        </div>
+        <div class="ptt-slot">
+          <div class="bloom cool"></div>
+          <div class="disc">
+            <span class="tick"></span>
+            <span class="lang">es</span>
+          </div>
+        </div>
+        <div class="edge">
+          <span class="net"></span>
+          <span>online</span>
+        </div>
+      </div>
+
+      <!-- seam -->
+      <div class="seam"></div>
+
+      <!-- BOTTOM HALF — user (warm, upright) -->
+      <div class="half bot">
+        <div class="source">
+          <span class="label">Español · what partner said</span>
+          <span class="text">Sí, encantada.</span>
+        </div>
+        <div class="big">
+          <div class="big-text">Yes, gladly.</div>
+        </div>
+        <div class="identity">
+          <div class="chip">
+            <span class="dot" style="background:#FFB37A;"></span>
+            <span class="endonym">English</span>
+            <span class="code">en</span>
+          </div>
+        </div>
+        <div class="ptt-slot">
+          <div class="bloom warm"></div>
+          <div class="disc">
+            <span class="tick"></span>
+            <span class="lang">en</span>
+          </div>
+        </div>
+        <div class="edge"><span>settings</span></div>
+      </div>
+
+      <div class="vignette"></div>
+      <div class="versiontag">PARLY — <em>DUSK</em></div>
+    </div>
+
+  </div>
+</body>
+</html>

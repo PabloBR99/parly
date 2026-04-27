@@ -246,6 +246,77 @@ parly/
   - [x] Secciones técnicas (limpiar historial, ver logs) ocultas en primer uso para mantener el foco del welcome.
 - [x] **Picker bug fix** (sitting uncommitted): `frozenExclude` snapshot — previene que el sheet anclado al `bottom: 0` crezca de alto a mitad de la animación de cierre cuando el padre flippa `excludeCode` a undefined. La snapshot solo se actualiza mientras `visible === true`.
 
+### Fase 7 — *Dusk* (rediseño visual) — 🚧 PLANIFICADA
+
+![Parly — Dusk concept mockup: phone laid flat with a cool periwinkle/seafoam/iris bloom on the partner half (top, rotated) and a warm apricot/peach/terracotta bloom on the user half (bottom). A subtle horizontal seam at the centre marks where their lights meet. Translation text in pure white, language codes in serif italic.](./mockups/dusk-concept.png)
+
+> **Fuente de verdad visual:** [`mockups/dusk-concept.html`](./mockups/dusk-concept.html) · captura arriba ([`mockups/dusk-concept.png`](./mockups/dusk-concept.png)). Aprobado por el usuario tras revisión:
+> *"Wow. Es espectacular. Quiero que se vea exactamente así."*
+>
+> La implementación debe coincidir con ese mockup pixel-cercano. Si en algún momento un compromiso técnico fuerza divergencia, se actualiza el mockup primero y luego el código — el HTML manda.
+
+**El cambio de metáfora.** La narrativa anterior — *Diplomatic*, dos partes que negocian — presuponía desconfianza. Lo que Parly habilita es lo opuesto: dos extraños deciden hablarse igualmente. La nueva metáfora: el teléfono es la mesa, **cada hablante es un sol al borde**. Sus luces se vierten desde sus respectivos extremos hacia el centro, donde no chocan — se sangran una en otra como la luz del atardecer encontrándose con la del anochecer.
+
+**Tokens de color (canónicos):**
+
+| Token | Valor | Uso |
+|------|-------|-----|
+| `bg.coolEdge` | `#0A0E14` | Fondo, borde frío del teléfono |
+| `bg.warmEdge` | `#0E0B12` | Fondo, borde cálido del teléfono |
+| `bg.seam` | mezcla `#0B0C13` ↔ `#0D0B11` (50%) | Costura central, generada por gradiente |
+| `bloom.warm.apricot` | `#FFB37A` | Bloom cálido — capa superior |
+| `bloom.warm.peach` | `#FF8E76` | Bloom cálido — capa media |
+| `bloom.warm.terracotta` | `#E26F5C` | Bloom cálido — capa profunda |
+| `bloom.cool.periwinkle` | `#A8B2FF` | Bloom frío — capa superior |
+| `bloom.cool.seafoam` | `#7FD8C9` | Bloom frío — capa media |
+| `bloom.cool.iris` | `#9C8AE6` | Bloom frío — capa profunda |
+| `fg.text` | `#FFFFFF` | Texto traducido — *blanco puro, intocable* |
+| `fg.serif` | `rgba(255,255,255,0.42)` | Códigos `es`/`en` y source-line en serif itálica |
+| `seam.line` | `rgba(255,255,255,0.18)` (centro) | Hairline de la costura, fade hacia los lados |
+
+**Tipografía:**
+- El texto traducido se queda en sans, weight 300, 32 pt / line-height 40 — sin tocar.
+- Los códigos de idioma (`es`, `en`) pasan de **mono industrial → serif itálica humanista** (Georgia o equivalente), tamaño 13 pt. Suaviza el filo técnico.
+- Los labels (`source-line`, `microcopy`, edge chrome) en la misma serif itálica, tracking 1.4–1.5.
+- El version tag: `PARLY — DUSK` en serif itálica, 10.5 pt, tracking 1.8.
+
+**Tres momentos firma:**
+
+1. **La costura del atardecer** — banda horizontal de 80 pt al centro, blur 8 pt, gradiente vertical de periwinkle (frío) a apricot (cálido) en torno a la línea media. La línea misma (1 pt) hace shimmer de 8 s ease-in-out alternate. Se desplaza sutilmente hacia el lado contrario al hablante activo (push by amplitude). Es el registro visual del turn-taking — *el divisor deja de ser ausencia, pasa a ser encuentro*.
+
+2. **El bloom asimétrico** — sustituye los tres halos concéntricos translúcidos del PTTButton actual. Cada disco emite una mancha de color de 320 pt (blur 30 pt, mix-blend-mode: screen) compuesta de tres `radial-gradient` con stops desplazados (32%/38%, 68%/62%, 50%/80%). Respira con `breathe-warm` / `breathe-cool` — escala 0.92 ↔ 1.06, traslación ±4 px, rotación ±6–8°, opacidad 0.70 ↔ 0.95, periodo 5.4–6.0 s. **En activo, el bloom se acopla al RMS del PCM** que ya pasa por `feedAudio`: amplitud → escala extra (×1.0–1.15), saturación extra (×1.0–1.3). Acuarela, no neón.
+
+3. **El primer toque** — primerísima vez por sesión que se aprieta cualquiera de los dos discos: una línea fina del color del hablante sube desde su disco, atraviesa la costura central, llega al borde del partner. Duración 900 ms, easing `Easing.out(Easing.quad)`, fade 200 ms al final. Solo una vez por sesión (gated por flag boolean en `settingsStore` que se setea en `true` tras el primer turno completado y persiste con la API key — se resetea con `CHANGE KEY`).
+
+**Detalles micro:**
+- Vignette interna del teléfono (radial-gradient transparent → `rgba(0,0,0,0.55)`, `mix-blend-mode: multiply`) — mantiene foco en la costura, evita que los blooms sangren a los bordes.
+- Los chips de identidad pasan de borde `color.hairline` a `rgba(255,255,255,0.09)` con bg `rgba(255,255,255,0.015)` — más translúcidos, dejan respirar al bloom de detrás.
+- El disco mantiene su grain — borde `rgba(255,255,255,0.10)`, inset highlight `rgba(255,255,255,0.07)`, sombra exterior `0 8px 24px rgba(0,0,0,0.55)`. Cambia el halo, no el objeto.
+- Network pill (`online`) pasa al borde inferior del *partner half* en serif itálica. El dot verde `#7FD8C9` (seafoam, parte del palette frío — coherencia) con glow `0 0 10px rgba(127,216,201,0.7)`.
+
+**Lo que cambia simbólicamente:**
+
+- `PARLY v4.2 — DIPLOMATIC` → **`PARLY — DUSK`**. La versión semántica deja de exhibirse — el nombre es la única firma. Two suns meeting at the edge of the day.
+- El concepto "no divisor central" de v5 se mantiene en espíritu pero se **invierte**: ahora hay una costura visible, pero su naturaleza es de unión, no separación.
+
+**Lo que NO es:**
+- ❌ El borde iridiscente de Apple Intelligence — esa metáfora es teléfono-como-portal.
+- ❌ El portal verde de Pi — eso es uno-a-uno con una IA.
+- ❌ El split-screen de DeepL — esa es estética de herramienta funcional.
+- ❌ Halos concéntricos láser — sustituidos por el bloom acuarela.
+
+**Plan de implementación (en este orden):**
+
+- [ ] **(1) La costura** — fondo del teléfono pasa de `#000` plano a gradiente vertical cool↔warm; añadir capa `Seam` con shimmer y push lateral por amplitud del hablante activo. (~120 LoC, `ConversationScreen.tsx` + nuevo `ui/animations/Seam.tsx`)
+- [ ] **(2) Los blooms cálido/frío** — sustituir los tres halos del `PTTButton` por la nueva mancha asimétrica con tres `radial-gradient`. Acoplar amplitud al RMS del PCM cuando activo. Añadir tokens al `theme.ts`. (~100 LoC en `PTTButton.tsx`, ~30 LoC nuevos tokens)
+- [ ] **(3) Tipografía serif itálica** — sustituir mono por Georgia (o cargar font asset si conviene) en códigos, source-line, microcopy, version tag. Mantener sans en texto traducido. (~varios pequeños edits en primitives)
+- [ ] **(4) El primer toque** — animación one-shot. Flag en `settingsStore`. Reanimated `withTiming` + `withDelay`. (~80 LoC, nuevo `ui/animations/FirstTouchTrace.tsx`)
+- [ ] **(5) Rebrand interno** — `PARLY v4.2 — DIPLOMATIC` → `PARLY — DUSK` en `SettingsScreen.tsx`.
+
+**Selector de idiomas y ajustes** se quedan para una segunda pasada — primero queremos ver Dusk respirar.
+
+**Estado actual:** mockup HTML listo y aprobado. Implementación pendiente del OK del usuario tras probar el último APK (run `25014005876`, commit `70f35e2`).
+
 ---
 
 ## Riesgos

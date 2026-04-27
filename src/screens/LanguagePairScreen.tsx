@@ -161,8 +161,8 @@ export function LanguagePairScreen({ navigation }: Props): React.JSX.Element {
           onPress={() => navigation.navigate('Settings')}
           accessibilityRole="button"
           accessibilityLabel="Open settings">
-          <Text variant="caption" tone="fgFaint" style={styles.settingsLink}>
-            SETTINGS
+          <Text variant="serif" tone="fgFaint" style={styles.settingsLink}>
+            settings
           </Text>
         </Pressable>
       </View>
@@ -219,6 +219,5 @@ const styles = StyleSheet.create({
   },
   settingsLink: {
     paddingVertical: space.xs,
-    letterSpacing: 1.6,
   },
 });

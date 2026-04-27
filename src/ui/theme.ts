@@ -1,18 +1,26 @@
-// Parly design tokens — "Diplomatic" theme.
+// Parly design tokens — "Dusk" theme.
 //
-// Aesthetic: editorial dark. Black surface, restrained palette, two quiet
-// accent hues — warm platinum-amber for "you" / Person A, cool ice-blue for
-// "them" / Person B. Mono for technical detail; system sans for everything
-// else. No drop shadows on dark — depth comes from concentric translucent
-// halos and tiered opacity, never from grey rectangles.
+// Aesthetic: two suns meeting at the edge of the day. The phone is the table.
+// Each speaker is a sun at one edge — warm bloom (apricot / peach / terracotta)
+// at the user's edge, cool bloom (periwinkle / seafoam / iris) at the partner's.
+// Their lights bleed toward the centre and meet in a soft seam — not a
+// divider, an encounter. Translation text stays pure white; colour lives in
+// the atmosphere, never in the words.
+//
+// Typography is bilingual in spirit: pure sans for translated content (the
+// reading), serif italic for the chrome (codes, labels, microcopy) — softens
+// the technical edge of a translator. Mono is gone.
 
 import { Platform } from 'react-native';
 
 // ── Color ────────────────────────────────────────────────────────────────────
 
 export const color = {
-  // Surfaces — true black base, then progressively warmer neutrals on top.
-  bg:        '#000000',
+  // Surfaces — base is no longer pure black. A hair toward dusk so the warm
+  // and cool overlays read as warmth, not a colour cast.
+  bg:        '#0B0B11',                  // base midnight, slightly violet-warm
+  bgCoolEdge:'#0A0E14',                  // partner's edge — cool dusk
+  bgWarmEdge:'#0E0B12',                  // user's edge — warm dusk
   surface1:  'rgba(255,255,255,0.035)',  // card / pill
   surface2:  'rgba(255,255,255,0.065)',  // hover / pressed
   surface3:  'rgba(255,255,255,0.10)',   // filled state
@@ -27,22 +35,42 @@ export const color = {
   fgWhisper: 'rgba(255,255,255,0.07)',
   fgInk:     '#000000',  // text on a light/inverted surface
 
-  // Speaker accents — chosen so they never compete with text. Used sparingly:
-  // ring around active mic, quiet halo around idle mic, micro-tag.
-  accentA:        '#F2B473',  // platinum amber — "you"
-  accentASoft:    'rgba(242,180,115,0.16)',
-  accentARing:    'rgba(242,180,115,0.55)',
-  accentAGlow:    'rgba(242,180,115,0.10)',  // outermost halo tint
-  accentAWhisper: 'rgba(242,180,115,0.045)', // far-field glow
+  // ── Speaker accents — Dusk palette ─────────────────────────────────────────
+  // A is the user (warm). B is the partner (cool). Each side has three layered
+  // hues (top / mid / deep) used in the bloom; the `base` is the legacy single
+  // hue used by chip dots and rings. Translucent variants tuned so multiple
+  // bloom layers stack into a watercolour stain on a near-black surface.
 
-  accentB:        '#86BFFF',  // ice blue — "them"
-  accentBSoft:    'rgba(134,191,255,0.16)',
-  accentBRing:    'rgba(134,191,255,0.55)',
-  accentBGlow:    'rgba(134,191,255,0.10)',
-  accentBWhisper: 'rgba(134,191,255,0.045)',
+  accentA:        '#FF8E76',  // peach — the canonical warm accent
+  accentASoft:    'rgba(255,142,118,0.16)',
+  accentARing:    'rgba(255,142,118,0.55)',
+  accentAGlow:    'rgba(255,142,118,0.10)',
+  accentAWhisper: 'rgba(255,142,118,0.045)',
 
-  // Status
-  ok:        '#7CD9A0',
+  // Warm bloom — apricot / peach / terracotta
+  bloomWarmTop:   'rgba(255,179,122,0.42)',  // #FFB37A
+  bloomWarmMid:   'rgba(255,142,118,0.38)',  // #FF8E76
+  bloomWarmDeep:  'rgba(226,111, 92,0.34)',  // #E26F5C
+
+  accentB:        '#A8B2FF',  // periwinkle — the canonical cool accent
+  accentBSoft:    'rgba(168,178,255,0.16)',
+  accentBRing:    'rgba(168,178,255,0.55)',
+  accentBGlow:    'rgba(168,178,255,0.10)',
+  accentBWhisper: 'rgba(168,178,255,0.045)',
+
+  // Cool bloom — periwinkle / seafoam / iris
+  bloomCoolTop:   'rgba(168,178,255,0.42)',  // #A8B2FF
+  bloomCoolMid:   'rgba(127,216,201,0.38)',  // #7FD8C9
+  bloomCoolDeep:  'rgba(156,138,230,0.34)',  // #9C8AE6
+
+  // Seam — where the two halves meet. A faint horizontal wash plus a hair-line.
+  seamCool:       'rgba(168,178,255,0.06)',
+  seamWarm:       'rgba(255,179,122,0.06)',
+  seamLine:       'rgba(255,255,255,0.16)',
+
+  // Status — re-tinted so success aligns with the cool palette (seafoam) and
+  // warning doesn't clash with the warm palette.
+  ok:        '#7FD8C9',  // seafoam — coherent with cool bloom
   warn:      '#F4D06A',
   error:     '#F87171',
   errorSoft: 'rgba(248,113,113,0.16)',
@@ -82,6 +110,16 @@ const sansFamily: string | undefined = Platform.select({
   default: undefined,
 });
 
+// System serif. iOS resolves to New York; Android resolves to Noto Serif.
+// Both are humanist, both ship by default — no asset bundling, no risk.
+const serifFamily: string = Platform.select({
+  ios: 'Georgia',
+  android: 'serif',
+  default: 'serif',
+});
+
+// Mono retained for the in-app log viewer (where character alignment matters).
+// Everywhere else the chrome moved to serif italic.
 const monoFamily: string = Platform.select({
   ios: 'Menlo',
   android: 'monospace',
@@ -90,6 +128,7 @@ const monoFamily: string = Platform.select({
 
 export const font = {
   sansFamily,
+  serifFamily,
   monoFamily,
 
   // Display — the big translation surface. Lighter weight, generous
@@ -147,7 +186,35 @@ export const font = {
     letterSpacing: 0.8,
   },
 
-  // Mono — technical (lang code, model id, durations)
+  // Serif italic — Dusk's chrome voice. Used for language codes, source-line
+  // labels, microcopy, edge chrome, version tag. Softens the technical edge.
+  serif: {
+    fontFamily: serifFamily,
+    fontStyle: 'italic' as const,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '400' as const,
+    letterSpacing: 0.2,
+  },
+  serifSmall: {
+    fontFamily: serifFamily,
+    fontStyle: 'italic' as const,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '400' as const,
+    letterSpacing: 0.6,
+  },
+  serifTiny: {
+    fontFamily: serifFamily,
+    fontStyle: 'italic' as const,
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '400' as const,
+    letterSpacing: 1.4,
+  },
+
+  // Mono — retained for the diagnostics log viewer (character alignment
+  // matters there). Avoid in conversation chrome — Dusk speaks serif.
   mono: {
     fontFamily: monoFamily,
     fontSize: 11,

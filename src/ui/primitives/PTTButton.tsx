@@ -1,15 +1,14 @@
 // PTTButton — the conversation's only interactive object.
 //
-// Object metaphor: a polished disc set into the surface of the phone, with
-// concentric translucent halos that whisper outward even at rest. The disc
-// is a thumb-rest. When held, it scales gently and its halos brighten; when
-// active, an outer ring breathes outward and a delicate waveform breathes
-// inside.
+// Object metaphor: a polished disc set into the surface of the phone, sitting
+// in a watercolour bloom. The bloom is three offset, slightly-overlapping
+// stains in the speaker's palette (warm for A, cool for B), each breathing on
+// its own tempo so the stain "drifts" like ink drying on paper. When the
+// speaker is active, the stains brighten and an outer ring breathes outward.
 //
-// We deliberately keep ALWAYS-on faint halos so the button feels like an
-// object, not a hit-target painted onto a flat background. Depth on dark
-// has to come from translucent layering — there is no shadow trick available
-// when the surface is true black.
+// Why three offset blobs instead of concentric halos: concentric circles read
+// as sci-fi laser rings on a near-black surface. Asymmetric, palette-layered
+// blobs read as pigment.
 
 import React, { useEffect } from 'react';
 import { Pressable, StyleSheet, View, type ViewStyle } from 'react-native';
@@ -28,11 +27,9 @@ import { Waveform } from '../animations/Waveform';
 import { haptics } from '../haptics';
 
 interface PTTButtonProps {
-  readonly label: string;        // language code, e.g. "ES"
-  readonly accent: string;       // accent color (Person A or B)
-  readonly accentRing: string;   // accent ring tint
-  readonly accentGlow: string;   // outer halo tint
-  readonly accentWhisper: string;// far-field halo tint
+  readonly label: string;        // language code, e.g. "es"
+  readonly accent: string;       // canonical accent hex; picks the bloom palette
+  readonly accentRing: string;   // active outer-ring tint
   readonly active: boolean;      // currently recording
   readonly disabled: boolean;
   readonly onPressIn: () => void;
@@ -42,16 +39,45 @@ interface PTTButtonProps {
 }
 
 const SIZE = 96;
-const HALO_OUTER = SIZE + 96;   // far-field whisper
-const HALO_MID = SIZE + 48;     // soft glow
-const HALO_INNER = SIZE + 18;   // ring kiss
+const BLOOM_SIZE = 280;
+const FOOTPRINT = BLOOM_SIZE;
+
+// Asymmetric stain offsets — the three blobs cluster around the disc but
+// never share a centre, so their overlapping edges form a watercolour shape
+// rather than concentric rings.
+const TOP_OFFSET = { x: -22, y: -28 };
+const MID_OFFSET = { x:  24, y:  18 };
+const DEEP_OFFSET = { x:  -2, y:  30 };
+
+// Per-stain breath tempos (ms). Coprime-ish so the stain phases never lock.
+const TOP_PERIOD = 5400;
+const MID_PERIOD = 6000;
+const DEEP_PERIOD = 6600;
+
+interface BloomPalette {
+  readonly top: string;
+  readonly mid: string;
+  readonly deep: string;
+}
+
+const WARM_BLOOM: BloomPalette = {
+  top: color.bloomWarmTop,
+  mid: color.bloomWarmMid,
+  deep: color.bloomWarmDeep,
+};
+
+const COOL_BLOOM: BloomPalette = {
+  top: color.bloomCoolTop,
+  mid: color.bloomCoolMid,
+  deep: color.bloomCoolDeep,
+};
+
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
 export function PTTButton({
   label,
   accent,
   accentRing,
-  accentGlow,
-  accentWhisper,
   active,
   disabled,
   onPressIn,
@@ -60,7 +86,20 @@ export function PTTButton({
 }: PTTButtonProps): React.JSX.Element {
   const press = useSharedValue(0);
   const ring = useSharedValue(0);
-  const idleHalo = useSharedValue(0);
+
+  // Per-stain breath drivers (0→1 looping, sin-eased).
+  const breathTop = useSharedValue(0);
+  const breathMid = useSharedValue(0);
+  const breathDeep = useSharedValue(0);
+
+  // Active brightens stains; disabled fades them to a near-invisible whisper.
+  const activeBoost = useSharedValue(0);
+  const disabledFade = useSharedValue(0);
+
+  // Pick palette by comparing accent to canonical A/B hexes. Slight cheat
+  // that keeps PTTButtonProps unchanged for callers.
+  const palette: BloomPalette =
+    accent === color.accentB ? COOL_BLOOM : WARM_BLOOM;
 
   // Active outer-ring breath.
   useEffect(() => {
@@ -78,21 +117,37 @@ export function PTTButton({
     return () => cancelAnimation(ring);
   }, [active, ring]);
 
-  // Idle whisper — a slow far-field exhale, even at rest. Disabled when
-  // the button is disabled (no-key state) so it doesn't beckon attention.
+  // Bloom breath — each stain on its own tempo so the cluster shape drifts.
   useEffect(() => {
-    if (disabled) {
-      cancelAnimation(idleHalo);
-      idleHalo.value = withTiming(0, { duration: motion.normal });
-      return;
-    }
-    idleHalo.value = withRepeat(
-      withTiming(1, { duration: 3200, easing: Easing.inOut(Easing.sin) }),
+    breathTop.value = withRepeat(
+      withTiming(1, { duration: TOP_PERIOD, easing: Easing.inOut(Easing.sin) }),
       -1,
       true,
     );
-    return () => cancelAnimation(idleHalo);
-  }, [disabled, idleHalo]);
+    breathMid.value = withRepeat(
+      withTiming(1, { duration: MID_PERIOD, easing: Easing.inOut(Easing.sin) }),
+      -1,
+      true,
+    );
+    breathDeep.value = withRepeat(
+      withTiming(1, { duration: DEEP_PERIOD, easing: Easing.inOut(Easing.sin) }),
+      -1,
+      true,
+    );
+    return () => {
+      cancelAnimation(breathTop);
+      cancelAnimation(breathMid);
+      cancelAnimation(breathDeep);
+    };
+  }, [breathTop, breathMid, breathDeep]);
+
+  useEffect(() => {
+    activeBoost.value = withTiming(active ? 1 : 0, { duration: motion.normal });
+  }, [active, activeBoost]);
+
+  useEffect(() => {
+    disabledFade.value = withTiming(disabled ? 1 : 0, { duration: motion.normal });
+  }, [disabled, disabledFade]);
 
   const handlePressIn = () => {
     if (disabled) return;
@@ -117,22 +172,49 @@ export function PTTButton({
     opacity: 0.6 * (1 - ring.value),
   }));
 
-  // Inner halo (closest to disc): brightens on press AND on active.
-  const innerHaloStyle = useAnimatedStyle(() => {
-    const base = active ? 0.85 : 0.25 + 0.30 * idleHalo.value + 0.45 * press.value;
-    return { opacity: Math.min(base, 1) };
+  // Top stain — apricot / periwinkle. Drifts northwest.
+  const topStainStyle = useAnimatedStyle(() => {
+    const t = breathTop.value;
+    const scale = lerp(0.92, 1.06, t) + 0.06 * activeBoost.value;
+    const dx = TOP_OFFSET.x + lerp(-3, 3, t);
+    const dy = TOP_OFFSET.y + lerp(-3, 3, t);
+    const baseOpacity = lerp(0.55 - 0.18, 0.55 + 0.18, t);
+    const boosted = baseOpacity + 0.25 * activeBoost.value;
+    const faded = boosted * (1 - disabledFade.value) + 0.05 * disabledFade.value;
+    return {
+      opacity: faded,
+      transform: [{ translateX: dx }, { translateY: dy }, { scale }],
+    };
   });
 
-  // Mid halo: gentler, breathes on idle.
-  const midHaloStyle = useAnimatedStyle(() => {
-    const base = active ? 0.55 : 0.18 + 0.22 * idleHalo.value + 0.30 * press.value;
-    return { opacity: Math.min(base, 1) };
+  // Mid stain — peach / seafoam. Drifts southeast, opposite phase.
+  const midStainStyle = useAnimatedStyle(() => {
+    const t = breathMid.value;
+    const scale = lerp(0.94, 1.04, t) + 0.06 * activeBoost.value;
+    const dx = MID_OFFSET.x + lerp(3, -3, t);
+    const dy = MID_OFFSET.y + lerp(3, -3, t);
+    const baseOpacity = lerp(0.62 - 0.18, 0.62 + 0.18, t);
+    const boosted = baseOpacity + 0.25 * activeBoost.value;
+    const faded = boosted * (1 - disabledFade.value) + 0.05 * disabledFade.value;
+    return {
+      opacity: faded,
+      transform: [{ translateX: dx }, { translateY: dy }, { scale }],
+    };
   });
 
-  // Outer whisper: always a faint presence so the disc has weight.
-  const outerHaloStyle = useAnimatedStyle(() => {
-    const base = active ? 0.40 : 0.55 + 0.45 * idleHalo.value;
-    return { opacity: Math.min(base, 1) };
+  // Deep stain — terracotta / iris. Drifts south.
+  const deepStainStyle = useAnimatedStyle(() => {
+    const t = breathDeep.value;
+    const scale = lerp(0.95, 1.05, t) + 0.06 * activeBoost.value;
+    const dx = DEEP_OFFSET.x + lerp(-3, 3, t);
+    const dy = DEEP_OFFSET.y + lerp(3, -3, t);
+    const baseOpacity = lerp(0.70 - 0.18, 0.70 + 0.18, t);
+    const boosted = baseOpacity + 0.25 * activeBoost.value;
+    const faded = boosted * (1 - disabledFade.value) + 0.05 * disabledFade.value;
+    return {
+      opacity: faded,
+      transform: [{ translateX: dx }, { translateY: dy }, { scale }],
+    };
   });
 
   const labelTone = disabled ? 'fgGhost' : active ? 'fg' : 'fgMuted';
@@ -148,9 +230,6 @@ export function PTTButton({
     backgroundColor: active ? `${accent}1A` : color.surface1,
   };
 
-  const wrapW = HALO_OUTER;
-  const wrapH = HALO_OUTER;
-
   return (
     <Pressable
       onPressIn={handlePressIn}
@@ -163,53 +242,21 @@ export function PTTButton({
       <View
         style={[
           styles.wrap,
-          { width: wrapW, height: wrapH },
+          { width: FOOTPRINT, height: FOOTPRINT },
           inverted && styles.inverted,
         ]}>
-        {/* Outermost whisper — far-field glow. */}
+        {/* Bloom — three offset stains forming an asymmetric watercolour. */}
         <Animated.View
           pointerEvents="none"
-          style={[
-            styles.halo,
-            {
-              width: HALO_OUTER,
-              height: HALO_OUTER,
-              borderRadius: HALO_OUTER / 2,
-              backgroundColor: accentWhisper,
-            },
-            outerHaloStyle,
-            disabled && styles.disabledHalo,
-          ]}
+          style={[styles.bloom, { backgroundColor: palette.top }, topStainStyle]}
         />
-        {/* Mid halo — soft glow. */}
         <Animated.View
           pointerEvents="none"
-          style={[
-            styles.halo,
-            {
-              width: HALO_MID,
-              height: HALO_MID,
-              borderRadius: HALO_MID / 2,
-              backgroundColor: accentGlow,
-            },
-            midHaloStyle,
-            disabled && styles.disabledHalo,
-          ]}
+          style={[styles.bloom, { backgroundColor: palette.mid }, midStainStyle]}
         />
-        {/* Inner halo — the kiss right at the disc edge. */}
         <Animated.View
           pointerEvents="none"
-          style={[
-            styles.halo,
-            {
-              width: HALO_INNER,
-              height: HALO_INNER,
-              borderRadius: HALO_INNER / 2,
-              backgroundColor: accentGlow,
-            },
-            innerHaloStyle,
-            disabled && styles.disabledHalo,
-          ]}
+          style={[styles.bloom, { backgroundColor: palette.deep }, deepStainStyle]}
         />
         {/* Active outward-breathing ring. */}
         {active && (
@@ -244,8 +291,8 @@ export function PTTButton({
                   marginBottom: 8,
                 }}
               />
-              <Text variant="mono" tone={labelTone} style={styles.codeLabel}>
-                {label.toUpperCase()}
+              <Text variant="serifSmall" tone={labelTone} style={styles.codeLabel}>
+                {label.toLowerCase()}
               </Text>
             </View>
           )}
@@ -263,8 +310,11 @@ const styles = StyleSheet.create({
   inverted: {
     transform: [{ rotate: '180deg' }],
   },
-  halo: {
+  bloom: {
     position: 'absolute',
+    width: BLOOM_SIZE,
+    height: BLOOM_SIZE,
+    borderRadius: BLOOM_SIZE / 2,
   },
   ring: {
     position: 'absolute',
@@ -274,19 +324,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   codeLabel: {
-    fontSize: 12,
-    letterSpacing: 1.6,
+    fontSize: 13,
+    letterSpacing: 0.8,
   },
   disabled: {
     opacity: 0.32,
   },
-  disabledHalo: {
-    opacity: 0,
-  },
 });
 
 PTTButton.SIZE = SIZE;
-PTTButton.FOOTPRINT = HALO_OUTER;
+PTTButton.FOOTPRINT = FOOTPRINT;
 
 export const PTT_DEFAULT_ACCENT = color.fgMuted;
 export const PTT_RADIUS = radius.pill;

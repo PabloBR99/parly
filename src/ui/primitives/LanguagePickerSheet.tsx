@@ -181,7 +181,7 @@ function LanguageRow({
         <Text variant="body" tone="fg">{language.endonym}</Text>
         <Text variant="bodySmall" tone="fgFaint">{language.name}</Text>
       </View>
-      <Text variant="mono" tone="fgGhost">{language.code.toUpperCase()}</Text>
+      <Text variant="serifSmall" tone="fgGhost">{language.code.toLowerCase()}</Text>
     </Pressable>
   );
 }

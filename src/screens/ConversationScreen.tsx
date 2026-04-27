@@ -1,36 +1,36 @@
-// ConversationScreen — bidirectional translation surface.
+// ConversationScreen — bidirectional translation surface (Dusk).
 //
-//   Phone laid flat on the table between two speakers. Each speaker's PTT
-//   sits at THEIR edge of the phone — partner's at the top, user's at the
-//   bottom — so each thumb lands naturally on the closest button. The
-//   translated text leans toward the center of the device, where the
-//   conversation actually happens. There is no hairline divider: the
-//   silence between the two source lines IS the divider.
+//   Phone laid flat on the table between two speakers. Each speaker is a
+//   sun at one edge — cool bloom at the partner's edge (top, rotated 180°
+//   so they read upright), warm bloom at the user's edge (bottom). Their
+//   lights bleed toward the centre and meet at the dusk seam. Translation
+//   text stays pure white; colour lives in the atmosphere, never in the
+//   words.
 //
 //   ┌─────────────────────────────┐
-//   │   ●  online                 │ ← partner's edge chrome
+//   │   ● online                  │ ← partner's edge chrome
 //   │                             │
-//   │           ◯                 │ ← partner's PTT (rotated)
+//   │           ◯  cool bloom     │ ← partner's PTT (rotated)
 //   │                             │
-//   │   español  ▾                │ ← partner identity
+//   │   ESPAÑOL  es  ▾            │ ← partner identity (serif italic)
 //   │                             │
 //   │   Lo que el usuario         │ ← what partner reads
 //   │   acaba de decir            │
 //   │                             │
-//   │   — fuente —                │ ← small source line
+//   │   ─── source ───            │ ← small serif italic source
 //   │                             │
-//   │           (gap)             │ ← center: pure space, no line
+//   │   ── dusk seam ──           │ ← warm × cool encounter
 //   │                             │
-//   │   — fuente —                │
+//   │   ─── source ───            │
 //   │                             │
 //   │   What the partner          │ ← what user reads
 //   │   just said                 │
 //   │                             │
-//   │   english  ▾                │
+//   │   ENGLISH  en  ▾            │
 //   │                             │
-//   │           ◯                 │ ← user's PTT
+//   │           ◯  warm bloom     │ ← user's PTT
 //   │                             │
-//   │   ⌘  ajustes                │ ← user's edge chrome
+//   │           settings          │ ← user's edge chrome
 //   └─────────────────────────────┘
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -51,8 +51,10 @@ import { getLanguage } from '../app/languages';
 import type { PersonId } from '../app/types';
 import type { RootStackParamList } from '../navigation/types';
 import {
+  FirstTouchTrace,
   LanguagePickerSheet,
   PTTButton,
+  Seam,
   StateMorph,
   Text,
   color,
@@ -97,6 +99,23 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
 
   const noKey = apiKey.trim() === '';
 
+  // First-touch trace — once per app session, the very first valid PTT
+  // press fires a thin coloured line that travels from the speaker's disc
+  // across the seam to the partner's edge. A wordless "I'm starting".
+  // Ref so flipping it doesn't trigger a re-render mid-press.
+  const hasGreetedRef = useRef(false);
+  const [traceSide, setTraceSide] = useState<'A' | 'B' | null>(null);
+
+  // Auto-clear the trace after the animation completes. Bound to a
+  // useEffect so navigating away mid-fire doesn't fire setState on an
+  // unmounted component (and so the timer is cancelled cleanly).
+  // Animation total ≈ 700 + 140 + 280 = 1120 ms — clear at 1300.
+  useEffect(() => {
+    if (traceSide === null) return;
+    const id = setTimeout(() => setTraceSide(null), 1300);
+    return () => clearTimeout(id);
+  }, [traceSide]);
+
   const handleMicPressIn = (speakerId: PersonId) => {
     if (noKey) return;
     if (activeTurn && activeTurn.stage !== 'done' && activeTurn.stage !== 'error') {
@@ -105,6 +124,12 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
     const sourceLang = speakerId === 'person_a' ? personA.language : personB.language;
     const targetLang = speakerId === 'person_a' ? personB.language : personA.language;
     if (!sourceLang || !targetLang) return;
+
+    if (!hasGreetedRef.current) {
+      hasGreetedRef.current = true;
+      setTraceSide(speakerId === 'person_a' ? 'A' : 'B');
+    }
+
     void conversationOrchestrator
       .beginTurn({ speakerId, sourceLang, targetLang })
       .catch(err => console.warn('[Conversation] turn failed:', err));
@@ -127,8 +152,8 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
       : pickerSlot === 'self' ? personB.language
       : undefined;
 
-  // Top half belongs to the partner (Person B). Their accent is ice blue.
-  // Bottom half belongs to the user (Person A). Their accent is amber.
+  // Top half belongs to the partner (Person B) — cool bloom, periwinkle.
+  // Bottom half belongs to the user (Person A) — warm bloom, peach.
   const topActiveTurn = activeTurn?.speakerId === 'person_b' ? activeTurn : null;
   const bottomActiveTurn = activeTurn?.speakerId === 'person_a' ? activeTurn : null;
 
@@ -144,9 +169,27 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   const topIncomingTurn = lastTurnA;
   const bottomIncomingTurn = lastTurnB;
 
+  const activeSide: 'A' | 'B' | null =
+    activeTurn?.speakerId === 'person_a' ? 'A'
+      : activeTurn?.speakerId === 'person_b' ? 'B'
+      : null;
+
   return (
     <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor={color.bg} />
+
+      {/* Dusk gradient — faked with two flat half-overlays since the project
+          has no gradient lib. They sit above bg, below the seam and halves. */}
+      <View pointerEvents="none" style={styles.coolWash} />
+      <View pointerEvents="none" style={styles.warmWash} />
+      <Seam activeSide={activeSide} />
+      <FirstTouchTrace
+        side={traceSide}
+        warmColor={color.accentA}
+        warmHalo={color.accentASoft}
+        coolColor={color.accentB}
+        coolHalo={color.accentBSoft}
+      />
 
       {/* TOP HALF — rotated 180° so the partner sees everything upright. */}
       <View style={styles.half}>
@@ -158,8 +201,6 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
             incomingTurn={topIncomingTurn}
             accent={color.accentB}
             accentRing={color.accentBRing}
-            accentGlow={color.accentBGlow}
-            accentWhisper={color.accentBWhisper}
             edgePadding={insets.top + space.md}
             edgeContent={<NetworkPill state={networkState} />}
             disabled={noKey || (!!activeTurn && activeTurn?.speakerId !== 'person_b')}
@@ -180,8 +221,6 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
           incomingTurn={bottomIncomingTurn}
           accent={color.accentA}
           accentRing={color.accentARing}
-          accentGlow={color.accentAGlow}
-          accentWhisper={color.accentAWhisper}
           edgePadding={insets.bottom + space.md}
           edgeContent={
             <Pressable
@@ -189,7 +228,7 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
               hitSlop={14}
               accessibilityRole="button"
               accessibilityLabel="Settings">
-              <Text variant="mono" tone="fgFaint" style={styles.settingsLink}>
+              <Text variant="serif" tone="fgFaint" style={styles.settingsLink}>
                 settings
               </Text>
             </Pressable>
@@ -241,11 +280,11 @@ function findLastTurn(turns: readonly Turn[], speakerId: PersonId): Turn | null 
 
 function stageMicrocopy(stage: TurnStage | null): string {
   switch (stage) {
-    case 'recording': return 'LISTENING';
+    case 'recording': return 'listening';
     case 'transcribing':
-    case 'translating': return 'THINKING';
-    case 'speaking': return 'SPEAKING';
-    case 'error': return 'ERROR';
+    case 'translating': return 'thinking';
+    case 'speaking': return 'speaking';
+    case 'error': return 'error';
     default: return '';
   }
 }
@@ -326,8 +365,6 @@ interface SpeakerHalfProps {
   readonly incomingTurn: Turn | null;
   readonly accent: string;
   readonly accentRing: string;
-  readonly accentGlow: string;
-  readonly accentWhisper: string;
   readonly edgePadding: number;
   readonly edgeContent: React.ReactNode;
   readonly disabled: boolean;
@@ -344,8 +381,6 @@ function SpeakerHalf({
   incomingTurn,
   accent,
   accentRing,
-  accentGlow,
-  accentWhisper,
   edgePadding,
   edgeContent,
   disabled,
@@ -432,14 +467,17 @@ function SpeakerHalf({
           <Text variant="caption" tone="fgMuted">
             {speakerLang.endonym.toUpperCase()}
           </Text>
-          <Text variant="mono" tone="fgGhost" style={halfStyles.changeChevron}>
+          <Text variant="serifSmall" tone="fgFaint" style={halfStyles.identityCode}>
+            {speakerLang.code.toLowerCase()}
+          </Text>
+          <Text variant="serifSmall" tone="fgGhost" style={halfStyles.changeChevron}>
             ▾
           </Text>
         </Pressable>
         <View style={halfStyles.flex} />
         {showMorph && (
           <View style={halfStyles.statusRow}>
-            <Text variant="mono" tone="fgFaint" style={halfStyles.microcopy}>
+            <Text variant="serifTiny" tone="fgFaint" style={halfStyles.microcopy}>
               {stageMicrocopy(stageForMorph)}
             </Text>
             <View style={halfStyles.morphSlot}>
@@ -455,8 +493,6 @@ function SpeakerHalf({
           label={speakerLanguage || '—'}
           accent={accent}
           accentRing={accentRing}
-          accentGlow={accentGlow}
-          accentWhisper={accentWhisper}
           active={activeTurn !== null}
           disabled={disabled}
           onPressIn={onPressIn}
@@ -468,7 +504,7 @@ function SpeakerHalf({
           first turn from either side completes. Quiet enough that it
           doesn't shout, present enough to teach the gesture. */}
       {firstRun && !activeTurn && (
-        <Text variant="bodySmall" tone="fgGhost" style={halfStyles.firstRunHint}>
+        <Text variant="serifSmall" tone="fgGhost" style={halfStyles.firstRunHint}>
           press and hold to speak
         </Text>
       )}
@@ -484,10 +520,10 @@ function SpeakerHalf({
 function SourceLine({ label, text }: { readonly label: string; readonly text: string }): React.JSX.Element {
   return (
     <View>
-      <Text variant="mono" tone="fgGhost" style={halfStyles.sourceLabel}>
-        {label.toUpperCase()}
+      <Text variant="serifTiny" tone="fgGhost" style={halfStyles.sourceLabel}>
+        {label.toLowerCase()}
       </Text>
-      <Text variant="bodySmall" tone="fgFaint" numberOfLines={3}>
+      <Text variant="serif" tone="fgFaint" numberOfLines={3}>
         {text}
       </Text>
     </View>
@@ -508,7 +544,7 @@ function NetworkPill({ state }: { readonly state: 'unknown' | 'online' | 'offlin
   return (
     <View style={pillStyles.pill}>
       <View style={[pillStyles.dot, { backgroundColor: dotColor }]} />
-      <Text variant="mono" tone="fgFaint" style={pillStyles.label}>{label}</Text>
+      <Text variant="serif" tone="fgFaint" style={pillStyles.label}>{label}</Text>
     </View>
   );
 }
@@ -518,11 +554,27 @@ function NetworkPill({ state }: { readonly state: 'unknown' | 'online' | 'offlin
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: color.bg },
 
+  coolWash: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    height: '50%',
+    backgroundColor: 'rgba(168,178,255,0.022)',
+  },
+  warmWash: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: '50%',
+    backgroundColor: 'rgba(255,179,122,0.022)',
+  },
+
   half: { flex: 1 },
   flipped: { flex: 1, transform: [{ rotate: '180deg' }] },
 
   settingsLink: {
-    letterSpacing: 1.4,
     paddingVertical: space.xs,
   },
 
@@ -567,8 +619,6 @@ const halfStyles = StyleSheet.create({
   },
   sourceLabel: {
     marginBottom: 4,
-    fontSize: 9.5,
-    letterSpacing: 1.2,
   },
 
   // 2. Big text — fills the middle of the half.
@@ -619,6 +669,9 @@ const halfStyles = StyleSheet.create({
     borderRadius: 3,
     marginRight: 8,
   },
+  identityCode: {
+    marginLeft: 8,
+  },
   changeChevron: {
     marginLeft: 8,
     opacity: 0.7,
@@ -635,12 +688,9 @@ const halfStyles = StyleSheet.create({
   },
   microcopy: {
     marginRight: 10,
-    fontSize: 10,
-    letterSpacing: 1.6,
   },
   firstRunHint: {
     textAlign: 'center',
-    fontStyle: 'italic',
     paddingTop: space.sm,
   },
 
@@ -673,7 +723,5 @@ const pillStyles = StyleSheet.create({
     borderRadius: 3,
     marginRight: 8,
   },
-  label: {
-    letterSpacing: 1.4,
-  },
+  label: {},
 });
