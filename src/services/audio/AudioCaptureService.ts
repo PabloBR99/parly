@@ -53,10 +53,10 @@ export class AudioCaptureService {
       const granted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
         {
-          title: 'Permiso de micrófono',
-          message: 'Parly necesita acceso al micrófono para transcribir la conversación.',
-          buttonPositive: 'Permitir',
-          buttonNegative: 'Cancelar',
+          title: 'Microphone permission',
+          message: 'Parly needs microphone access to transcribe the conversation.',
+          buttonPositive: 'Allow',
+          buttonNegative: 'Cancel',
         },
       );
       return granted === PermissionsAndroid.RESULTS.GRANTED;

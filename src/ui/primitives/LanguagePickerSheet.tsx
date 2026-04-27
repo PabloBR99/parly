@@ -41,15 +41,15 @@ interface LanguagePickerSheetProps {
 
 const SCRIPT_GROUPS: { readonly title: string; readonly codes: readonly string[] }[] = [
   {
-    title: 'Latina',
+    title: 'Latin',
     codes: ['es', 'en', 'fr', 'de', 'it', 'pt', 'nl', 'pl', 'cs', 'tr', 'sv', 'no', 'da', 'fi', 'ro', 'hu', 'sw', 'vi', 'id'],
   },
-  { title: 'Cirílica', codes: ['ru', 'uk'] },
-  { title: 'Griega', codes: ['el'] },
-  { title: 'Árabe / Hebrea', codes: ['ar', 'he', 'fa', 'ur'] },
-  { title: 'Devanagari / Bengalí', codes: ['hi', 'bn'] },
+  { title: 'Cyrillic', codes: ['ru', 'uk'] },
+  { title: 'Greek', codes: ['el'] },
+  { title: 'Arabic / Hebrew', codes: ['ar', 'he', 'fa', 'ur'] },
+  { title: 'Devanagari / Bengali', codes: ['hi', 'bn'] },
   { title: 'CJK', codes: ['zh', 'ja', 'ko'] },
-  { title: 'Tailandés', codes: ['th'] },
+  { title: 'Thai', codes: ['th'] },
 ];
 
 export function LanguagePickerSheet({
@@ -110,7 +110,7 @@ export function LanguagePickerSheet({
           style={styles.backdrop}
           onPress={onClose}
           accessibilityRole="button"
-          accessibilityLabel="Cerrar selector"
+          accessibilityLabel="Close picker"
         />
         <View style={[styles.sheet, { paddingBottom: insets.bottom + space.md }]}>
           <KeyboardAvoidingView
@@ -119,11 +119,11 @@ export function LanguagePickerSheet({
             <View style={styles.handle} />
             <View style={styles.searchWrap}>
               <Text variant="caption" tone="fgFaint" style={styles.searchLabel}>
-                ELEGIR IDIOMA
+                CHOOSE LANGUAGE
               </Text>
               <TextInput
                 style={styles.search}
-                placeholder="Buscar — Español, English, 日本語…"
+                placeholder="Search — English, Español, 日本語…"
                 placeholderTextColor={color.fgGhost}
                 value={filter}
                 onChangeText={setFilter}
@@ -147,7 +147,7 @@ export function LanguagePickerSheet({
               ))}
               {groups.length === 0 && (
                 <Text variant="body" tone="fgFaint" style={styles.empty}>
-                  Sin coincidencias.
+                  No matches.
                 </Text>
               )}
             </ScrollView>
@@ -175,7 +175,7 @@ function LanguageRow({
       onPress={handle}
       style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
       accessibilityRole="button"
-      accessibilityLabel={`Elegir ${language.name}`}>
+      accessibilityLabel={`Choose ${language.name}`}>
       <Text style={styles.rowEmoji}>{language.emoji}</Text>
       <View style={styles.rowText}>
         <Text variant="body" tone="fg">{language.endonym}</Text>

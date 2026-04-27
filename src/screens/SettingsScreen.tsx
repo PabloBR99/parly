@@ -104,12 +104,12 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           PARLY
         </Text>
         <Text variant="displayLarge" tone="fg">
-          {noKey ? 'Bienvenido' : 'Ajustes'}
+          {noKey ? 'Welcome' : 'Settings'}
         </Text>
         <Text variant="bodySmall" tone="fgFaint" style={styles.subhead}>
           {noKey
-            ? 'Vamos a poner Parly en marcha en tres pasos.'
-            : 'Configura la conexión y limpia el historial.'}
+            ? "Let's get Parly up and running in three steps."
+            : 'Manage your connection and clear history.'}
         </Text>
       </View>
 
@@ -131,14 +131,14 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           />
         </View>
       ) : (
-        <Section label="CONEXIÓN">
+        <Section label="CONNECTION">
           <Surface style={styles.connectedCard}>
             <View style={styles.connectedRow}>
               <View style={[styles.connectedDot, { backgroundColor: color.ok }]} />
               <View style={styles.flex}>
-                <Text variant="body" tone="fg">Conectado a Mistral</Text>
+                <Text variant="body" tone="fg">Connected to Mistral</Text>
                 <Text variant="bodySmall" tone="fgFaint">
-                  Tu clave está guardada de forma segura en este dispositivo.
+                  Your key is stored securely on this device.
                 </Text>
               </View>
             </View>
@@ -149,7 +149,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
               onPress={onValidateKey}
               disabled={validating}
               accessibilityRole="button"
-              accessibilityLabel="Comprobar conexión"
+              accessibilityLabel="Check connection"
               style={({ pressed }) => [
                 styles.verifyBtn,
                 pressed && styles.verifyBtnPressed,
@@ -158,7 +158,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
               {validating ? (
                 <ActivityIndicator color={color.fgMuted} size="small" />
               ) : (
-                <Text variant="mono" tone="fgMuted">COMPROBAR</Text>
+                <Text variant="mono" tone="fgMuted">CHECK</Text>
               )}
             </Pressable>
           </View>
@@ -170,10 +170,10 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
             }}
             hitSlop={10}
             accessibilityRole="button"
-            accessibilityLabel="Cambiar clave"
+            accessibilityLabel="Change key"
             style={({ pressed }) => [styles.replaceLink, pressed && styles.replaceLinkPressed]}>
             <Text variant="mono" tone="fgFaint" style={styles.replaceLabel}>
-              CAMBIAR CLAVE
+              CHANGE KEY
             </Text>
           </Pressable>
         </Section>
@@ -184,17 +184,17 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           show, and the visual silence keeps the welcome focused. */}
       {!noKey && (
         <>
-          <Section label="CONVERSACIÓN">
+          <Section label="CONVERSATION">
             <Button
-              label="Limpiar historial"
+              label="Clear history"
               variant="danger"
               onPress={onClearHistory}
             />
           </Section>
 
-          <Section label="DIAGNÓSTICO">
+          <Section label="DIAGNOSTICS">
             <Button
-              label="Ver logs"
+              label="View logs"
               variant="secondary"
               onPress={() => navigation.navigate('Logs')}
             />
@@ -221,7 +221,7 @@ function KeyValidationLine({
   if (validating) {
     return (
       <Text variant="mono" tone="fgFaint" style={styles.keyStatus}>
-        VERIFICANDO…
+        CHECKING…
       </Text>
     );
   }
@@ -231,21 +231,21 @@ function KeyValidationLine({
   if (state.status === 'ok') {
     return (
       <Text variant="mono" tone="ok" style={styles.keyStatus}>
-        ●  KEY VÁLIDA
+        ●  KEY VALID
       </Text>
     );
   }
   if (state.status === 'invalid') {
     return (
       <Text variant="mono" tone="error" style={styles.keyStatus}>
-        ●  KEY RECHAZADA
+        ●  KEY REJECTED
       </Text>
     );
   }
   if (state.status === 'network') {
     return (
       <Text variant="mono" tone="warn" style={styles.keyStatus}>
-        ●  SIN RED
+        ●  NO NETWORK
       </Text>
     );
   }
@@ -283,25 +283,25 @@ function OnboardingSteps({
   return (
     <View>
       <Text variant="body" tone="fgMuted" style={styles.onboardingIntro}>
-        Para entender y traducir tu voz, Parly se conecta con un servicio
-        de inteligencia artificial llamado Mistral. Es gratuito y solo
-        necesita un correo electrónico.
+        To understand and translate your voice, Parly connects to an AI
+        service called Mistral. It's free and only needs an email
+        address.
       </Text>
 
       <Step
         number="1"
-        title="Crea tu cuenta en Mistral">
+        title="Create your Mistral account">
         <Text variant="body" tone="fgMuted" style={styles.stepBody}>
-          Pulsa el botón de abajo. Se abrirá la web de Mistral en tu
-          navegador. Regístrate o inicia sesión.
+          Tap the button below. Mistral's website will open in your
+          browser. Sign up or log in.
         </Text>
         <Pressable
           onPress={onOpenConsole}
           accessibilityRole="button"
-          accessibilityLabel="Abrir la web de Mistral"
+          accessibilityLabel="Open Mistral's website"
           style={({ pressed }) => [styles.linkBtn, pressed && styles.linkBtnPressed]}>
           <Text variant="body" tone="fg" style={styles.linkBtnLabel}>
-            Abrir Mistral
+            Open Mistral
           </Text>
           <Text variant="body" tone="fgMuted" style={styles.linkBtnArrow}>
             ↗
@@ -311,17 +311,17 @@ function OnboardingSteps({
 
       <Step
         number="2"
-        title="Copia tu clave">
+        title="Copy your key">
         <Text variant="body" tone="fgMuted" style={styles.stepBody}>
-          Una vez dentro, pulsa <Text style={styles.inlineEmph}>Create new key</Text>.
-          Aparecerá un código largo en pantalla — mantenlo pulsado y copia
-          el texto entero.
+          Once you're in, tap <Text style={styles.inlineEmph}>Create new key</Text>.
+          A long code will appear on screen — long-press it and copy the
+          whole thing.
         </Text>
       </Step>
 
       <Step
         number="3"
-        title="Pégala aquí debajo">
+        title="Paste it here">
         <Surface style={styles.inputCard}>
           <TextInput
             value={apiKey}
@@ -331,12 +331,12 @@ function OnboardingSteps({
             autoCorrect={false}
             spellCheck={false}
             style={styles.input}
-            placeholder="Pega aquí la clave"
+            placeholder="Paste your key here"
             placeholderTextColor={color.fgGhost}
           />
         </Surface>
         <Text variant="bodySmall" tone="fgFaint" style={styles.tip}>
-          Mantén el dedo sobre el cuadro y pulsa <Text style={styles.inlineEmph}>Pegar</Text>.
+          Long-press the box and tap <Text style={styles.inlineEmph}>Paste</Text>.
         </Text>
 
         {hasInput && (
@@ -345,7 +345,7 @@ function OnboardingSteps({
               onPress={onValidate}
               disabled={validating}
               accessibilityRole="button"
-              accessibilityLabel="Verificar la clave"
+              accessibilityLabel="Verify the key"
               style={({ pressed }) => [
                 styles.primaryBtn,
                 pressed && styles.primaryBtnPressed,
@@ -355,7 +355,7 @@ function OnboardingSteps({
                 <ActivityIndicator color={color.fgInk} size="small" />
               ) : (
                 <Text variant="body" tone="fgInk" style={styles.primaryBtnLabel}>
-                  Verificar clave
+                  Verify key
                 </Text>
               )}
             </Pressable>
@@ -368,18 +368,18 @@ function OnboardingSteps({
         {keyOk && (
           <View style={styles.successZone}>
             <Text variant="body" tone="ok" style={styles.successLine}>
-              ✓  Listo. Ya puedes empezar a hablar.
+              ✓  All set. You can start talking now.
             </Text>
             <Pressable
               onPress={onStart}
               accessibilityRole="button"
-              accessibilityLabel="Empezar a hablar"
+              accessibilityLabel="Start talking"
               style={({ pressed }) => [
                 styles.startBtn,
                 pressed && styles.startBtnPressed,
               ]}>
               <Text variant="body" tone="fg" style={styles.startBtnLabel}>
-                Empezar a hablar  →
+                Start talking  →
               </Text>
             </Pressable>
           </View>

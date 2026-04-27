@@ -62,11 +62,11 @@ export function LogsScreen(_props: Props): React.JSX.Element {
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}>
         <Text variant="caption" tone="fgFaint" style={styles.eyebrow}>
-          PARLY  ·  DIAGNÓSTICO  ·  {entries.length} entradas
+          PARLY  ·  DIAGNOSTICS  ·  {entries.length} entries
         </Text>
         {entries.length === 0 ? (
           <Text variant="body" tone="fgFaint" style={styles.empty}>
-            Sin entradas todavía.
+            No entries yet.
           </Text>
         ) : (
           <Surface style={styles.list}>
@@ -78,8 +78,8 @@ export function LogsScreen(_props: Props): React.JSX.Element {
       </ScrollView>
 
       <View style={[styles.bar, { paddingBottom: Math.max(insets.bottom, space.md) }]}>
-        <Button label="Compartir" variant="primary" onPress={onShare} style={styles.barCta} />
-        <Button label="Limpiar"   variant="danger"  onPress={onClear} style={styles.barCta} />
+        <Button label="Share" variant="primary" onPress={onShare} style={styles.barCta} />
+        <Button label="Clear" variant="danger"  onPress={onClear} style={styles.barCta} />
       </View>
     </View>
   );

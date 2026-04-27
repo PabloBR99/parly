@@ -158,7 +158,7 @@ export function PTTButton({
       disabled={disabled}
       hitSlop={6}
       accessibilityRole="button"
-      accessibilityLabel={`Micrófono ${label}`}
+      accessibilityLabel={`Microphone ${label}`}
       accessibilityState={{ disabled, busy: active }}>
       <View
         style={[

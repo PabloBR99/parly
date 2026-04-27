@@ -38,7 +38,7 @@ export function LanguageCard({
   }));
 
   const filled = language !== null;
-  const roleLabel = role === 'partner' ? 'Otro idioma' : 'Tu idioma';
+  const roleLabel = role === 'partner' ? 'Other language' : 'Your language';
 
   return (
     <Pressable
@@ -53,8 +53,8 @@ export function LanguageCard({
       accessibilityRole="button"
       accessibilityLabel={
         filled
-          ? `${roleLabel}: ${language!.name}. Tócalo para cambiar, mantén pulsado para borrar.`
-          : `${roleLabel}. Tócalo para elegir.`
+          ? `${roleLabel}: ${language!.name}. Tap to change, long-press to clear.`
+          : `${roleLabel}. Tap to choose.`
       }>
       <Animated.View
         style={[
@@ -87,7 +87,7 @@ export function LanguageCard({
           </View>
         ) : (
           <Text variant="displayLarge" tone="fgGhost" style={styles.placeholder}>
-            Toca para elegir
+            Tap to choose
           </Text>
         )}
       </Animated.View>

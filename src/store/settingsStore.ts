@@ -8,9 +8,9 @@ export interface PersonConfig {
 
 /** Mistral chat models available for the translation pipeline. */
 export const TRANSLATION_MODELS = [
-  { id: 'mistral-small-latest', label: 'Mistral Small  ·  recomendado' },
-  { id: 'ministral-3b-latest',  label: 'Ministral 3B   ·  más rápido' },
-  { id: 'mistral-large-latest', label: 'Mistral Large  ·  más preciso' },
+  { id: 'mistral-small-latest', label: 'Mistral Small  ·  recommended' },
+  { id: 'ministral-3b-latest',  label: 'Ministral 3B   ·  faster' },
+  { id: 'mistral-large-latest', label: 'Mistral Large  ·  most accurate' },
 ] as const;
 
 export type TranslationModelId = (typeof TRANSLATION_MODELS)[number]['id'];
@@ -33,8 +33,8 @@ interface SettingsActions {
 }
 
 const initialState: SettingsState = {
-  personA: { language: '', displayName: 'Tú' },
-  personB: { language: '', displayName: 'Otro' },
+  personA: { language: '', displayName: 'You' },
+  personB: { language: '', displayName: 'Other' },
   mistralApiKey: '',
   translationModel: 'mistral-small-latest',
   languagePairConfigured: false,

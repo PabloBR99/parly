@@ -47,7 +47,7 @@ export function SwapButton({ disabled, onPress }: SwapButtonProps): React.JSX.El
         disabled={disabled}
         hitSlop={16}
         accessibilityRole="button"
-        accessibilityLabel="Intercambiar idiomas"
+        accessibilityLabel="Swap languages"
         accessibilityState={{ disabled }}>
         <Animated.View style={[styles.btn, animated, disabled && styles.btnDisabled]}>
           <Text variant="body" tone={disabled ? 'fgGhost' : 'fgMuted'} style={styles.glyph}>

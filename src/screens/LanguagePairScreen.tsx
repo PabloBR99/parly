@@ -121,11 +121,11 @@ export function LanguagePairScreen({ navigation }: Props): React.JSX.Element {
             PARLY
           </Text>
           <Text variant="displayLarge" tone="fg" style={styles.headline}>
-            Dos idiomas.{'\n'}Una conversación.
+            Two languages.{'\n'}One conversation.
           </Text>
           <Text variant="bodySmall" tone="fgFaint" style={styles.subhead}>
-            Elige el de cada hablante. Podrás intercambiarlos o cambiarlos
-            durante la charla.
+            Pick one for each speaker. You can swap or change them during
+            the conversation.
           </Text>
         </View>
       </View>
@@ -152,7 +152,7 @@ export function LanguagePairScreen({ navigation }: Props): React.JSX.Element {
       {/* Footer */}
       <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, space.md) }]}>
         <Button
-          label="Empezar"
+          label="Start"
           onPress={onStart}
           disabled={!bothFilled}
           style={styles.cta}
@@ -160,9 +160,9 @@ export function LanguagePairScreen({ navigation }: Props): React.JSX.Element {
         <Pressable
           onPress={() => navigation.navigate('Settings')}
           accessibilityRole="button"
-          accessibilityLabel="Abrir ajustes">
+          accessibilityLabel="Open settings">
           <Text variant="caption" tone="fgFaint" style={styles.settingsLink}>
-            AJUSTES
+            SETTINGS
           </Text>
         </Pressable>
       </View>

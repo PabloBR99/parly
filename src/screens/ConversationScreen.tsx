@@ -47,7 +47,6 @@ import { useSettingsStore } from '../store/settingsStore';
 import { useConversationStore, type Turn, type TurnStage } from '../store/conversationStore';
 import { useNetworkStore } from '../store/networkStore';
 import { conversationOrchestrator } from '../services/pipeline/orchestrator';
-import { nativeTTSService } from '../services/tts/NativeTTSService';
 import { getLanguage } from '../app/languages';
 import type { PersonId } from '../app/types';
 import type { RootStackParamList } from '../navigation/types';
@@ -189,9 +188,9 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
               onPress={() => navigation.navigate('Settings')}
               hitSlop={14}
               accessibilityRole="button"
-              accessibilityLabel="Ajustes">
+              accessibilityLabel="Settings">
               <Text variant="mono" tone="fgFaint" style={styles.settingsLink}>
-                ajustes
+                settings
               </Text>
             </Pressable>
           }
@@ -209,13 +208,13 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
             style={styles.banner}
             onPress={() => navigation.navigate('Settings')}>
             <Text variant="caption" tone="fgFaint" style={styles.bannerEyebrow}>
-              ANTES DE EMPEZAR
+              BEFORE WE START
             </Text>
             <Text variant="body" tone="fg" style={styles.bannerBody}>
-              Conecta Parly con su cerebro.
+              Connect Parly to its brain.
             </Text>
             <Text variant="bodySmall" tone="fgMuted" style={styles.bannerHint}>
-              Toca aquí — te guiamos paso a paso.
+              Tap here — we'll walk you through it.
             </Text>
           </Pressable>
         </View>
@@ -242,10 +241,10 @@ function findLastTurn(turns: readonly Turn[], speakerId: PersonId): Turn | null 
 
 function stageMicrocopy(stage: TurnStage | null): string {
   switch (stage) {
-    case 'recording': return 'ESCUCHANDO';
+    case 'recording': return 'LISTENING';
     case 'transcribing':
-    case 'translating': return 'PENSANDO';
-    case 'speaking': return 'HABLANDO';
+    case 'translating': return 'THINKING';
+    case 'speaking': return 'SPEAKING';
     case 'error': return 'ERROR';
     default: return '';
   }
@@ -386,22 +385,6 @@ function SpeakerHalf({
     transform: [{ translateY: (1 - reveal.value) * 6 }],
   }));
 
-  // Replay — re-speak the partner's last completed translation. Gated on
-  // idle (no current turn) so the audio never collides with orchestrator
-  // TTS still in flight. We stop() any straggling utterance defensively.
-  const canReplay =
-    activeTurn === null &&
-    incomingTurn !== null &&
-    incomingTurn.stage === 'done' &&
-    hasIncomingText;
-
-  const handleReplay = () => {
-    if (!canReplay || !incomingTurn) return;
-    haptics.tick();
-    nativeTTSService.stop();
-    void nativeTTSService.speakChunk(incomingText, incomingTurn.targetLang).catch(() => {});
-  };
-
   const stageForMorph: TurnStage | null = activeTurn?.stage ?? incomingStage ?? null;
   const showMorph = stageForMorph !== null && stageForMorph !== 'done';
 
@@ -419,20 +402,12 @@ function SpeakerHalf({
       {/* 1. Source line — closest to the center divider. */}
       <View style={halfStyles.sourceSlot}>{sourceNode}</View>
 
-      {/* 2. Big translated text — the hero. Tappable when complete to replay. */}
+      {/* 2. Big translated text — the hero. */}
       <View style={halfStyles.big}>
         {hasIncomingText ? (
-          <Pressable
-            onPress={canReplay ? handleReplay : undefined}
-            disabled={!canReplay}
-            accessibilityRole={canReplay ? 'button' : undefined}
-            accessibilityLabel={canReplay ? 'Volver a escuchar la traducción' : undefined}
-            hitSlop={6}
-            style={({ pressed }) => [pressed && canReplay && halfStyles.bigPressed]}>
-            <Animated.Text style={[halfStyles.bigText, bigStyle]}>
-              {incomingText}
-            </Animated.Text>
-          </Pressable>
+          <Animated.Text style={[halfStyles.bigText, bigStyle]}>
+            {incomingText}
+          </Animated.Text>
         ) : (
           <Text variant="displayHuge" tone="fgGhost" style={halfStyles.placeholder}>
             {speakerLang.endonym}
@@ -440,19 +415,18 @@ function SpeakerHalf({
         )}
         {incomingTurn?.stage === 'error' && (
           <Text variant="bodySmall" tone="error" style={halfStyles.errorText}>
-            ⚠  {incomingTurn.errorMessage ?? 'Error de traducción'}
+            ⚠  {incomingTurn.errorMessage ?? 'Translation error'}
           </Text>
         )}
       </View>
 
-      {/* 3. Identity strip — language chip on the left, status (or replay
-          affordance once a turn is done) on the right. */}
+      {/* 3. Identity strip — language chip on the left, live status on the right. */}
       <View style={halfStyles.identityRow}>
         <Pressable
           onPress={onChangeLanguage}
           hitSlop={14}
           accessibilityRole="button"
-          accessibilityLabel={`Cambiar idioma. Actual: ${speakerLang.name}`}
+          accessibilityLabel={`Change language. Current: ${speakerLang.name}`}
           style={({ pressed }) => [halfStyles.identityChip, pressed && halfStyles.identityChipPressed]}>
           <View style={[halfStyles.identityDot, { backgroundColor: accent }]} />
           <Text variant="caption" tone="fgMuted">
@@ -463,7 +437,7 @@ function SpeakerHalf({
           </Text>
         </Pressable>
         <View style={halfStyles.flex} />
-        {showMorph ? (
+        {showMorph && (
           <View style={halfStyles.statusRow}>
             <Text variant="mono" tone="fgFaint" style={halfStyles.microcopy}>
               {stageMicrocopy(stageForMorph)}
@@ -472,18 +446,7 @@ function SpeakerHalf({
               <StateMorph stage={stageForMorph} accent={accent} size={18} />
             </View>
           </View>
-        ) : canReplay ? (
-          <Pressable
-            onPress={handleReplay}
-            hitSlop={10}
-            accessibilityRole="button"
-            accessibilityLabel="Volver a escuchar la traducción"
-            style={({ pressed }) => [halfStyles.replayBtn, pressed && halfStyles.replayPressed]}>
-            <Text variant="mono" tone="fgGhost" style={halfStyles.replayLabel}>
-              ↺  REPETIR
-            </Text>
-          </Pressable>
-        ) : null}
+        )}
       </View>
 
       {/* 4. PTT button — the object. */}
@@ -506,7 +469,7 @@ function SpeakerHalf({
           doesn't shout, present enough to teach the gesture. */}
       {firstRun && !activeTurn && (
         <Text variant="bodySmall" tone="fgGhost" style={halfStyles.firstRunHint}>
-          mantén pulsado para hablar
+          press and hold to speak
         </Text>
       )}
 
@@ -539,9 +502,9 @@ function NetworkPill({ state }: { readonly state: 'unknown' | 'online' | 'offlin
     state === 'offline' ? color.error :
     color.fgGhost;
   const label =
-    state === 'online' ? 'en línea' :
-    state === 'offline' ? 'sin conexión' :
-    'conectando';
+    state === 'online' ? 'online' :
+    state === 'offline' ? 'offline' :
+    'connecting';
   return (
     <View style={pillStyles.pill}>
       <View style={[pillStyles.dot, { backgroundColor: dotColor }]} />
@@ -674,20 +637,6 @@ const halfStyles = StyleSheet.create({
     marginRight: 10,
     fontSize: 10,
     letterSpacing: 1.6,
-  },
-  replayBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  replayPressed: {
-    opacity: 0.4,
-  },
-  replayLabel: {
-    fontSize: 10,
-    letterSpacing: 1.6,
-  },
-  bigPressed: {
-    opacity: 0.65,
   },
   firstRunHint: {
     textAlign: 'center',
