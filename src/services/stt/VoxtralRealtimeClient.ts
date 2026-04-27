@@ -26,6 +26,7 @@
 //     Android, NSURLSession on iOS) that honor them.
 
 import type { PersonId } from '../../app/types';
+import { log } from '../log/logStore';
 
 const ENDPOINT = 'wss://api.mistral.ai/v1/audio/transcriptions/realtime';
 const DEFAULT_MODEL = 'voxtral-mini-transcribe-realtime-2602';
@@ -118,10 +119,16 @@ export class VoxtralRealtimeClient {
     const url = `${ENDPOINT}?model=${encodeURIComponent(model)}`;
     const headers = { Authorization: `Bearer ${options.apiKey}` };
 
+    log.info(
+      `[voxtral] connecting model=${model} keyLen=${options.apiKey.length} ` +
+      `keyHead=${options.apiKey.slice(0, 4)}…`,
+    );
+
     let ws: WebSocketLike;
     try {
       ws = this.wsFactory(url, headers);
     } catch (e) {
+      log.error('[voxtral] WebSocket constructor threw', e instanceof Error ? e : new Error(String(e)));
       this.state = 'closed';
       throw new Error(`Failed to construct WebSocket: ${String(e)}`);
     }
@@ -146,6 +153,7 @@ export class VoxtralRealtimeClient {
 
       ws.onopen = () => {
         if (gen !== this.generation) return;
+        log.info('[voxtral] onopen — sending session.update');
         // Some servers allow implicit audio_format from handshake; we send an
         // explicit session.update so our assumption is unambiguous.
         try {
@@ -156,6 +164,7 @@ export class VoxtralRealtimeClient {
             },
           }));
         } catch (e) {
+          log.error('[voxtral] session.update send failed', e instanceof Error ? e : new Error(String(e)));
           settle(() => {
             this.cleanup();
             reject(new Error(`Failed to send session.update: ${String(e)}`));
@@ -222,7 +231,9 @@ export class VoxtralRealtimeClient {
 
       ws.onerror = (ev) => {
         if (gen !== this.generation) return;
-        const err = new Error(`WebSocket error: ${String((ev as { message?: string })?.message ?? ev)}`);
+        const detail = describeEvent(ev);
+        log.error(`[voxtral] onerror ${detail}`);
+        const err = new Error(`WebSocket error: ${detail}`);
         if (!this.sessionReady) {
           settle(() => { this.cleanup(); reject(err); });
         } else {
@@ -231,12 +242,17 @@ export class VoxtralRealtimeClient {
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         if (gen !== this.generation) return;
+        const closeInfo = describeClose(ev);
+        log.info(`[voxtral] onclose ${closeInfo}`);
         if (!this.sessionReady) {
-          settle(() => { this.cleanup(); reject(new Error('WebSocket closed before session.created')); });
+          settle(() => {
+            this.cleanup();
+            reject(new Error(`WebSocket closed before session.created (${closeInfo})`));
+          });
         } else if (this.state !== 'ending' && this.state !== 'closed') {
-          this.callbacks?.onError(new Error('WebSocket closed unexpectedly'));
+          this.callbacks?.onError(new Error(`WebSocket closed unexpectedly (${closeInfo})`));
           this.cleanup();
         }
       };
@@ -341,4 +357,46 @@ export class VoxtralRealtimeClient {
     this.callbacks = null;
     this.preSessionChunkQueue = [];
   }
+}
+
+// ── Event introspection ─────────────────────────────────────────────────────
+//
+// React Native's WebSocket onerror/onclose events are not standard DOM events;
+// they're plain objects whose shape varies by platform and RN version. We
+// extract whatever useful fields exist and fall back to JSON.stringify so the
+// log buffer always shows something meaningful.
+
+function describeEvent(ev: unknown): string {
+  if (ev == null) return '(null event)';
+  if (typeof ev !== 'object') return String(ev);
+  const o = ev as Record<string, unknown>;
+  const parts: string[] = [];
+  if (typeof o.message === 'string')                            parts.push(`message="${o.message}"`);
+  if (typeof o.code === 'number' || typeof o.code === 'string') parts.push(`code=${o.code}`);
+  if (typeof o.reason === 'string')                             parts.push(`reason="${o.reason}"`);
+  const errInner = o.error;
+  if (errInner && typeof errInner === 'object') {
+    const ei = errInner as Record<string, unknown>;
+    if (typeof ei.message === 'string') parts.push(`error.message="${ei.message}"`);
+  } else if (typeof errInner === 'string') {
+    parts.push(`error="${errInner}"`);
+  }
+  if (parts.length === 0) {
+    try {
+      return `raw=${JSON.stringify(ev)}`;
+    } catch {
+      return `raw=${Object.prototype.toString.call(ev)}`;
+    }
+  }
+  return parts.join(' ');
+}
+
+function describeClose(ev: unknown): string {
+  if (ev == null) return '(null close)';
+  if (typeof ev !== 'object') return `value=${String(ev)}`;
+  const o = ev as { code?: unknown; reason?: unknown; wasClean?: unknown };
+  const code   = o.code   ?? 'unknown';
+  const reason = typeof o.reason === 'string' ? o.reason : '';
+  const clean  = o.wasClean === undefined ? '' : ` wasClean=${o.wasClean}`;
+  return `code=${code} reason="${reason}"${clean}`;
 }

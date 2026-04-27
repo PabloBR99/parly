@@ -33,6 +33,7 @@
 
 import { useConversationStore } from '../../store/conversationStore';
 import type { PersonId } from '../../app/types';
+import { log } from '../log/logStore';
 
 /** Tiny non-cryptographic ID generator. We avoid nanoid here because its ESM
  *  shipping form trips up Jest's default transform; we don't need crypto
@@ -158,13 +159,15 @@ export class ConversationOrchestrator {
    *  + translation + TTS) completes. Idempotent if already in a turn. */
   async beginTurn(args: BeginTurnArgs): Promise<void> {
     if (this.state !== 'idle') {
-      // Already in a turn — silently ignore (UI typically guards this too).
+      log.warn(`[orch] beginTurn ignored — state=${this.state}`);
       return;
     }
     if (!this.config?.apiKey) {
+      log.error('[orch] beginTurn: no API key configured');
       throw new Error('Orchestrator not configured (missing API key)');
     }
     const cfg = this.config;
+    log.info(`[orch] beginTurn speaker=${args.speakerId} ${args.sourceLang}→${args.targetLang}`);
 
     const id = turnId();
     const store = (this.deps.conversationStore ?? useConversationStore).getState();
@@ -213,6 +216,7 @@ export class ConversationOrchestrator {
       );
     } catch (e) {
       // start() rejection: handshake/auth failure
+      log.error('[orch] Voxtral handshake rejected', e instanceof Error ? e : new Error(String(e)));
       void this.deps.audioCapture.stopStreaming().catch(() => {});
       this.failTurn(id, `Voxtral handshake failed: ${stringifyError(e)}`);
       return;
