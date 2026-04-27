@@ -51,13 +51,29 @@ Todo secuencial via `UtteranceQueue`. Una utterance a la vez.
 
 ---
 
-## UI
+## UI — Vertical PTT Layout (Redesign v5, a43525e)
 
-- Pantalla dividida en dos mitades iguales
-- Mitad inferior rotada 180° (la otra persona lee desde el otro lado de la mesa)
-- Cada mitad: selector de idioma (bandera) + burbujas de chat + botón PTT
-- Burbujas: texto original en panel del hablante, texto traducido en panel del oyente
-- Indicador de estado: grabando / transcribiendo / traduciendo / sintetizando
+**Concepto:** El teléfono está tumbado sobre la mesa entre dos personas. Cada persona tiene su botón PTT en su EXTREMO FÍSICO del dispositivo — partner arriba (rotado), user abajo — así el pulgar cae naturalmente. El texto traducido se inclina hacia el centro, donde ocurre la conversación real. **No hay divisor hairline** — el silencio entre las dos líneas fuente ES el seam.
+
+**Layout de `SpeakerHalf` (top-down, orden de lectura):**
+1. Source line — texto capturado MIENTRAS habla, o fuente del partner post-turn (pequeño, near center)
+2. Big translated text — `displayHero` (34pt, weight 300, -0.6 tracking) — QUÉ LEE ESTA PERSONA
+3. Identity chip — language endonym + state morph (grabando/transcribiendo/traduciendo/sintetizando)
+4. PTT button — object metaphor con halos concéntricos translúcidos
+5. Edge chrome — online/offline pill (partner) o "ajustes" link (user)
+
+**PTTButton object metaphor:**
+- Disc 96pt con tres halos concéntricos que respiran en idle (3.2s sine), se iluminan en press
+- Activo: outer ring respira cada 1.6s; waveform 30pt tall, 5 barras
+- Label: clean horizontal mic-affordance tick (14×1.5pt line) sobre language code (antes: puck-dot)
+- Accents: platinum amber #F2B473 ("you") / ice blue #86BFFF ("them")
+- Halos por acento: `accentGlow` (~0.10 opacity), `accentWhisper` (~0.045), `accentRing` (0.55)
+
+**Theme tokens nuevos:**
+- `color.accentAGlow`, `color.accentBGlow`, `color.accentAWhisper`, `color.accentBWhisper`
+- `color.fgWhisper` (0.07 opacity) — nueva tier de foreground
+- `font.displayHero` (34pt, weight 300, -0.6 tracking) — main translated text
+- `motion.glacial` (800ms) — slow breath animation
 
 ---
 
@@ -163,6 +179,27 @@ parly/
 - [x] Manejo de errores completo — bubbles rojas en error, fallback NativeTTS
 - [x] SettingsScreen — autoPlay toggle, ttsNumSteps (5/10/15/20), borrar conversación
 - [x] Navegación Settings desde ConversationScreen (botón ⚙ en el divisor)
+
+### Fase 5 — UI Redesign ✅ (Commit a43525e)
+- [x] **Vertical PTT axis:** Botón PTT en cada EXTREMO FÍSICO del teléfono (partner arriba, user abajo)
+  - [x] Sin divisor central de hairline — el silencio entre dos líneas fuente ES el divisor
+  - [x] Layout de lectura en `SpeakerHalf`: fuente → texto grande → chip identidad → PTT → edge chrome
+  - [x] Rotación 180° en mitad superior para que partner lea al derecho
+- [x] **PTTButton object metaphor:** disc 96pt con tres halos concéntricos translúcidos (whisper / glow / kiss)
+  - [x] Halos respiran en idle (3.2s sine), se iluminan en press, florecen en active
+  - [x] Outer ring respira cada 1.6s cuando activo; waveform 30pt alto, 5 barras
+  - [x] Sustitución: puck-dot label → clean horizontal mic-affordance tick (14×1.5pt) sobre language code
+- [x] **Tema — palette de acentos + nuevos tokens:**
+  - [x] Desaturación ligera: amber #F4B26A → #F2B473 (platinum amber), azure #7AB8FF → #86BFFF (ice blue)
+  - [x] Nuevos tokens por acento: `accentAGlow`/`accentBGlow` (~0.10 opacity), `accentAWhisper`/`accentBWhisper` (~0.045)
+  - [x] Nuevo `font.displayHero` (34pt / weight 300 / -0.6 tracking) para big translated text
+  - [x] Nuevos tokens: `color.fgWhisper` (0.07), `motion.glacial` (800ms)
+  - [x] Tighter `letterSpacing` en display sizes
+- [x] **Polish auxiliar:**
+  - [x] LanguagePairScreen: headline editorial "Dos idiomas. Una conversación." + subhead, breathing room
+  - [x] SettingsScreen: header reescrito con subhead; eyebrow tracking 2.4, section labels tracking 1.8
+  - [x] LanguageCard: borders ligeros (hairline), transparent empty state
+  - [x] SwapButton: floating glyph, drop flanking hairlines
 
 ---
 
