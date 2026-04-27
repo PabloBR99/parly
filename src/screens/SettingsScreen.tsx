@@ -97,12 +97,15 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
             autoCapitalize="none"
             autoCorrect={false}
             style={styles.input}
-            placeholder="sk-…"
+            placeholder="Pega tu key de Mistral"
             placeholderTextColor={color.fgGhost}
           />
         </Surface>
         <Text variant="bodySmall" tone="fgFaint" style={styles.hint}>
-          Se cifra en el llavero del dispositivo. Solo viaja en la cabecera{' '}
+          Pégala tal cual te la dio Mistral —{' '}
+          <Text variant="bodySmall" tone="fgMuted" style={styles.mono}>sin</Text>{' '}
+          prefijo "sk-". Se cifra en el llavero del dispositivo y solo
+          viaja en la cabecera{' '}
           <Text variant="bodySmall" tone="fgMuted" style={styles.mono}>Authorization</Text>{' '}
           a api.mistral.ai.
         </Text>
