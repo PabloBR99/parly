@@ -163,6 +163,15 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         />
       </Section>
 
+      {/* DIAGNOSTIC */}
+      <Section label="DIAGNÓSTICO">
+        <Button
+          label="Ver logs"
+          variant="secondary"
+          onPress={() => navigation.navigate('Logs')}
+        />
+      </Section>
+
       <Text variant="mono" tone="fgGhost" style={styles.versionTag}>
         PARLY v4.1 — DIPLOMATIC
       </Text>

@@ -28,6 +28,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from './Text';
 import { color, radius, space } from '../theme';
 import { LANGUAGES } from '../../app/languages';
+import { log } from '../../services/log/logStore';
 import type { Language } from '../../app/types';
 
 interface LanguagePickerSheetProps {
@@ -151,9 +152,13 @@ function LanguageRow({
   readonly language: Language;
   readonly onPress: () => void;
 }): React.JSX.Element {
+  const handle = () => {
+    log.info(`[picker] row tap code=${language.code} name=${language.name}`);
+    onPress();
+  };
   return (
     <Pressable
-      onPress={onPress}
+      onPress={handle}
       style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
       accessibilityRole="button"
       accessibilityLabel={`Elegir ${language.name}`}>

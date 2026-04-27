@@ -11,28 +11,30 @@
 // user gesture flow.
 
 import { Vibration } from 'react-native';
+import { log } from '../services/log/logStore';
 
-function safe(fn: () => void): void {
+function safe(label: string, fn: () => void): void {
   try {
     fn();
-  } catch {
-    // Vibration unavailable — ignore.
+  } catch (e) {
+    // Vibration unavailable — ignore but log.
+    log.warn(`[haptics] ${label} threw`, e instanceof Error ? e.message : String(e));
   }
 }
 
 export const haptics = {
   /** Single short tap — used on PTT press, button taps. */
-  tap: () => safe(() => Vibration.vibrate(8)),
+  tap: () => safe('tap', () => Vibration.vibrate(8)),
 
   /** Two-step soft pulse — used on state morph (recording → translating). */
-  pulse: () => safe(() => Vibration.vibrate([0, 6, 40, 6])),
+  pulse: () => safe('pulse', () => Vibration.vibrate([0, 6, 40, 6])),
 
   /** Confirmation tick — used when a language is assigned, settings saved. */
-  tick: () => safe(() => Vibration.vibrate(12)),
+  tick: () => safe('tick', () => Vibration.vibrate(12)),
 
   /** Heavier "done" — turn complete, ready for next handoff. */
-  done: () => safe(() => Vibration.vibrate([0, 18, 60, 8])),
+  done: () => safe('done', () => Vibration.vibrate([0, 18, 60, 8])),
 
   /** Error notification. */
-  error: () => safe(() => Vibration.vibrate([0, 30, 80, 30, 80, 30])),
+  error: () => safe('error', () => Vibration.vibrate([0, 30, 80, 30, 80, 30])),
 };
