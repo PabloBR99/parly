@@ -14,6 +14,7 @@ import { createMistralProbe } from './services/network/mistralProbe';
 import { loadMistralApiKey, saveMistralApiKey } from './services/storage/secureStorage';
 import { useSettingsStore } from './store/settingsStore';
 import type { RootStackParamList } from './navigation/types';
+import { color } from './ui';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -48,14 +49,15 @@ export default function App(): React.JSX.Element {
   return (
     <GestureHandlerRootView style={gestureRootStyle}>
       <SafeAreaProvider>
-        <StatusBar barStyle="light-content" backgroundColor="#000" />
+        <StatusBar barStyle="light-content" backgroundColor={color.bg} />
         <NavigationContainer>
           <Stack.Navigator
             initialRouteName={languagePairConfigured ? 'Conversation' : 'LanguagePair'}
             screenOptions={{
               headerShown: false,
-              contentStyle: { backgroundColor: '#000' },
+              contentStyle: { backgroundColor: color.bg },
               animation: 'fade',
+              animationDuration: 220,
             }}>
             <Stack.Screen name="LanguagePair" component={LanguagePairScreen} />
             <Stack.Screen name="Conversation" component={ConversationScreen} />
@@ -64,11 +66,12 @@ export default function App(): React.JSX.Element {
               component={SettingsScreen}
               options={{
                 headerShown: true,
-                headerStyle: { backgroundColor: '#000' },
-                headerTintColor: 'rgba(255,255,255,0.5)',
+                headerStyle: { backgroundColor: color.bg },
+                headerTintColor: color.fgMuted,
                 headerTitleStyle: { fontWeight: '400', fontSize: 16 },
-                headerTitle: 'Ajustes',
+                headerTitle: '',
                 headerBackTitle: '',
+                headerShadowVisible: false,
                 animation: 'slide_from_bottom',
               }}
             />

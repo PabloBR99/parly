@@ -1,38 +1,34 @@
-// ConversationScreen — two-half live translation surface.
+// ConversationScreen — bidirectional translation surface.
 //
-// Layout (portrait, single user holding the phone, looking at it):
+//   Phone laid flat on the table between two speakers:
 //
 //   ┌─────────────────────────────┐
-//   │  ⚙ settings   ●  network    │ ← top status row
+//   │  ⌘ ajustes    ●  online     │ ← top status row (rotated for partner)
 //   │                             │
-//   │   TOP HALF   (Person B)     │
-//   │   ─ Person B's translation  │  ← what A said, in B's language
-//   │     (what they need to read)│
-//   │   ─ Person B's source       │  ← B's own words mid-recording
-//   │   [  🎤 PTT for B  ]        │
-//   │═══════════════════════════ │
-//   │   [  🎤 PTT for A  ]        │
-//   │   ─ Person A's source       │  ← A's own words mid-recording
-//   │   ─ Person A's translation  │  ← what B said, in A's language
-//   │   BOTTOM HALF   (Person A)  │
+//   │  TOP HALF — partner's view  │   text rotated 180°
+//   │  reads upright across the   │   so the counterparty sees normal
+//   │  table                      │
+//   │                             │
+//   │═══ MIC BAR ═════════════════│   two PTT buttons sit on the divider
+//   │                             │
+//   │  BOTTOM HALF — your view    │   text upright
 //   │                             │
 //   └─────────────────────────────┘
 //
-// The mic buttons sit AT THE DIVIDER so both speakers can reach without
-// flipping the phone. Each PTT is hold-to-talk; release fires the rest of
-// the pipeline. The orchestrator's half-duplex lock guarantees only one
-// turn runs at a time even if both are pressed (last press wins).
+// One speaker presses the PTT closest to them, holds while talking,
+// releases. The orchestrator's half-duplex lock guarantees only one turn
+// runs at a time. Each turn's translation is rendered on the recipient's
+// half — i.e. translated text appears upright in the language the listener
+// reads.
 
-import React, { useEffect, useMemo, useRef } from 'react';
-import {
-  Animated,
+import React, { useEffect, useMemo } from 'react';
+import { Pressable, StatusBar, StyleSheet, View } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
   Easing,
-  Pressable,
-  StatusBar,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useSettingsStore } from '../store/settingsStore';
@@ -42,6 +38,14 @@ import { conversationOrchestrator } from '../services/pipeline/orchestrator';
 import { getLanguage } from '../app/languages';
 import type { PersonId } from '../app/types';
 import type { RootStackParamList } from '../navigation/types';
+import {
+  PTTButton,
+  StateMorph,
+  Text,
+  color,
+  motion,
+  space,
+} from '../ui';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Conversation'>;
 
@@ -63,13 +67,10 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
     }
   }, [apiKey, translationModel]);
 
-  // The active turn — to read live source text from it.
   const activeTurn = useMemo(
     () => turns.find(t => t.id === activeTurnId) ?? null,
     [turns, activeTurnId],
   );
-  // The most recent completed/active turn for each speaker, to drive the
-  // "what they last said" panes.
   const lastTurnA = useMemo(() => findLastTurn(turns, 'person_a'), [turns]);
   const lastTurnB = useMemo(() => findLastTurn(turns, 'person_b'), [turns]);
 
@@ -77,9 +78,6 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
 
   const handleMicPressIn = (speakerId: PersonId) => {
     if (noKey) return;
-    // Guard against double-fire: only block if there's a turn that's still
-    // ACTIVE (not done/error). Defensive — the orchestrator also guards on
-    // its own state — but covers any drift between store and orchestrator.
     if (activeTurn && activeTurn.stage !== 'done' && activeTurn.stage !== 'error') {
       return;
     }
@@ -97,63 +95,89 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
     });
   };
 
+  // Top half belongs to the partner (Person B). Their accent is azure.
+  // Bottom half belongs to the user (Person A). Their accent is amber.
+  const topActiveTurn = activeTurn?.speakerId === 'person_b' ? activeTurn : null;
+  const bottomActiveTurn = activeTurn?.speakerId === 'person_a' ? activeTurn : null;
+
+  // Each speaker's PANE shows what the OTHER said in THEIR language.
+  // Partner reads what user said → take user's last turn (lastTurnA).
+  // User reads what partner said → take partner's last turn (lastTurnB).
+  const topIncomingTurn = lastTurnA;
+  const bottomIncomingTurn = lastTurnB;
+
   return (
     <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor="#000" />
+      <StatusBar barStyle="light-content" backgroundColor={color.bg} />
 
-      {/* TOP HALF — Persona B's view */}
-      <View style={[styles.half, styles.halfTop, { paddingTop: insets.top + 12 }]}>
-        <View style={styles.statusRow}>
-          <NetworkPill state={networkState} />
-          <View style={styles.flex} />
-          <Pressable
-            onPress={() => navigation.navigate('Settings')}
-            hitSlop={12}
-            accessibilityRole="button"
-            accessibilityLabel="Ajustes">
-            <Text style={styles.gear}>⚙</Text>
-          </Pressable>
+      {/* TOP HALF — rotated 180° so partner reads upright across the table */}
+      <View style={[styles.half, styles.halfTop, { paddingTop: insets.top + space.sm }]}>
+        <View style={styles.flipped}>
+          {/* The status row sits at what is visually the "top" of the
+              partner's reading orientation, i.e. the chrome closest to the
+              centre divider. */}
+          <View style={styles.topChromeRow}>
+            <NetworkPill state={networkState} />
+            <View style={styles.flex} />
+          </View>
+          <SpeakerPane
+            speakerLanguage={personB.language}
+            partnerLanguage={personA.language}
+            activeTurn={topActiveTurn}
+            incomingTurn={topIncomingTurn}
+            accent={color.accentB}
+            side="top"
+          />
         </View>
-
-        <SpeakerPane
-          speakerLanguage={personB.language}
-          partnerLanguage={personA.language}
-          activeTurn={activeTurn?.speakerId === 'person_b' ? activeTurn : null}
-          incomingTurn={lastTurnA}
-          orientation="top"
-        />
       </View>
 
-      {/* CENTER MIC BAR — both PTT buttons sit on the dividing line */}
+      {/* CENTER MIC BAR */}
       <View style={styles.micBar}>
-        <View style={styles.divider} />
+        <View style={styles.dividerLine} />
         <View style={styles.micRow}>
-          <MicButton
+          <PTTButton
             label={personB.language || '—'}
-            isActive={activeTurn?.speakerId === 'person_b'}
-            isDisabled={noKey || (!!activeTurn && activeTurn?.speakerId !== 'person_b')}
+            accent={color.accentB}
+            accentRing={color.accentBRing}
+            active={!!topActiveTurn}
+            disabled={noKey || (!!activeTurn && activeTurn?.speakerId !== 'person_b')}
             onPressIn={() => handleMicPressIn('person_b')}
             onPressOut={handleMicPressOut}
+            inverted
           />
-          <MicButton
+          <PTTButton
             label={personA.language || '—'}
-            isActive={activeTurn?.speakerId === 'person_a'}
-            isDisabled={noKey || (!!activeTurn && activeTurn?.speakerId !== 'person_a')}
+            accent={color.accentA}
+            accentRing={color.accentARing}
+            active={!!bottomActiveTurn}
+            disabled={noKey || (!!activeTurn && activeTurn?.speakerId !== 'person_a')}
             onPressIn={() => handleMicPressIn('person_a')}
             onPressOut={handleMicPressOut}
           />
         </View>
+        <View style={styles.dividerLine} />
       </View>
 
-      {/* BOTTOM HALF — Persona A's view */}
-      <View style={[styles.half, styles.halfBottom, { paddingBottom: insets.bottom + 12 }]}>
+      {/* BOTTOM HALF — user's upright view */}
+      <View style={[styles.half, styles.halfBottom, { paddingBottom: insets.bottom + space.sm }]}>
         <SpeakerPane
           speakerLanguage={personA.language}
           partnerLanguage={personB.language}
-          activeTurn={activeTurn?.speakerId === 'person_a' ? activeTurn : null}
-          incomingTurn={lastTurnB}
-          orientation="bottom"
+          activeTurn={bottomActiveTurn}
+          incomingTurn={bottomIncomingTurn}
+          accent={color.accentA}
+          side="bottom"
         />
+        <View style={styles.bottomChromeRow}>
+          <View style={styles.flex} />
+          <Pressable
+            onPress={() => navigation.navigate('Settings')}
+            hitSlop={14}
+            accessibilityRole="button"
+            accessibilityLabel="Ajustes">
+            <Text variant="mono" tone="fgFaint">AJUSTES</Text>
+          </Pressable>
+        </View>
       </View>
 
       {noKey && (
@@ -161,7 +185,7 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
           <Pressable
             style={styles.banner}
             onPress={() => navigation.navigate('Settings')}>
-            <Text style={styles.bannerText}>
+            <Text variant="bodySmall" tone="fg">
               Falta la API key de Mistral. Tócame para configurarla.
             </Text>
           </Pressable>
@@ -183,16 +207,12 @@ function findLastTurn(turns: readonly Turn[], speakerId: PersonId): Turn | null 
 // ── SpeakerPane ──────────────────────────────────────────────────────────────
 
 interface SpeakerPaneProps {
-  /** The language this speaker speaks (their source). */
   readonly speakerLanguage: string;
-  /** The other person's language (translation target). */
   readonly partnerLanguage: string;
-  /** If non-null, this speaker is currently mid-turn (recording or piping). */
   readonly activeTurn: Turn | null;
-  /** The most recent turn from the OTHER speaker — its translation lives in
-   *  `speakerLanguage` and is what this speaker needs to read. */
   readonly incomingTurn: Turn | null;
-  readonly orientation: 'top' | 'bottom';
+  readonly accent: string;
+  readonly side: 'top' | 'bottom';
 }
 
 function SpeakerPane({
@@ -200,197 +220,110 @@ function SpeakerPane({
   partnerLanguage,
   activeTurn,
   incomingTurn,
-  orientation,
+  accent,
+  side,
 }: SpeakerPaneProps): React.JSX.Element {
   const speakerLang = getLanguage(speakerLanguage);
   const partnerLang = getLanguage(partnerLanguage);
 
-  // Big text: what THIS speaker should read — i.e., the OTHER side's
-  // translated text in MY language. Pulled from incomingTurn.
+  // Big text: what THIS speaker should READ — i.e. the OTHER side's
+  // translated text in MY language.
   const incomingText = incomingTurn?.translatedText ?? '';
   const incomingStage = incomingTurn?.stage ?? null;
 
-  // Small text: this speaker's own source captured live during recording, or
-  // the source of incoming turn (so they can see what the partner said).
+  // Small text: this speaker's own source captured live, OR the partner's
+  // source if we just finished a turn (so the speaker can verify what was
+  // said vs how it was rendered).
   const ownSource = activeTurn?.sourceText ?? '';
   const partnerSource = incomingTurn?.sourceText ?? '';
 
-  const containerStyle = orientation === 'top' ? styles.paneTop : styles.paneBottom;
+  // Animate the big text in when it changes.
+  const opacity = useSharedValue(0);
+  useEffect(() => {
+    if (incomingText.length > 0) {
+      opacity.value = withTiming(1, { duration: motion.normal, easing: Easing.out(Easing.quad) });
+    } else {
+      opacity.value = withTiming(0, { duration: motion.fast });
+    }
+  }, [incomingText, opacity]);
+
+  const bigStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
+
+  const stageForMorph: TurnStage | null = activeTurn?.stage ?? incomingStage ?? null;
 
   return (
-    <View style={[styles.pane, containerStyle]}>
-      {/* Big incoming translation — primary surface */}
-      <View style={styles.bigBlock}>
-        {incomingText.length > 0 ? (
-          <Text style={styles.bigText}>{incomingText}</Text>
-        ) : (
-          <Text style={styles.placeholder}>
-            {speakerLang.endonym}
-          </Text>
-        )}
-        {incomingStage === 'translating' && incomingText.length > 0 && (
-          <DotPulse />
+    <View style={[paneStyles.pane, side === 'top' ? paneStyles.topAlign : paneStyles.bottomAlign]}>
+      {/* Identity strip — language code + script morph */}
+      <View style={paneStyles.identity}>
+        <View style={[paneStyles.identityDot, { backgroundColor: accent }]} />
+        <Text variant="mono" tone="fgFaint">
+          {speakerLang.endonym.toUpperCase()}  ·  {speakerLang.code.toUpperCase()}
+        </Text>
+        <View style={paneStyles.flex} />
+        {stageForMorph !== null && stageForMorph !== 'done' && (
+          <View style={paneStyles.morphSlot}>
+            <StateMorph stage={stageForMorph} accent={accent} size={16} />
+          </View>
         )}
       </View>
 
-      {/* Small captured source from THIS speaker — only during their turn */}
-      {activeTurn !== null && ownSource.length > 0 && (
-        <View style={styles.smallBlock}>
-          <Text style={styles.smallLabel}>{speakerLang.endonym}</Text>
-          <Text style={styles.smallText}>{ownSource}</Text>
-        </View>
-      )}
+      {/* Big translated text or empty placeholder */}
+      <View style={paneStyles.big}>
+        {incomingText.length > 0 ? (
+          <Animated.Text style={[paneStyles.bigText, bigStyle]}>{incomingText}</Animated.Text>
+        ) : (
+          <Text variant="displayLarge" tone="fgGhost" style={paneStyles.placeholder}>
+            {speakerLang.endonym}
+          </Text>
+        )}
+      </View>
 
-      {/* Small partner source — last thing they said, for reference */}
-      {activeTurn === null && partnerSource.length > 0 && incomingText.length > 0 && (
-        <View style={styles.smallBlock}>
-          <Text style={styles.smallLabel}>{partnerLang.endonym}</Text>
-          <Text style={styles.smallText}>{partnerSource}</Text>
-        </View>
-      )}
-
-      {/* Stage indicator */}
-      {activeTurn !== null && (
-        <View style={styles.stageRow}>
-          <Text style={styles.stageText}>{stageLabel(activeTurn.stage)}</Text>
-        </View>
-      )}
+      {/* Source line — what was actually said */}
+      <View style={paneStyles.sourceLine}>
+        {activeTurn !== null && ownSource.length > 0 ? (
+          <SourceLine label={speakerLang.endonym} text={ownSource} />
+        ) : activeTurn === null && partnerSource.length > 0 && incomingText.length > 0 ? (
+          <SourceLine label={partnerLang.endonym} text={partnerSource} />
+        ) : null}
+      </View>
 
       {incomingTurn?.stage === 'error' && (
-        <Text style={styles.errorText}>
-          ⚠ {incomingTurn.errorMessage ?? 'Error de traducción'}
+        <Text variant="bodySmall" tone="error" style={paneStyles.errorText}>
+          ⚠  {incomingTurn.errorMessage ?? 'Error de traducción'}
         </Text>
       )}
     </View>
   );
 }
 
-function stageLabel(stage: TurnStage): string {
-  switch (stage) {
-    case 'recording': return '● Grabando';
-    case 'transcribing': return '⋯ Transcribiendo';
-    case 'translating': return '⋯ Traduciendo';
-    case 'speaking': return '♪ Hablando';
-    case 'done': return '✓';
-    case 'error': return '⚠';
-    default: return '';
-  }
-}
-
-// ── Mic button with breathing pulse during active turn ───────────────────────
-
-interface MicButtonProps {
-  readonly label: string;
-  readonly isActive: boolean;
-  readonly isDisabled: boolean;
-  readonly onPressIn: () => void;
-  readonly onPressOut: () => void;
-}
-
-function MicButton({
-  label, isActive, isDisabled, onPressIn, onPressOut,
-}: MicButtonProps): React.JSX.Element {
-  const pulse = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    if (isActive) {
-      const loop = Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulse, {
-            toValue: 1,
-            duration: 800,
-            easing: Easing.inOut(Easing.quad),
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulse, {
-            toValue: 0,
-            duration: 800,
-            easing: Easing.inOut(Easing.quad),
-            useNativeDriver: true,
-          }),
-        ]),
-      );
-      loop.start();
-      return () => loop.stop();
-    } else {
-      pulse.setValue(0);
-    }
-  }, [isActive, pulse]);
-
-  const ringScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.6] });
-  const ringOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0] });
-
+function SourceLine({ label, text }: { readonly label: string; readonly text: string }): React.JSX.Element {
   return (
-    <Pressable
-      onPressIn={onPressIn}
-      onPressOut={onPressOut}
-      disabled={isDisabled}
-      hitSlop={8}
-      accessibilityRole="button"
-      accessibilityLabel={`Micrófono ${label}`}
-      accessibilityState={{ disabled: isDisabled, busy: isActive }}>
-      {({ pressed }) => (
-        <View style={styles.micWrap}>
-          {isActive && (
-            <Animated.View
-              style={[
-                styles.micRing,
-                { transform: [{ scale: ringScale }], opacity: ringOpacity },
-              ]}
-            />
-          )}
-          <View
-            style={[
-              styles.mic,
-              pressed && styles.micPressed,
-              isActive && styles.micActive,
-              isDisabled && styles.micDisabled,
-            ]}>
-            <Text style={styles.micGlyph}>{isActive ? '●' : '🎤'}</Text>
-            <Text style={styles.micLabel}>{label.toUpperCase()}</Text>
-          </View>
-        </View>
-      )}
-    </Pressable>
-  );
-}
-
-// ── Subtle "translating" dot pulse ───────────────────────────────────────────
-
-function DotPulse(): React.JSX.Element {
-  const a = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(a, { toValue: 1, duration: 600, useNativeDriver: true }),
-        Animated.timing(a, { toValue: 0, duration: 600, useNativeDriver: true }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [a]);
-  return (
-    <Animated.View
-      style={[styles.translatingDot, { opacity: a.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0.7] }) }]}
-    />
+    <View>
+      <Text variant="caption" tone="fgGhost" style={paneStyles.sourceLabel}>
+        {label.toUpperCase()}
+      </Text>
+      <Text variant="bodySmall" tone="fgFaint" numberOfLines={3}>
+        {text}
+      </Text>
+    </View>
   );
 }
 
 // ── Network pill ─────────────────────────────────────────────────────────────
 
-function NetworkPill({ state }: { state: 'unknown' | 'online' | 'offline' }): React.JSX.Element {
-  const color =
-    state === 'online' ? '#4ade80' :
-    state === 'offline' ? '#f87171' :
-    'rgba(255,255,255,0.35)';
+function NetworkPill({ state }: { readonly state: 'unknown' | 'online' | 'offline' }): React.JSX.Element {
+  const dotColor =
+    state === 'online' ? color.ok :
+    state === 'offline' ? color.error :
+    color.fgGhost;
   const label =
-    state === 'online' ? 'En línea' :
-    state === 'offline' ? 'Sin conexión' :
-    'Conectando…';
+    state === 'online' ? 'EN LÍNEA' :
+    state === 'offline' ? 'SIN CONEXIÓN' :
+    'CONECTANDO';
   return (
-    <View style={styles.netPill}>
-      <View style={[styles.netDot, { backgroundColor: color }]} />
-      <Text style={styles.netLabel}>{label}</Text>
+    <View style={pillStyles.pill}>
+      <View style={[pillStyles.dot, { backgroundColor: dotColor }]} />
+      <Text variant="mono" tone="fgFaint">{label}</Text>
     </View>
   );
 }
@@ -398,77 +331,127 @@ function NetworkPill({ state }: { state: 'unknown' | 'online' | 'offline' }): Re
 // ── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#000' },
+  root: { flex: 1, backgroundColor: color.bg },
   flex: { flex: 1 },
 
-  half: { flex: 1, paddingHorizontal: 24 },
-  halfTop: {},
-  halfBottom: { justifyContent: 'flex-end' },
+  half: { flex: 1, paddingHorizontal: space.xl },
+  halfTop: { justifyContent: 'flex-end' },
+  halfBottom: { justifyContent: 'space-between' },
+  flipped: { flex: 1, transform: [{ rotate: '180deg' }] },
 
-  statusRow: { flexDirection: 'row', alignItems: 'center', height: 28, marginBottom: 8 },
-  gear: { color: 'rgba(255,255,255,0.5)', fontSize: 18, paddingHorizontal: 6 },
-
-  netPill: {
+  topChromeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 10,
+    paddingTop: space.xs,
+    paddingBottom: space.xs,
   },
-  netDot: { width: 6, height: 6, borderRadius: 3, marginRight: 6 },
-  netLabel: { color: 'rgba(255,255,255,0.55)', fontSize: 11 },
-
-  pane: { flex: 1 },
-  paneTop: { justifyContent: 'flex-start' },
-  paneBottom: { justifyContent: 'flex-end' },
-
-  bigBlock: { paddingVertical: 12, minHeight: 100 },
-  bigText: { color: 'rgba(255,255,255,0.95)', fontSize: 26, fontWeight: '300', lineHeight: 34 },
-  placeholder: { color: 'rgba(255,255,255,0.10)', fontSize: 22, fontWeight: '300' },
-
-  smallBlock: { paddingVertical: 6, marginTop: 8 },
-  smallLabel: { color: 'rgba(255,255,255,0.30)', fontSize: 11, marginBottom: 2, letterSpacing: 0.8 },
-  smallText: { color: 'rgba(255,255,255,0.55)', fontSize: 14, lineHeight: 20 },
-
-  stageRow: { paddingTop: 6 },
-  stageText: { color: 'rgba(255,255,255,0.40)', fontSize: 11, letterSpacing: 0.8 },
-  translatingDot: {
-    width: 6, height: 6, borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.6)',
-    marginTop: 4,
+  bottomChromeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: space.xs,
   },
-  errorText: { color: 'rgba(248,113,113,0.85)', fontSize: 12, marginTop: 8 },
 
-  micBar: { paddingVertical: 4 },
-  divider: { height: 1, backgroundColor: 'rgba(255,255,255,0.06)' },
-  micRow: { flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 14 },
-  micWrap: { width: 92, height: 92, alignItems: 'center', justifyContent: 'center' },
-  mic: {
-    width: 76, height: 76, borderRadius: 38,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)',
+  micBar: {
+    paddingVertical: space.xs,
   },
-  micPressed: { backgroundColor: 'rgba(255,255,255,0.16)' },
-  micActive: { backgroundColor: 'rgba(244,114,182,0.25)', borderColor: 'rgba(244,114,182,0.5)' },
-  micDisabled: { opacity: 0.35 },
-  micRing: {
-    position: 'absolute',
-    width: 76, height: 76, borderRadius: 38,
-    borderWidth: 2, borderColor: 'rgba(244,114,182,0.5)',
+  dividerLine: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: color.hairline,
   },
-  micGlyph: { fontSize: 24 },
-  micLabel: { color: 'rgba(255,255,255,0.6)', fontSize: 10, marginTop: 2, letterSpacing: 1 },
+  micRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingVertical: space.md,
+  },
 
   bannerWrap: {
-    position: 'absolute', left: 16, right: 16, top: '45%',
+    position: 'absolute',
+    left: space.md,
+    right: space.md,
+    top: '45%',
     alignItems: 'center',
   },
   banner: {
-    backgroundColor: 'rgba(20,20,20,0.95)',
-    paddingHorizontal: 18, paddingVertical: 14, borderRadius: 14,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)',
+    backgroundColor: '#141414',
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: color.hairlineStrong,
   },
-  bannerText: { color: 'rgba(255,255,255,0.92)', fontSize: 13, textAlign: 'center' },
+});
+
+const paneStyles = StyleSheet.create({
+  pane: {
+    flex: 1,
+    paddingVertical: space.md,
+  },
+  topAlign: { justifyContent: 'flex-end' },
+  bottomAlign: { justifyContent: 'flex-start' },
+  flex: { flex: 1 },
+
+  identity: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: space.sm,
+    minHeight: 18,
+  },
+  identityDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: space.xs,
+  },
+  morphSlot: {
+    width: 22,
+    height: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  big: {
+    minHeight: 110,
+    justifyContent: 'flex-start',
+  },
+  bigText: {
+    color: color.fg,
+    fontSize: 30,
+    lineHeight: 38,
+    fontWeight: '300',
+    letterSpacing: -0.4,
+  },
+  placeholder: {
+    opacity: 0.45,
+  },
+
+  sourceLine: {
+    marginTop: space.md,
+    minHeight: 36,
+  },
+  sourceLabel: {
+    marginBottom: 4,
+  },
+  errorText: {
+    marginTop: space.xs,
+  },
+});
+
+const pillStyles = StyleSheet.create({
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: color.surface1,
+    paddingHorizontal: space.sm,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: color.hairline,
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 6,
+  },
 });
