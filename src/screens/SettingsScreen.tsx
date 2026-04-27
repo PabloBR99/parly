@@ -1,32 +1,22 @@
-// SettingsScreen — refined configuration surface.
+// SettingsScreen — minimal configuration surface.
 //
 // Sections:
-//   1. API key (kept in keychain, only sent to api.mistral.ai).
-//   2. Translation model picker (3 options).
-//   3. Languages — current pair + voice preview + re-pick action.
-//   4. Conversation — clear history.
+//   1. API key (kept in keychain, only sent to api.mistral.ai). Includes
+//      a one-tap validator that hits GET /v1/models.
+//   2. Conversation — clear history.
+//   3. Diagnóstico — log viewer (temporary, slated for removal).
 //
-// Visual: same dark editorial language as the rest of the app. Sections
-// are titled in mono uppercase microcopy; rows live inside Surface cards.
+// Idiomas se cambian desde la pantalla de conversación (chip pulsable
+// en cada panel). El modelo de traducción está fijado a Mistral Small
+// para esta build — no se ofrece selector.
 
 import React, { useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-} from 'react-native-reanimated';
-import {
-  useSettingsStore,
-  TRANSLATION_MODELS,
-  type TranslationModelId,
-} from '../store/settingsStore';
+import { useSettingsStore } from '../store/settingsStore';
 import { useConversationStore } from '../store/conversationStore';
-import { nativeTTSService } from '../services/tts/NativeTTSService';
 import { validateMistralApiKey, type KeyValidation } from '../services/auth/validateApiKey';
-import { getLanguage } from '../app/languages';
 import type { RootStackParamList } from '../navigation/types';
 import {
   Button,
@@ -34,7 +24,6 @@ import {
   Text,
   color,
   haptics,
-  motion,
   radius,
   space,
 } from '../ui';
@@ -45,16 +34,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const insets = useSafeAreaInsets();
   const apiKey = useSettingsStore(s => s.mistralApiKey);
   const setApiKey = useSettingsStore(s => s.setMistralApiKey);
-  const translationModel = useSettingsStore(s => s.translationModel);
-  const setTranslationModel = useSettingsStore(s => s.setTranslationModel);
-  const personA = useSettingsStore(s => s.personA);
-  const personB = useSettingsStore(s => s.personB);
-  const resetLanguagePair = useSettingsStore(s => s.resetLanguagePair);
-  const setLanguagePairConfigured = useSettingsStore(s => s.setLanguagePairConfigured);
   const clearConversation = useConversationStore(s => s.clear);
-
-  const langA = personA.language ? getLanguage(personA.language) : null;
-  const langB = personB.language ? getLanguage(personB.language) : null;
 
   // API-key validation state. `null` = not yet checked since last edit.
   const [keyValidation, setKeyValidation] = useState<KeyValidation | null>(null);
@@ -72,17 +52,6 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
     } finally {
       setValidating(false);
     }
-  };
-
-  const previewVoice = (langCode: string, sample: string) => {
-    haptics.tap();
-    void nativeTTSService.speakChunk(sample, langCode).catch(() => {});
-  };
-
-  const repickLanguages = () => {
-    resetLanguagePair();
-    setLanguagePairConfigured(false);
-    navigation.replace('LanguagePair');
   };
 
   const onClearHistory = () => {
@@ -152,52 +121,6 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         </Text>
       </Section>
 
-      {/* MODEL */}
-      <Section label="MODELO DE TRADUCCIÓN">
-        <Surface style={styles.list}>
-          {TRANSLATION_MODELS.map((m, idx) => (
-            <ModelOption
-              key={m.id}
-              id={m.id}
-              label={m.label}
-              selected={translationModel === m.id}
-              isLast={idx === TRANSLATION_MODELS.length - 1}
-              onPress={() => {
-                haptics.tick();
-                setTranslationModel(m.id);
-              }}
-            />
-          ))}
-        </Surface>
-      </Section>
-
-      {/* LANGUAGES */}
-      <Section label="IDIOMAS">
-        <Surface style={styles.langCard}>
-          <View style={styles.langRow}>
-            <LanguageSlot
-              label="OTRO"
-              accent={color.accentB}
-              language={langB}
-              onPreview={langB ? () => previewVoice(langB.code, sampleFor(langB.code)) : undefined}
-            />
-            <View style={styles.langDivider} />
-            <LanguageSlot
-              label="TÚ"
-              accent={color.accentA}
-              language={langA}
-              onPreview={langA ? () => previewVoice(langA.code, sampleFor(langA.code)) : undefined}
-            />
-          </View>
-          <Button
-            label="Cambiar idiomas"
-            variant="secondary"
-            onPress={repickLanguages}
-            style={styles.langCta}
-          />
-        </Surface>
-      </Section>
-
       {/* CONVERSATION */}
       <Section label="CONVERSACIÓN">
         <Button
@@ -217,7 +140,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
       </Section>
 
       <Text variant="mono" tone="fgGhost" style={styles.versionTag}>
-        PARLY v4.1 — DIPLOMATIC
+        PARLY v4.2 — DIPLOMATIC
       </Text>
     </ScrollView>
   );
@@ -289,124 +212,6 @@ function Section({
   );
 }
 
-// ── Model option (animated radio) ────────────────────────────────────────────
-
-interface ModelOptionProps {
-  readonly id: TranslationModelId;
-  readonly label: string;
-  readonly selected: boolean;
-  readonly isLast: boolean;
-  readonly onPress: () => void;
-}
-
-function ModelOption({
-  id, label, selected, isLast, onPress,
-}: ModelOptionProps): React.JSX.Element {
-  const fillScale = useSharedValue(selected ? 1 : 0);
-  React.useEffect(() => {
-    fillScale.value = withSpring(selected ? 1 : 0, motion.springSnappy);
-  }, [selected, fillScale]);
-
-  const fillStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: fillScale.value }],
-    opacity: fillScale.value,
-  }));
-
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="radio"
-      accessibilityState={{ selected }}>
-      <View style={[styles.modelOpt, !isLast && styles.modelOptDivider]}>
-        <View style={[styles.radioOuter, selected && styles.radioOuterSelected]}>
-          <Animated.View style={[styles.radioInner, fillStyle]} />
-        </View>
-        <View style={styles.modelLabelStack}>
-          <Text variant="body" tone={selected ? 'fg' : 'fgMuted'}>{label}</Text>
-        </View>
-        <Text variant="mono" tone="fgGhost">{id}</Text>
-      </View>
-    </Pressable>
-  );
-}
-
-// ── Language slot ────────────────────────────────────────────────────────────
-
-interface LanguageSlotProps {
-  readonly label: string;
-  readonly accent: string;
-  readonly language: ReturnType<typeof getLanguage> | null;
-  readonly onPreview?: () => void;
-}
-
-function LanguageSlot({ label, accent, language, onPreview }: LanguageSlotProps): React.JSX.Element {
-  return (
-    <View style={styles.langSlot}>
-      <View style={styles.langSlotHeader}>
-        <View style={[styles.langSlotDot, { backgroundColor: language ? accent : color.fgGhost }]} />
-        <Text variant="caption" tone="fgFaint">{label}</Text>
-      </View>
-      <Text variant="display" tone={language ? 'fg' : 'fgGhost'} style={styles.langSlotEndonym}>
-        {language ? language.endonym : '—'}
-      </Text>
-      {language && (
-        <View style={styles.langSlotMeta}>
-          <Text variant="bodySmall" tone="fgFaint">{language.emoji}  {language.name}</Text>
-          {onPreview && (
-            <Pressable
-              onPress={onPreview}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel={`Probar voz de ${language.name}`}>
-              <Text variant="mono" tone="fgMuted" style={styles.previewLink}>PROBAR ▷</Text>
-            </Pressable>
-          )}
-        </View>
-      )}
-    </View>
-  );
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function sampleFor(langCode: string): string {
-  const samples: Record<string, string> = {
-    en: 'Welcome.',
-    es: 'Bienvenido.',
-    fr: 'Bienvenue.',
-    de: 'Willkommen.',
-    it: 'Benvenuto.',
-    pt: 'Bem-vindo.',
-    nl: 'Welkom.',
-    ru: 'Добро пожаловать.',
-    uk: 'Ласкаво просимо.',
-    pl: 'Witamy.',
-    cs: 'Vítejte.',
-    el: 'Καλώς ήρθατε.',
-    tr: 'Hoş geldiniz.',
-    ar: 'أهلاً وسهلاً.',
-    he: 'ברוך הבא.',
-    fa: 'خوش آمدید.',
-    hi: 'स्वागत है.',
-    bn: 'স্বাগতম।',
-    ur: 'خوش آمدید۔',
-    zh: '欢迎。',
-    ja: 'ようこそ。',
-    ko: '환영합니다.',
-    vi: 'Xin chào.',
-    th: 'ยินดีต้อนรับ',
-    id: 'Selamat datang.',
-    sv: 'Välkommen.',
-    no: 'Velkommen.',
-    da: 'Velkommen.',
-    fi: 'Tervetuloa.',
-    ro: 'Bun venit.',
-    hu: 'Üdvözlöm.',
-    sw: 'Karibu.',
-  };
-  return samples[langCode.toLowerCase()] ?? 'Welcome.';
-}
-
 // ── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
@@ -475,85 +280,6 @@ const styles = StyleSheet.create({
   },
   verifyBtnDisabled: {
     opacity: 0.4,
-  },
-
-  list: {
-    padding: 0,
-  },
-  modelOpt: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: space.md,
-    paddingHorizontal: space.md,
-  },
-  modelOptDivider: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.hairline,
-  },
-  radioOuter: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 1.5,
-    borderColor: color.fgGhost,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: space.sm,
-  },
-  radioOuterSelected: {
-    borderColor: color.fg,
-  },
-  radioInner: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: color.fg,
-  },
-  modelLabelStack: {
-    flex: 1,
-  },
-
-  langCard: {
-    paddingVertical: space.md,
-  },
-  langRow: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    marginBottom: space.md,
-  },
-  langDivider: {
-    width: StyleSheet.hairlineWidth,
-    marginHorizontal: space.sm,
-    backgroundColor: color.hairline,
-  },
-  langSlot: {
-    flex: 1,
-    paddingHorizontal: 4,
-  },
-  langSlotHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: space.xs,
-  },
-  langSlotDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    marginRight: space.xs,
-  },
-  langSlotEndonym: {
-    marginBottom: space.xs,
-  },
-  langSlotMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  previewLink: {
-    paddingVertical: 4,
-  },
-  langCta: {
-    alignSelf: 'stretch',
   },
 
   versionTag: {
