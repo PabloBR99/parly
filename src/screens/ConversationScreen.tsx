@@ -33,7 +33,7 @@
 //   │   ⌘  ajustes                │ ← user's edge chrome
 //   └─────────────────────────────┘
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StatusBar, StyleSheet, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
@@ -47,6 +47,7 @@ import { useSettingsStore } from '../store/settingsStore';
 import { useConversationStore, type Turn, type TurnStage } from '../store/conversationStore';
 import { useNetworkStore } from '../store/networkStore';
 import { conversationOrchestrator } from '../services/pipeline/orchestrator';
+import { nativeTTSService } from '../services/tts/NativeTTSService';
 import { getLanguage } from '../app/languages';
 import type { PersonId } from '../app/types';
 import type { RootStackParamList } from '../navigation/types';
@@ -56,6 +57,7 @@ import {
   StateMorph,
   Text,
   color,
+  haptics,
   motion,
   space,
 } from '../ui';
@@ -89,6 +91,10 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   );
   const lastTurnA = useMemo(() => findLastTurn(turns, 'person_a'), [turns]);
   const lastTurnB = useMemo(() => findLastTurn(turns, 'person_b'), [turns]);
+
+  // Haptic choreography — felt across the whole turn lifecycle so the user
+  // doesn't need to read the screen to know where the machine is.
+  useTurnHaptics(activeTurn, lastTurnA, lastTurnB);
 
   const noKey = apiKey.trim() === '';
 
@@ -127,6 +133,12 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   const topActiveTurn = activeTurn?.speakerId === 'person_b' ? activeTurn : null;
   const bottomActiveTurn = activeTurn?.speakerId === 'person_a' ? activeTurn : null;
 
+  // First-run discoverability — the press-and-hold gesture isn't universal,
+  // especially for older users who expect a single tap. We surface a quiet
+  // hint near each disc until either side completes its first turn, then
+  // it disappears for good.
+  const firstRun = !noKey && turns.length === 0;
+
   // Each speaker's PANE shows what the OTHER said in THEIR language.
   // Partner reads what user said → take user's last turn (lastTurnA).
   // User reads what partner said → take partner's last turn (lastTurnB).
@@ -152,6 +164,7 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
             edgePadding={insets.top + space.md}
             edgeContent={<NetworkPill state={networkState} />}
             disabled={noKey || (!!activeTurn && activeTurn?.speakerId !== 'person_b')}
+            firstRun={firstRun}
             onPressIn={() => handleMicPressIn('person_b')}
             onPressOut={handleMicPressOut}
             onChangeLanguage={() => setPickerSlot('partner')}
@@ -183,6 +196,7 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
             </Pressable>
           }
           disabled={noKey || (!!activeTurn && activeTurn?.speakerId !== 'person_a')}
+          firstRun={firstRun}
           onPressIn={() => handleMicPressIn('person_a')}
           onPressOut={handleMicPressOut}
           onChangeLanguage={() => setPickerSlot('self')}
@@ -195,13 +209,13 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
             style={styles.banner}
             onPress={() => navigation.navigate('Settings')}>
             <Text variant="caption" tone="fgFaint" style={styles.bannerEyebrow}>
-              CONFIGURACIÓN
+              ANTES DE EMPEZAR
             </Text>
             <Text variant="body" tone="fg" style={styles.bannerBody}>
-              Falta la API key de Mistral.
+              Conecta Parly con su cerebro.
             </Text>
             <Text variant="bodySmall" tone="fgMuted" style={styles.bannerHint}>
-              Toca para añadirla.
+              Toca aquí — te guiamos paso a paso.
             </Text>
           </Pressable>
         </View>
@@ -224,6 +238,70 @@ function findLastTurn(turns: readonly Turn[], speakerId: PersonId): Turn | null 
     if (turns[i].speakerId === speakerId) return turns[i];
   }
   return null;
+}
+
+function stageMicrocopy(stage: TurnStage | null): string {
+  switch (stage) {
+    case 'recording': return 'ESCUCHANDO';
+    case 'transcribing':
+    case 'translating': return 'PENSANDO';
+    case 'speaking': return 'HABLANDO';
+    case 'error': return 'ERROR';
+    default: return '';
+  }
+}
+
+// useTurnHaptics — wires the `haptics` module's pulse / tick / done / error
+// to the orchestrator's per-turn state machine. The PTT-press tap is fired
+// inside PTTButton itself; everything else flows through here so the felt
+// rhythm of a turn matches its visual rhythm without each callsite having
+// to know what to fire when.
+function useTurnHaptics(
+  active: Turn | null,
+  lastA: Turn | null,
+  lastB: Turn | null,
+): void {
+  // Active stage transitions — pulse on pipeline moves, tick on first speech.
+  const prevActive = useRef<TurnStage | null>(null);
+  useEffect(() => {
+    const curr = active?.stage ?? null;
+    const prev = prevActive.current;
+    if (prev !== curr) {
+      if (
+        (prev === 'recording' && curr === 'transcribing') ||
+        (prev === 'transcribing' && curr === 'translating')
+      ) {
+        haptics.pulse();
+      }
+      if (prev === 'translating' && curr === 'speaking') {
+        haptics.tick();
+      }
+      prevActive.current = curr;
+    }
+  }, [active?.stage]);
+
+  // Per-side terminal transitions — done / error when the last turn for
+  // a speaker finishes. We split A and B because each speaker's lastTurn
+  // is independent; one ends without disturbing the other's prevStage ref.
+  useTerminalHaptic(lastA);
+  useTerminalHaptic(lastB);
+}
+
+function useTerminalHaptic(turn: Turn | null): void {
+  const prev = useRef<TurnStage | null>(null);
+  useEffect(() => {
+    const curr = turn?.stage ?? null;
+    if (prev.current !== curr) {
+      // Only fire on TRANSITIONS into terminal stages — and never on the
+      // first observation (prev=null), which can fire spuriously when a
+      // store rehydrates a 'done' turn after navigation.
+      if (prev.current !== null) {
+        if (curr === 'done') haptics.done();
+        else if (curr === 'error') haptics.error();
+      }
+      prev.current = curr;
+    }
+  }, [turn?.stage]);
 }
 
 // ── SpeakerHalf ──────────────────────────────────────────────────────────────
@@ -254,6 +332,7 @@ interface SpeakerHalfProps {
   readonly edgePadding: number;
   readonly edgeContent: React.ReactNode;
   readonly disabled: boolean;
+  readonly firstRun: boolean;
   readonly onPressIn: () => void;
   readonly onPressOut: () => void;
   readonly onChangeLanguage: () => void;
@@ -271,6 +350,7 @@ function SpeakerHalf({
   edgePadding,
   edgeContent,
   disabled,
+  firstRun,
   onPressIn,
   onPressOut,
   onChangeLanguage,
@@ -282,6 +362,7 @@ function SpeakerHalf({
   // rendered in MY language.
   const incomingText = incomingTurn?.translatedText ?? '';
   const incomingStage = incomingTurn?.stage ?? null;
+  const hasIncomingText = incomingText.length > 0;
 
   // Source line — the user's own captured speech while talking, OR the
   // partner's source if a turn just completed (so the listener can verify
@@ -289,17 +370,37 @@ function SpeakerHalf({
   const ownSource = activeTurn?.sourceText ?? '';
   const partnerSource = incomingTurn?.sourceText ?? '';
 
-  // Animate big text in.
-  const opacity = useSharedValue(0);
+  // Reveal — single shared value driving opacity AND a tiny translateY,
+  // so the line "settles in" rather than just popping. Depends on the
+  // boolean, NOT on incomingText, so each streamed sentence doesn't
+  // re-trigger the entrance and jiggle the line back into place.
+  const reveal = useSharedValue(0);
   useEffect(() => {
-    if (incomingText.length > 0) {
-      opacity.value = withTiming(1, { duration: motion.normal, easing: Easing.out(Easing.quad) });
-    } else {
-      opacity.value = withTiming(0, { duration: motion.fast });
-    }
-  }, [incomingText, opacity]);
+    reveal.value = hasIncomingText
+      ? withTiming(1, { duration: motion.normal, easing: Easing.out(Easing.quad) })
+      : withTiming(0, { duration: motion.fast });
+  }, [hasIncomingText, reveal]);
 
-  const bigStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  const bigStyle = useAnimatedStyle(() => ({
+    opacity: reveal.value,
+    transform: [{ translateY: (1 - reveal.value) * 6 }],
+  }));
+
+  // Replay — re-speak the partner's last completed translation. Gated on
+  // idle (no current turn) so the audio never collides with orchestrator
+  // TTS still in flight. We stop() any straggling utterance defensively.
+  const canReplay =
+    activeTurn === null &&
+    incomingTurn !== null &&
+    incomingTurn.stage === 'done' &&
+    hasIncomingText;
+
+  const handleReplay = () => {
+    if (!canReplay || !incomingTurn) return;
+    haptics.tick();
+    nativeTTSService.stop();
+    void nativeTTSService.speakChunk(incomingText, incomingTurn.targetLang).catch(() => {});
+  };
 
   const stageForMorph: TurnStage | null = activeTurn?.stage ?? incomingStage ?? null;
   const showMorph = stageForMorph !== null && stageForMorph !== 'done';
@@ -318,10 +419,20 @@ function SpeakerHalf({
       {/* 1. Source line — closest to the center divider. */}
       <View style={halfStyles.sourceSlot}>{sourceNode}</View>
 
-      {/* 2. Big translated text — the hero. */}
+      {/* 2. Big translated text — the hero. Tappable when complete to replay. */}
       <View style={halfStyles.big}>
-        {incomingText.length > 0 ? (
-          <Animated.Text style={[halfStyles.bigText, bigStyle]}>{incomingText}</Animated.Text>
+        {hasIncomingText ? (
+          <Pressable
+            onPress={canReplay ? handleReplay : undefined}
+            disabled={!canReplay}
+            accessibilityRole={canReplay ? 'button' : undefined}
+            accessibilityLabel={canReplay ? 'Volver a escuchar la traducción' : undefined}
+            hitSlop={6}
+            style={({ pressed }) => [pressed && canReplay && halfStyles.bigPressed]}>
+            <Animated.Text style={[halfStyles.bigText, bigStyle]}>
+              {incomingText}
+            </Animated.Text>
+          </Pressable>
         ) : (
           <Text variant="displayHuge" tone="fgGhost" style={halfStyles.placeholder}>
             {speakerLang.endonym}
@@ -334,7 +445,8 @@ function SpeakerHalf({
         )}
       </View>
 
-      {/* 3. Identity strip — language label + state morph. Tap to change. */}
+      {/* 3. Identity strip — language chip on the left, status (or replay
+          affordance once a turn is done) on the right. */}
       <View style={halfStyles.identityRow}>
         <Pressable
           onPress={onChangeLanguage}
@@ -351,11 +463,27 @@ function SpeakerHalf({
           </Text>
         </Pressable>
         <View style={halfStyles.flex} />
-        {showMorph && (
-          <View style={halfStyles.morphSlot}>
-            <StateMorph stage={stageForMorph} accent={accent} size={18} />
+        {showMorph ? (
+          <View style={halfStyles.statusRow}>
+            <Text variant="mono" tone="fgFaint" style={halfStyles.microcopy}>
+              {stageMicrocopy(stageForMorph)}
+            </Text>
+            <View style={halfStyles.morphSlot}>
+              <StateMorph stage={stageForMorph} accent={accent} size={18} />
+            </View>
           </View>
-        )}
+        ) : canReplay ? (
+          <Pressable
+            onPress={handleReplay}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Volver a escuchar la traducción"
+            style={({ pressed }) => [halfStyles.replayBtn, pressed && halfStyles.replayPressed]}>
+            <Text variant="mono" tone="fgGhost" style={halfStyles.replayLabel}>
+              ↺  REPETIR
+            </Text>
+          </Pressable>
+        ) : null}
       </View>
 
       {/* 4. PTT button — the object. */}
@@ -372,6 +500,15 @@ function SpeakerHalf({
           onPressOut={onPressOut}
         />
       </View>
+
+      {/* First-run discoverability hint — disappears for good after the
+          first turn from either side completes. Quiet enough that it
+          doesn't shout, present enough to teach the gesture. */}
+      {firstRun && !activeTurn && (
+        <Text variant="bodySmall" tone="fgGhost" style={halfStyles.firstRunHint}>
+          mantén pulsado para hablar
+        </Text>
+      )}
 
       {/* 5. Edge chrome — at the speaker's near-edge of the phone. */}
       <View style={[halfStyles.edgeRow, { paddingBottom: edgePadding }]}>
@@ -528,6 +665,34 @@ const halfStyles = StyleSheet.create({
     height: 22,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  microcopy: {
+    marginRight: 10,
+    fontSize: 10,
+    letterSpacing: 1.6,
+  },
+  replayBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  replayPressed: {
+    opacity: 0.4,
+  },
+  replayLabel: {
+    fontSize: 10,
+    letterSpacing: 1.6,
+  },
+  bigPressed: {
+    opacity: 0.65,
+  },
+  firstRunHint: {
+    textAlign: 'center',
+    fontStyle: 'italic',
+    paddingTop: space.sm,
   },
 
   // 4. PTT button slot.

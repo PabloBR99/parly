@@ -27,6 +27,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from './Text';
 import { color, radius, space } from '../theme';
+import { haptics } from '../haptics';
 import { LANGUAGES } from '../../app/languages';
 import { log } from '../../services/log/logStore';
 import type { Language } from '../../app/types';
@@ -60,6 +61,18 @@ export function LanguagePickerSheet({
   const insets = useSafeAreaInsets();
   const [filter, setFilter] = useState('');
 
+  // Snapshot of excludeCode while the sheet is open. We deliberately do NOT
+  // re-read excludeCode during dismissal — when the parent flips the picker
+  // slot to null, the prop becomes `undefined` and the "excluded" language
+  // would re-enter the list, growing the sheet by one row in the same frame
+  // the slide-down animation begins. Bottom-anchored content + a taller
+  // measurement makes the top edge jump UP, exactly the erratic motion the
+  // user reported.
+  const [frozenExclude, setFrozenExclude] = useState(excludeCode);
+  useEffect(() => {
+    if (visible) setFrozenExclude(excludeCode);
+  }, [visible, excludeCode]);
+
   // Reset filter when sheet closes/reopens.
   useEffect(() => {
     if (!visible) setFilter('');
@@ -70,7 +83,7 @@ export function LanguagePickerSheet({
   const groups = useMemo(() => {
     return SCRIPT_GROUPS.map(g => {
       const codes = g.codes
-        .filter(c => c !== excludeCode)
+        .filter(c => c !== frozenExclude)
         .map(c => LANGUAGES.find(l => l.code === c))
         .filter((l): l is Language => l !== undefined)
         .filter(l => {
@@ -83,7 +96,7 @@ export function LanguagePickerSheet({
         });
       return { ...g, languages: codes };
     }).filter(g => g.languages.length > 0);
-  }, [excludeCode, filterLower]);
+  }, [frozenExclude, filterLower]);
 
   return (
     <Modal
@@ -154,6 +167,7 @@ function LanguageRow({
 }): React.JSX.Element {
   const handle = () => {
     log.info(`[picker] row tap code=${language.code} name=${language.name}`);
+    haptics.tick();
     onPress();
   };
   return (
