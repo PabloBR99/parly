@@ -48,10 +48,6 @@ export interface StreamingStartOptions {
   readonly apiKey: string;
   readonly speakerId?: PersonId; // purely for UI routing in the partial store
   readonly model?: string;
-  /** BCP-47 language hint. When set, Voxtral commits to this language and
-   *  doesn't try to detect — prevents "the model heard Spanish so it
-   *  transcribed it phonetically as Japanese" failure mode. */
-  readonly language?: string;
 }
 
 /**
@@ -122,10 +118,9 @@ export class VoxtralRealtimeClient {
     const model = options.model ?? DEFAULT_MODEL;
     const url = `${ENDPOINT}?model=${encodeURIComponent(model)}`;
     const headers = { Authorization: `Bearer ${options.apiKey}` };
-    const language = options.language;
 
     log.info(
-      `[voxtral] connecting model=${model} lang=${language ?? 'auto'} ` +
+      `[voxtral] connecting model=${model} ` +
       `keyLen=${options.apiKey.length} keyHead=${options.apiKey.slice(0, 4)}…`,
     );
 
@@ -159,12 +154,12 @@ export class VoxtralRealtimeClient {
       ws.onopen = () => {
         if (gen !== this.generation) return;
         log.info('[voxtral] onopen — sending session.update');
-        // Some servers allow implicit audio_format from handshake; we send an
-        // explicit session.update so our assumption is unambiguous.
-        const session: Record<string, unknown> = {
+        // Voxtral's session schema only accepts audio_format (extra fields are
+        // rejected with Pydantic extra_forbidden). Language is auto-detected
+        // server-side; there's no documented hint parameter.
+        const session = {
           audio_format: { encoding: 'pcm_s16le', sample_rate: SAMPLE_RATE },
         };
-        if (language) session.language = language;
         try {
           ws.send(JSON.stringify({ type: 'session.update', session }));
         } catch (e) {

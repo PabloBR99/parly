@@ -52,7 +52,7 @@ export interface AudioCapture {
 
 export interface VoxtralLike {
   start(
-    options: { apiKey: string; model?: string; language?: string },
+    options: { apiKey: string; model?: string },
     callbacks: {
       onPartial: (text: string) => void;
       onFinal: (text: string, language?: string) => void;
@@ -210,7 +210,6 @@ export class ConversationOrchestrator {
         {
           apiKey: cfg.apiKey,
           model: cfg.sttModel ?? DEFAULT_STT_MODEL,
-          language: args.sourceLang,
         },
         {
           onPartial: (text) => this.handlePartial(id, text),
