@@ -1,20 +1,21 @@
 // LanguagePickerSheet — modal bottom sheet for picking a language.
 //
 // Behavior:
-//   - Backdrop fades in from 0 → 0.55 over 220ms.
-//   - Sheet rises 100% → 0 with a soft spring.
-//   - Search bar at top; below: scrollable list grouped by script family.
-//   - Tap a row → onSelect(code) → caller closes sheet.
-//   - Tap backdrop or pull-down handle → onClose().
+//   - Backdrop fades + sheet rises when `visible` flips to true.
+//   - Tapping a row → onSelect(code).
+//   - Tapping backdrop or pull-down handle → onClose().
 //
-// We don't use a native Modal — RN's Modal on Android has subtle status-bar
-// flicker issues and we want full motion control. Instead it's an
-// absolutely-positioned overlay rendered into a Portal-less tree (the
-// caller toggles its visibility).
+// Implementation note: we render the sheet inside a native <Modal> for
+// reliability across Android versions. Earlier hand-rolled overlay used a
+// runOnJS callback inside withTiming + autoFocus on a TextInput, which on
+// some Android builds crashed under React 19 + Reanimated 4. The Modal
+// path avoids both: it appears/disappears instantly, and we layer a
+// Reanimated entrance animation on top for polish.
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -24,7 +25,6 @@ import {
 } from 'react-native';
 import Animated, {
   Easing,
-  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -42,37 +42,17 @@ interface LanguagePickerSheetProps {
   readonly onClose: () => void;
 }
 
-// Script-family grouping — gives the picker an editorial, respectful structure.
-// Ordered by how close to the user's likely diplomatic context they are.
 const SCRIPT_GROUPS: { readonly title: string; readonly codes: readonly string[] }[] = [
   {
     title: 'Latina',
     codes: ['es', 'en', 'fr', 'de', 'it', 'pt', 'nl', 'pl', 'cs', 'tr', 'sv', 'no', 'da', 'fi', 'ro', 'hu', 'sw', 'vi', 'id'],
   },
-  {
-    title: 'Cirílica',
-    codes: ['ru', 'uk'],
-  },
-  {
-    title: 'Griega',
-    codes: ['el'],
-  },
-  {
-    title: 'Árabe / Hebrea',
-    codes: ['ar', 'he', 'fa', 'ur'],
-  },
-  {
-    title: 'Devanagari / Bengalí',
-    codes: ['hi', 'bn'],
-  },
-  {
-    title: 'CJK',
-    codes: ['zh', 'ja', 'ko'],
-  },
-  {
-    title: 'Tailandés',
-    codes: ['th'],
-  },
+  { title: 'Cirílica', codes: ['ru', 'uk'] },
+  { title: 'Griega', codes: ['el'] },
+  { title: 'Árabe / Hebrea', codes: ['ar', 'he', 'fa', 'ur'] },
+  { title: 'Devanagari / Bengalí', codes: ['hi', 'bn'] },
+  { title: 'CJK', codes: ['zh', 'ja', 'ko'] },
+  { title: 'Tailandés', codes: ['th'] },
 ];
 
 export function LanguagePickerSheet({
@@ -80,40 +60,14 @@ export function LanguagePickerSheet({
   excludeCode,
   onSelect,
   onClose,
-}: LanguagePickerSheetProps): React.JSX.Element | null {
+}: LanguagePickerSheetProps): React.JSX.Element {
   const insets = useSafeAreaInsets();
   const [filter, setFilter] = useState('');
-  const [mounted, setMounted] = useState(visible);
 
-  const opacity = useSharedValue(0);
-  const translate = useSharedValue(1);
-
+  // Reset filter when sheet closes/reopens.
   useEffect(() => {
-    if (visible) {
-      setMounted(true);
-      opacity.value = withTiming(1, { duration: motion.normal, easing: Easing.out(Easing.quad) });
-      translate.value = withTiming(0, { duration: motion.normal + 80, easing: Easing.out(Easing.cubic) });
-    } else if (mounted) {
-      opacity.value = withTiming(0, { duration: motion.fast, easing: Easing.in(Easing.quad) });
-      translate.value = withTiming(1, {
-        duration: motion.normal,
-        easing: Easing.in(Easing.cubic),
-      }, (finished) => {
-        if (finished) runOnJS(setMounted)(false);
-      });
-    }
-  }, [visible, mounted, opacity, translate]);
-
-  const backdropStyle = useAnimatedStyle(() => ({
-    opacity: opacity.value * 0.6,
-  }));
-
-  const sheetStyle = useAnimatedStyle(() => ({
-    transform: [
-      { translateY: translate.value * 600 },
-    ],
-    opacity: opacity.value,
-  }));
+    if (!visible) setFilter('');
+  }, [visible]);
 
   const filterLower = filter.trim().toLowerCase();
 
@@ -135,17 +89,84 @@ export function LanguagePickerSheet({
     }).filter(g => g.languages.length > 0);
   }, [excludeCode, filterLower]);
 
-  if (!mounted) return null;
+  return (
+    <Modal
+      visible={visible}
+      onRequestClose={onClose}
+      transparent
+      animationType="none"
+      statusBarTranslucent>
+      <SheetContent
+        visible={visible}
+        groups={groups}
+        filter={filter}
+        onFilterChange={setFilter}
+        onSelect={onSelect}
+        onClose={onClose}
+        insetBottom={insets.bottom}
+      />
+    </Modal>
+  );
+}
+
+interface SheetContentProps {
+  readonly visible: boolean;
+  readonly groups: { title: string; languages: Language[] }[];
+  readonly filter: string;
+  readonly onFilterChange: (s: string) => void;
+  readonly onSelect: (code: string) => void;
+  readonly onClose: () => void;
+  readonly insetBottom: number;
+}
+
+function SheetContent({
+  visible,
+  groups,
+  filter,
+  onFilterChange,
+  onSelect,
+  onClose,
+  insetBottom,
+}: SheetContentProps): React.JSX.Element {
+  const opacity = useSharedValue(0);
+  const translate = useSharedValue(40);
+
+  useEffect(() => {
+    if (visible) {
+      opacity.value = withTiming(1, { duration: motion.normal, easing: Easing.out(Easing.quad) });
+      translate.value = withTiming(0, { duration: motion.normal + 80, easing: Easing.out(Easing.cubic) });
+    } else {
+      opacity.value = 0;
+      translate.value = 40;
+    }
+  }, [visible, opacity, translate]);
+
+  const backdropStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value * 0.62,
+  }));
+
+  const sheetStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: translate.value }],
+    opacity: opacity.value,
+  }));
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-      {/* Backdrop */}
       <Animated.View style={[styles.backdrop, backdropStyle]}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel="Cerrar selector" />
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Cerrar selector"
+        />
       </Animated.View>
 
-      {/* Sheet */}
-      <Animated.View style={[styles.sheet, { paddingBottom: insets.bottom + space.md }, sheetStyle]}>
+      <Animated.View
+        style={[
+          styles.sheet,
+          { paddingBottom: insetBottom + space.md },
+          sheetStyle,
+        ]}>
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.kavoid}>
@@ -159,10 +180,9 @@ export function LanguagePickerSheet({
               placeholder="Buscar — Español, English, 日本語…"
               placeholderTextColor={color.fgGhost}
               value={filter}
-              onChangeText={setFilter}
+              onChangeText={onFilterChange}
               autoCapitalize="none"
               autoCorrect={false}
-              autoFocus
             />
           </View>
           <ScrollView
@@ -198,25 +218,18 @@ function LanguageRow({
   readonly language: Language;
   readonly onPress: () => void;
 }): React.JSX.Element {
-  const press = useSharedValue(0);
-  const animated = useAnimatedStyle(() => ({
-    backgroundColor: press.value > 0 ? color.surface2 : 'transparent',
-  }));
   return (
     <Pressable
-      onPressIn={() => { press.value = withTiming(1, { duration: 60 }); }}
-      onPressOut={() => { press.value = withTiming(0, { duration: 120 }); }}
       onPress={onPress}
+      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
       accessibilityRole="button"
       accessibilityLabel={`Elegir ${language.name}`}>
-      <Animated.View style={[styles.row, animated]}>
-        <Text style={styles.rowEmoji}>{language.emoji}</Text>
-        <View style={styles.rowText}>
-          <Text variant="body" tone="fg">{language.endonym}</Text>
-          <Text variant="bodySmall" tone="fgFaint">{language.name}</Text>
-        </View>
-        <Text variant="mono" tone="fgGhost">{language.code.toUpperCase()}</Text>
-      </Animated.View>
+      <Text style={styles.rowEmoji}>{language.emoji}</Text>
+      <View style={styles.rowText}>
+        <Text variant="body" tone="fg">{language.endonym}</Text>
+        <Text variant="bodySmall" tone="fgFaint">{language.name}</Text>
+      </View>
+      <Text variant="mono" tone="fgGhost">{language.code.toUpperCase()}</Text>
     </Pressable>
   );
 }
@@ -241,8 +254,7 @@ const styles = StyleSheet.create({
     borderColor: color.hairline,
   },
   kavoid: {
-    flex: 0,
-    minHeight: 200,
+    minHeight: 240,
   },
   handle: {
     alignSelf: 'center',
@@ -288,6 +300,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.md,
     paddingVertical: 12,
     borderRadius: radius.md,
+  },
+  rowPressed: {
+    backgroundColor: color.surface2,
   },
   rowEmoji: {
     fontSize: 22,
