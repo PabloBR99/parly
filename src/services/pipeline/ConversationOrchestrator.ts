@@ -218,6 +218,17 @@ export class ConversationOrchestrator {
         },
       );
     } catch (e) {
+      // If endTurn already advanced state to 'transcribing', the user
+      // released the PTT before the WS handshake completed. Treat as a
+      // quiet user-cancel: no error UI, just snap the turn closed.
+      // Re-read via getState to defeat TS's narrow-on-assignment.
+      if ((this.state as OrchestratorState) === 'transcribing' && this.activeTurnId === id) {
+        log.info('[orch] handshake aborted by quick release — turn cancelled');
+        const store = (this.deps.conversationStore ?? useConversationStore).getState();
+        store.endTurn(id, { sourceText: '', translatedText: '', stage: 'done' });
+        this.completeTurn(id);
+        return;
+      }
       // start() rejection: handshake/auth failure
       log.error('[orch] Voxtral handshake rejected', e instanceof Error ? e : new Error(String(e)));
       void this.deps.audioCapture.stopStreaming().catch(() => {});

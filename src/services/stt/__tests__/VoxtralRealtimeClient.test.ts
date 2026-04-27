@@ -261,6 +261,36 @@ describe('VoxtralRealtimeClient', () => {
     expect(rec.finals[0].text).toBe('ok');
   });
 
+  it('end() during connecting rejects pending start() (fast-tap freeze fix)', async () => {
+    const fake = createFakeWs();
+    const svc = new VoxtralRealtimeClient(fake.factory);
+    const rec = recording();
+
+    const startPromise = svc.start({ apiKey: 'sk' }, rec.callbacks);
+    // No 'open' or 'session.created' fired — still 'connecting'.
+    expect(svc.currentState).toBe('connecting');
+
+    await svc.end();
+
+    await expect(startPromise).rejects.toThrow(/handshake aborted/);
+    expect(svc.currentState).toBe('closed');
+    expect(rec.finals).toHaveLength(0);
+  });
+
+  it('cancel() during connecting rejects pending start()', async () => {
+    const fake = createFakeWs();
+    const svc = new VoxtralRealtimeClient(fake.factory);
+    const rec = recording();
+
+    const startPromise = svc.start({ apiKey: 'sk' }, rec.callbacks);
+    expect(svc.currentState).toBe('connecting');
+
+    svc.cancel();
+
+    await expect(startPromise).rejects.toThrow(/handshake cancelled/);
+    expect(svc.currentState).toBe('closed');
+  });
+
   it('cancel() closes without firing onFinal', async () => {
     const fake = createFakeWs();
     const svc = new VoxtralRealtimeClient(fake.factory);

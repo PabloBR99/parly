@@ -87,6 +87,11 @@ export class VoxtralRealtimeClient {
   private detectedLanguage: string | undefined;
   private sessionReady = false;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Captured so end()/cancel() can reject a pending start() during the
+   *  'connecting' phase. Without this, an early abort calls cleanup() and
+   *  silently nulls the WS handlers, leaving start()'s Promise forever
+   *  pending — which is exactly the "fast-tap freeze" the user reported. */
+  private handshakeReject: ((err: Error) => void) | null = null;
   /** Chunks fed before session.created — drained once the session is ready. */
   private preSessionChunkQueue: string[] = [];
   private generation = 0;
@@ -135,11 +140,13 @@ export class VoxtralRealtimeClient {
     this.ws = ws;
 
     return new Promise<void>((resolve, reject) => {
+      this.handshakeReject = reject;
       const settle = (fn: () => void) => {
         if (this.handshakeTimer) {
           clearTimeout(this.handshakeTimer);
           this.handshakeTimer = null;
         }
+        this.handshakeReject = null;
         fn();
       };
 
@@ -276,6 +283,15 @@ export class VoxtralRealtimeClient {
    * timeout/error). The onFinal callback fires before this resolves.
    */
   async end(finalTimeoutMs = 5_000): Promise<void> {
+    if (this.state === 'connecting') {
+      // User released before the WS finished handshaking. Reject the pending
+      // start() so the caller's `await` unblocks instead of hanging forever.
+      const reject = this.handshakeReject;
+      this.handshakeReject = null;
+      this.cleanup();
+      reject?.(new Error('Voxtral handshake aborted'));
+      return;
+    }
     if (this.state !== 'streaming') {
       this.cleanup();
       return;
@@ -313,6 +329,13 @@ export class VoxtralRealtimeClient {
   /** Abort without waiting for final. No onFinal fired. */
   cancel(): void {
     if (this.state === 'idle' || this.state === 'closed') return;
+    if (this.state === 'connecting') {
+      const reject = this.handshakeReject;
+      this.handshakeReject = null;
+      this.cleanup();
+      reject?.(new Error('Voxtral handshake cancelled'));
+      return;
+    }
     this.cleanup();
   }
 
@@ -344,6 +367,7 @@ export class VoxtralRealtimeClient {
       clearTimeout(this.handshakeTimer);
       this.handshakeTimer = null;
     }
+    this.handshakeReject = null;
     if (this.ws) {
       this.ws.onopen = null;
       this.ws.onmessage = null;
