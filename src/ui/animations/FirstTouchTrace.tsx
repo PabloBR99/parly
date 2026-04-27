@@ -55,25 +55,24 @@ export function FirstTouchTrace({
     );
   }, [side, progress]);
 
-  // Anchor at the speaker's edge so scaleY grows TOWARD the partner.
-  // `transformOrigin` is bundled into the animated style (not the inline
-  // style array) because Android's old-architecture renderer ignores it
-  // when it lives on a different style object than the `transform` it
-  // anchors — we'd see the line grow from the centre in both directions
-  // instead of from the speaker's disc.
-  const origin: 'top' | 'bottom' = side === 'A' ? 'bottom' : 'top';
-
   const animStyle = useAnimatedStyle(() => {
     const grow = Math.min(progress.value, 1);
     const fade = Math.max(0, progress.value - 1);
     return {
       transform: [{ scaleY: grow }],
       opacity: 1 - fade,
-      transformOrigin: origin,
     };
   });
 
   if (side === null) return null;
+
+  // Anchor on the speaker's edge so scaleY grows TOWARD the partner. Kept
+  // out of the worklet — Reanimated 4's animated-style pipeline doesn't
+  // process `transformOrigin`, so it has to ride on a static style sibling.
+  // Two-token form ('center top' / 'center bottom') is the most portable
+  // across RN / Fabric / old-arch on Android.
+  const origin: 'center top' | 'center bottom' =
+    side === 'A' ? 'center bottom' : 'center top';
 
   const lineColor = side === 'A' ? warmColor : coolColor;
   const haloColor = side === 'A' ? warmHalo : coolHalo;
@@ -81,10 +80,18 @@ export function FirstTouchTrace({
   return (
     <View pointerEvents="none" style={styles.fill}>
       <Animated.View
-        style={[styles.halo, { backgroundColor: haloColor }, animStyle]}
+        style={[
+          styles.halo,
+          { backgroundColor: haloColor, transformOrigin: origin },
+          animStyle,
+        ]}
       />
       <Animated.View
-        style={[styles.line, { backgroundColor: lineColor }, animStyle]}
+        style={[
+          styles.line,
+          { backgroundColor: lineColor, transformOrigin: origin },
+          animStyle,
+        ]}
       />
     </View>
   );

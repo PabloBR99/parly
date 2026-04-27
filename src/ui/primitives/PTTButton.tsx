@@ -72,7 +72,10 @@ const COOL_BLOOM: BloomPalette = {
   deep: color.bloomCoolDeep,
 };
 
-const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+// Inlined inside each worklet below — Reanimated 4's Babel plugin does not
+// auto-promote module-scope arrow helpers, so calling a non-worklet from the
+// UI thread crashes the screen on first frame. The math is trivial; one line
+// per stain is the safe path.
 
 export function PTTButton({
   label,
@@ -175,10 +178,10 @@ export function PTTButton({
   // Top stain — apricot / periwinkle. Drifts northwest.
   const topStainStyle = useAnimatedStyle(() => {
     const t = breathTop.value;
-    const scale = lerp(0.92, 1.06, t) + 0.06 * activeBoost.value;
-    const dx = TOP_OFFSET.x + lerp(-3, 3, t);
-    const dy = TOP_OFFSET.y + lerp(-3, 3, t);
-    const baseOpacity = lerp(0.55 - 0.18, 0.55 + 0.18, t);
+    const scale = (0.92 + 0.14 * t) + 0.06 * activeBoost.value;
+    const dx = TOP_OFFSET.x + (-3 + 6 * t);
+    const dy = TOP_OFFSET.y + (-3 + 6 * t);
+    const baseOpacity = 0.37 + 0.36 * t;
     const boosted = baseOpacity + 0.25 * activeBoost.value;
     const faded = boosted * (1 - disabledFade.value) + 0.05 * disabledFade.value;
     return {
@@ -190,10 +193,10 @@ export function PTTButton({
   // Mid stain — peach / seafoam. Drifts southeast, opposite phase.
   const midStainStyle = useAnimatedStyle(() => {
     const t = breathMid.value;
-    const scale = lerp(0.94, 1.04, t) + 0.06 * activeBoost.value;
-    const dx = MID_OFFSET.x + lerp(3, -3, t);
-    const dy = MID_OFFSET.y + lerp(3, -3, t);
-    const baseOpacity = lerp(0.62 - 0.18, 0.62 + 0.18, t);
+    const scale = (0.94 + 0.10 * t) + 0.06 * activeBoost.value;
+    const dx = MID_OFFSET.x + (3 - 6 * t);
+    const dy = MID_OFFSET.y + (3 - 6 * t);
+    const baseOpacity = 0.44 + 0.36 * t;
     const boosted = baseOpacity + 0.25 * activeBoost.value;
     const faded = boosted * (1 - disabledFade.value) + 0.05 * disabledFade.value;
     return {
@@ -205,10 +208,10 @@ export function PTTButton({
   // Deep stain — terracotta / iris. Drifts south.
   const deepStainStyle = useAnimatedStyle(() => {
     const t = breathDeep.value;
-    const scale = lerp(0.95, 1.05, t) + 0.06 * activeBoost.value;
-    const dx = DEEP_OFFSET.x + lerp(-3, 3, t);
-    const dy = DEEP_OFFSET.y + lerp(3, -3, t);
-    const baseOpacity = lerp(0.70 - 0.18, 0.70 + 0.18, t);
+    const scale = (0.95 + 0.10 * t) + 0.06 * activeBoost.value;
+    const dx = DEEP_OFFSET.x + (-3 + 6 * t);
+    const dy = DEEP_OFFSET.y + (3 - 6 * t);
+    const baseOpacity = 0.52 + 0.36 * t;
     const boosted = baseOpacity + 0.25 * activeBoost.value;
     const faded = boosted * (1 - disabledFade.value) + 0.05 * disabledFade.value;
     return {
