@@ -201,6 +201,28 @@ parly/
   - [x] LanguageCard: borders ligeros (hairline), transparent empty state
   - [x] SwapButton: floating glyph, drop flanking hairlines
 
+### Fase 6 — Polish final ✅ (Commit a34e6e7)
+
+**Objetivo:** los detalles que separan a una app correcta de una memorable. Apoyado todo en infraestructura existente — cero dependencias nativas nuevas.
+
+- [x] **Coreografía háptica completa** — el módulo `haptics` ya tenía pulse/tick/done/error definidos pero solo `tap` estaba cableado. Wired a las transiciones del state machine del orquestador:
+  - [x] `pulse` en transiciones de pipeline (recording→transcribing, transcribing→translating)
+  - [x] `tick` al primer token hablado (translating→speaking)
+  - [x] `done` al cerrar el turno (terminal hook por-speaker via `useTerminalHaptic`)
+  - [x] `error` en fallo
+  - [x] `tick` al elegir un idioma en el LanguagePickerSheet
+- [x] **Tap-to-replay** — el texto grande (y un sutil "↺ REPETIR" en la chip-row) re-pronuncia la última traducción del partner via `nativeTTSService.speakChunk`. Gated en idle (`activeTurn === null`) para que el audio nunca colisione con TTS del orquestador en vuelo. `nativeTTSService.stop()` defensivo antes de re-speak.
+- [x] **Microcopy junto a StateMorph** — ESCUCHANDO / PENSANDO / HABLANDO / ERROR. Caption mono uppercase tracking 1.6. El glifo solo era ambiguo; dos palabras hacen el sistema audible.
+- [x] **Reveal con `translateY`** — incoming text fade-opacity AND drift-up 6px en la primera aparición. Driven por una transición booleana (`hasIncomingText`) en lugar de la longitud del texto, para que cada chunk de streaming no re-dispare la entrada y haga jiggle.
+- [x] **Hint de primer uso** — "mantén pulsado para hablar" bajo cada disco hasta que cualquier lado complete su primer turno. Press-and-hold no es universal, especialmente para usuarios mayores que esperan tap. `firstRun = !noKey && turns.length === 0`. Desaparece para siempre tras el primer turno.
+- [x] **Onboarding de la API key — Mom-tier** — la barra subió: "mi madre debe saber usar esta app".
+  - [x] Primer uso: header "Bienvenido" + 3 pasos guiados en español plano. Step 1 abre `console.mistral.ai/api-keys` via `Linking.openURL`. Step 2 explica "Create new key" sin jerga. Step 3 input + botón primario "Verificar clave" + camino de éxito "Empezar a hablar →" que llama `navigation.goBack()`.
+  - [x] Returning user: tarjeta compacta "Conectado a Mistral", botones COMPROBAR / CAMBIAR CLAVE.
+  - [x] Banner de la conversación suavizado: "Conecta Parly con su cerebro. Te guiamos paso a paso."
+  - [x] Toda la jerga eliminada: ni "API key", ni "Authorization", ni "sk-", ni "llavero".
+  - [x] Secciones técnicas (limpiar historial, ver logs) ocultas en primer uso para mantener el foco del welcome.
+- [x] **Picker bug fix** (sitting uncommitted): `frozenExclude` snapshot — previene que el sheet anclado al `bottom: 0` crezca de alto a mitad de la animación de cierre cuando el padre flippa `excludeCode` a undefined. La snapshot solo se actualiza mientras `visible === true`.
+
 ---
 
 ## Riesgos

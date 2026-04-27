@@ -230,6 +230,7 @@ parly/
 - **Phase 3** — TTS (ZipVoice + fallback) ✅
 - **Phase 4** — VAD + Polish ✅
 - **Phase 5** — UI Redesign (vertical PTT, halos, editorial theme) ✅ (commit a43525e)
+- **Phase 6** — Final polish: haptic choreography across the turn lifecycle, tap-to-replay on translated text, status microcopy beside StateMorph, settling reveal with translateY, first-run hint, mom-tier guided onboarding for the API key (3-step plain-Spanish flow with Linking to Mistral console) ✅ (commit a34e6e7)
 
 ---
 
