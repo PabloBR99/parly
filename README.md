@@ -1,30 +1,26 @@
 # Parly — Real-Time Conversation Translator
 
-Audio-first bidirectional speech translation app. React Native (bare) for iOS + Android. Phone laid flat between two speakers; each half of the screen is rotated 180° so both people read upright from their side of the table. 100% on-device, no cloud.
+Bidirectional speech translation app. React Native (bare), Android-first. The phone is laid flat between two people; each half of the screen is rotated 180° so both speakers read upright from their side of the table. Half-duplex push-to-talk with streaming STT, streaming translation, and OS-native TTS — every stage starts before the previous one finishes.
+
+Bring your own Mistral API key. The app guides non-technical users through getting one in three plain-Spanish steps the first time they open the app.
 
 ---
 
 ## Quick Start
 
 ```bash
-# Install dependencies
 npm install
+npm start                 # Metro bundler
+npm run android           # in another terminal
+```
 
-# Start Metro bundler
-npm start
-
-# In another terminal, run on device/simulator
-npm run android    # or
+iOS first-time setup:
+```bash
+cd ios && bundle install && bundle exec pod install && cd ..
 npm run ios
 ```
 
-For first-time iOS setup:
-```bash
-cd ios
-bundle install
-bundle exec pod install
-cd ..
-```
+The app needs a Mistral API key on first run. The in-app onboarding opens [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys) for you, explains how to generate a key, and walks you through pasting and verifying it.
 
 ---
 
@@ -32,61 +28,74 @@ cd ..
 
 | Layer | Technology |
 |-------|-----------|
-| **UI** | React Native 0.84 (bare) + TypeScript, reanimated |
-| **State** | Zustand (immutable) |
-| **STT** | whisper.rn (whisper-small multilingual, ~350MB) |
-| **Translation** | iOS Translation framework / Android ML Kit (0MB extra, OS-native) |
-| **TTS** | ZipVoice distill-int8 via react-native-sherpa-onnx (~104MB ONNX), voice cloning zero-shot |
-| **Fallback TTS** | AVSpeechSynthesizer (iOS) / Android TTS if RAM < 1GB free |
+| **UI** | React Native 0.84 (bare) + TypeScript, reanimated 4.3, react-native-safe-area-context |
+| **State** | Zustand 5 (immutable) |
+| **STT** | Voxtral realtime via WebSocket — `wss://api.mistral.ai/v1/audio/transcriptions/realtime` (model: `voxtral-mini-transcribe-realtime-2602`) |
+| **Translation** | Mistral chat completions, streaming SSE — `mistral-small-latest` |
+| **TTS** | `react-native-tts` (OS-native voices, per-language voice cache) |
+| **Audio capture** | `react-native-audio-record` — PCM 16kHz mono, base64-framed |
+| **Secret storage** | `react-native-keychain` — API key only, never leaves the device except in `Authorization: Bearer …` |
+| **Tests** | Jest 29, 63 passing across orchestrator / Voxtral client / translator / network monitor |
 
-**Estimated peak memory:** ~800MB (Whisper 350MB + ZipVoice ~400MB peak + overhead)  
-**Minimum device:** 4GB RAM recommended
+No on-device ML models. No bundled audio assets. Footprint is the React Native runtime plus a thin native shim. The only egress is `api.mistral.ai`.
+
+**Connectivity:** required during conversations. Failed handshakes surface in the UI as a network-state pill (`en línea` / `conectando` / `sin conexión`) and as a per-turn error pane.
 
 ---
 
 ## Architecture
 
 ```
-Person speaks (PTT or VAD)
-       ↓
-AudioCaptureService — PCM 16kHz mono
-       ↓
-WhisperService — transcription (source language)
-       ↓  ↘
-       │   resample 16→24kHz + trim to 5s  ←── voice reference
-       ↓
-TranslationService — translated text (target language)
-       ↓
-ZipVoiceService(
-  text:          translated text,
-  referenceAudio: 24kHz buffer of speaker (max 5s),
-  referenceText:  Whisper transcription
-) — synthesis in speaker's voice
-       ↓
-AudioPlayerService — playback
+PTT held ──► AudioCaptureService (PCM 16kHz mono, base64 frames)
+                    │
+                    ▼
+              VoxtralRealtimeClient (WebSocket)
+                    │  transcription.text.delta  → live partial
+                    │  transcription.done        → final
+                    ▼
+              MistralTranslator (POST /v1/chat/completions, SSE)
+                    │  sentence-boundary chunking (regex, min 15 chars)
+                    │  per-sentence emit
+                    ▼
+              NativeTTSService.speakChunk()  ── queued in native engine
+                    │  await Promise.all of all chunks
+                    │  + 250ms tail silence (Android sink flush)
+                    ▼
+                turn done — half-duplex lock released
 ```
 
-Sequential via `UtteranceQueue` (one utterance at a time, half-duplex).  
-**First utterance per speaker:** falls back to OS TTS (no voice reference yet).
+The orchestrator owns a strict per-turn state machine:
+
+```
+idle ─► recording ─► transcribing ─► translating ─► speaking ─► idle
+                                                       │
+                                                       └── error ─► idle
+```
+
+Every transition is guarded; the lock release is a single bottleneck. Why so strict?
+
+> In a diplomatic demo the worst failure isn't a slow turn — it's a *confused* turn (mic still hot during TTS, two turns interleaved, lock leak preventing the next press from working).
+
+The WebSocket is opened fresh per turn. Idle WS connections are subject to opaque server-side timeouts and mobile network changes; the cost of a fresh connect is ~50–150 ms (TLS session reuse handles the warm path).
 
 ---
 
 ## UI — Vertical PTT Layout
 
-**Design Language:** Editorial dark, restrained palette. Two quiet accents: **platinum amber** (#F2B473, "you") and **ice blue** (#86BFFF, "them"). Depth on black via translucent halos, not shadows.
+**Design language:** editorial dark, restrained palette. Two quiet accents — **platinum amber** `#F2B473` for "you" / Person A, **ice blue** `#86BFFF` for "them" / Person B. Depth on true black via translucent halos, never drop shadows.
 
-**Concept:** Phone lies flat between two speakers. Each person's PTT sits at THEIR PHYSICAL EDGE of the device — partner's at top (rotated), user's at bottom — so thumbs land naturally. **No center hairline divider**; the silence between the two source lines IS the seam.
+**Concept:** the phone lies flat between two speakers. Each person's PTT sits at THEIR PHYSICAL EDGE of the device — partner's at the top (rotated 180°), user's at the bottom — so thumbs land naturally. **No center divider line**; the silence between the two source lines IS the seam.
 
 ```
 ┌─────────────────────────────┐
-│   ●  online                 │  ← partner's edge chrome
+│   ●  en línea               │  ← partner's edge chrome (network pill)
 │                             │
 │           ◯                 │  ← partner's PTT (rotated 180°)
 │                             │
-│   español  ▾                │  ← identity chip: language + state morph
+│   español  ▾   PENSANDO ◐   │  ← identity chip + state morph + microcopy
 │                             │
-│   Lo que el usuario         │  ← big translated text (hero display)
-│   acaba de decir            │
+│   Lo que el usuario         │  ← big translated text — what partner reads
+│   acaba de decir            │     (tap to replay)
 │                             │
 │   — fuente —                │  ← source line (small, near center)
 │                             │
@@ -94,51 +103,77 @@ Sequential via `UtteranceQueue` (one utterance at a time, half-duplex).
 │                             │
 │   — fuente —                │
 │                             │
-│   What the partner          │  ← big translated text
+│   What the partner          │
 │   just said                 │
 │                             │
-│   english  ▾                │  ← identity chip
+│   english  ▾    ↺ REPETIR   │  ← identity chip + replay affordance
 │                             │
 │           ◯                 │  ← user's PTT
 │                             │
-│   ⌘  ajustes                │  ← user's edge chrome (settings)
+│   ⌘  ajustes                │  ← user's edge chrome
 └─────────────────────────────┘
 ```
 
-**Each `SpeakerHalf` structure (top-down, reading order):**
-1. **Source line** — text captured WHILE speaking, or partner's source after turn completes (small, near-center)
-2. **Big translated text** — `displayHero` (34pt, weight 300, -0.6 tracking) — WHAT THIS PERSON READS
-3. **Identity chip** — language endonym + state morph (recording / transcribing / translating / synthesizing)
-4. **PTT button** — object metaphor with concentric halos
-5. **Edge chrome** — online/offline pill (partner) or "ajustes" link (user)
+Each `SpeakerHalf` is rendered top-down in reading order (source → big → identity → button → edge chrome). The top half wraps the whole stack in `transform: rotate(180deg)` so the partner sees everything upright from their side.
 
-**PTTButton — Object Metaphor:**
-- **96pt disc** with three concentric translucent halos (whisper / glow / kiss)
-- At rest: halos breathe (3.2s sine), faint presence
-- On press: halos brighten, disc scales slightly
-- Active: outer ring breathes outward (1.6s), delicate waveform inside (30pt tall, 5 bars)
-- Label: clean horizontal mic-affordance **tick** (14×1.5pt line) above language code (replaces old puck-dot)
-- Colors per speaker: `accent`, `accentRing` (bright ring), `accentGlow` (~0.10 opacity, mid halo), `accentWhisper` (~0.045, far-field)
+**PTTButton — object metaphor:**
+- **96 pt disc** with three concentric translucent halos: whisper (far field), glow (mid), and the kiss right at the disc edge.
+- **Idle:** halos breathe (3.2 s sine), faint always-on presence so the disc feels like a physical object resting in the screen.
+- **Press:** halos brighten, disc scales by ~5 % (spring).
+- **Active:** outer ring breathes outward every 1.6 s, a 5-bar waveform pulses inside the disc.
+- **Label:** clean horizontal mic-affordance tick (14 × 1.5 pt) above the language code.
 
-**Theme — New Tokens (v5 redesign, commit a43525e):**
+**Felt rhythm — haptic choreography across the turn:**
 
-Accent palette slightly desaturated:
-- **Person A (user):** platinum amber #F2B473 (was #F4B26A)
-- **Person B (partner):** ice blue #86BFFF (was #7AB8FF)
+| Moment | Pattern |
+|--------|--------|
+| PTT press | `tap` (single short pulse) |
+| `recording → transcribing` | `pulse` (two-step) |
+| `transcribing → translating` | `pulse` |
+| First spoken token (`translating → speaking`) | `tick` |
+| Turn done | `done` (heavier two-step) |
+| Turn error | `error` (three-step buzz) |
+| Picker row tap | `tick` |
 
-Per-accent halo tokens:
+The turn has a felt rhythm that matches its visual rhythm — the user doesn't need to read the screen to know where the machine is.
+
+**Tap-to-replay:** when a turn is `done` and there's translated text on screen, tapping the big text (or the quiet `↺ REPETIR` affordance in the chip row) re-speaks the partner's last translation via the OS TTS. Gated on idle so audio never collides with in-flight orchestrator TTS.
+
+**Settling reveal:** incoming text fades AND drifts up 6 px on first appearance. Driven by a boolean transition (`hasIncomingText`), not by text length — so each streamed sentence doesn't re-trigger the entrance and jiggle the line back into place.
+
+**Status microcopy beside `StateMorph`:** `ESCUCHANDO` / `PENSANDO` / `HABLANDO` / `ERROR`. The glyph alone was ambiguous; two words make the system audible.
+
+**First-run hint:** the press-and-hold gesture isn't universal, especially for older users expecting a single tap, so a quiet italic `mantén pulsado para hablar` sits under each disc until the first turn from either side completes — then it disappears for good.
+
+---
+
+## API-Key Onboarding (Mom-Test)
+
+The hard barrier for non-technical users isn't the conversation — it's the API key. The first-run Settings screen replaces every piece of jargon with plain Spanish and a guided three-step flow.
+
 ```
-accentAGlow: rgba(242,180,115,0.10)      // ~10% opacity
-accentAWhisper: rgba(242,180,115,0.045)  // ~4.5% opacity
-accentBGlow: rgba(134,191,255,0.10)
-accentBWhisper: rgba(134,191,255,0.045)
+Bienvenido
+Vamos a poner Parly en marcha en tres pasos.
+
+①  Crea tu cuenta en Mistral
+   Es gratis y solo necesitas un correo electrónico.
+   [ Abrir Mistral  ↗ ]                          ← Linking.openURL
+
+②  Copia tu clave
+   Una vez dentro, pulsa "Create new key". Aparecerá un código
+   largo en pantalla — mantenlo pulsado y copia el texto entero.
+
+③  Pégala aquí debajo
+   [_______________________________________]
+   Mantén el dedo sobre el cuadro y pulsa Pegar.
+
+   [ Verificar clave ]                           ← primary button
+
+   ✓  Listo. Ya puedes empezar a hablar.
+   [ Empezar a hablar  → ]                       ← navigation.goBack()
 ```
 
-New foreground tier: `fgWhisper` (0.07 opacity) — ultra-subtle text.
-
-New display role: `displayHero` — main translated text (34pt, weight 300, -0.6 tracking).
-
-New motion timing: `motion.glacial` (800ms) — slow breath animations.
+What's *not* there: the strings "API key", "Authorization", "sk-", "llavero", "endpoint". When the user already has a working key, this whole flow collapses to a compact **`● Conectado a Mistral`** card with `COMPROBAR` and `CAMBIAR CLAVE` buttons. Diagnostic and history sections appear only after a connection is established, so first-run focus stays on the welcome.
 
 ---
 
@@ -148,57 +183,59 @@ New motion timing: `motion.glacial` (800ms) — slow breath animations.
 parly/
 ├── src/
 │   ├── app/
-│   │   └── languages.ts        # Language metadata (endonym, flags)
-│   │   └── types.ts            # Global types
+│   │   ├── languages.ts             # Language metadata (endonym, emoji, scripts)
+│   │   └── types.ts                 # PersonId, Language, etc.
 │   ├── store/
-│   │   ├── conversationStore.ts # Messages, active speaker
-│   │   ├── settingsStore.ts    # Languages, API key
-│   │   ├── networkStore.ts     # Online/offline state
-│   │   └── modelStore.ts       # Model loading state
+│   │   ├── conversationStore.ts     # Turns, active turn id, stage transitions
+│   │   ├── settingsStore.ts         # PersonA/B language, API key, model id
+│   │   └── networkStore.ts          # 'unknown' | 'online' | 'offline'
 │   ├── services/
 │   │   ├── pipeline/
-│   │   │   ├── orchestrator.ts  # Main pipeline: STT → Translation → TTS
-│   │   │   └── UtteranceQueue.ts
+│   │   │   ├── ConversationOrchestrator.ts  # The state machine
+│   │   │   └── orchestrator.ts              # Singleton DI wiring
 │   │   ├── stt/
-│   │   │   └── WhisperService.ts
+│   │   │   └── VoxtralRealtimeClient.ts     # WebSocket + frame protocol
 │   │   ├── translation/
-│   │   │   ├── TranslationService.ts (interface)
-│   │   │   ├── TranslationService.ios.ts (Translation framework)
-│   │   │   └── TranslationService.android.ts (ML Kit)
+│   │   │   └── MistralTranslator.ts         # SSE streaming + sentence chunks
 │   │   ├── tts/
-│   │   │   ├── ZipVoiceService.ts (primary, voice cloning)
-│   │   │   ├── NativeTTSService.ts (fallback)
-│   │   │   └── AudioPlayerService.ts
+│   │   │   └── NativeTTSService.ts          # react-native-tts wrapper
 │   │   ├── audio/
-│   │   │   ├── AudioCaptureService.ts
-│   │   │   └── VADService.ts
-│   │   ├── models/
-│   │   │   └── ModelManager.ts
+│   │   │   └── AudioCaptureService.ts       # PCM 16kHz mono base64
 │   │   ├── auth/
-│   │   │   └── validateApiKey.ts
-│   │   └── memory/
-│   │       └── MemoryMonitor.ts
+│   │   │   └── validateApiKey.ts            # GET /v1/models probe
+│   │   ├── network/
+│   │   │   ├── NetworkMonitor.ts
+│   │   │   ├── monitor.ts
+│   │   │   └── mistralProbe.ts              # connectivity probe
+│   │   ├── storage/
+│   │   │   └── secureStorage.ts             # react-native-keychain wrapper
+│   │   └── log/
+│   │       └── logStore.ts                  # in-memory ring buffer for the Logs screen
 │   ├── ui/
 │   │   ├── primitives/
-│   │   │   ├── PTTButton.tsx    # Main interaction object
-│   │   │   ├── Text.tsx
+│   │   │   ├── PTTButton.tsx                # The hero object
+│   │   │   ├── LanguagePickerSheet.tsx      # Modal bottom sheet
+│   │   │   ├── LanguageCard.tsx
+│   │   │   ├── SwapButton.tsx
+│   │   │   ├── Surface.tsx
 │   │   │   ├── Button.tsx
-│   │   │   └── Surface.tsx
+│   │   │   └── Text.tsx
 │   │   ├── animations/
 │   │   │   ├── Waveform.tsx
-│   │   │   └── StateMorph.tsx
-│   │   ├── sheets/
-│   │   │   └── LanguagePickerSheet.tsx
-│   │   ├── theme.ts            # Design tokens (colors, typography, spacing, motion)
-│   │   └── haptics.ts
+│   │   │   └── StateMorph.tsx               # idle/recording/translating/speaking
+│   │   ├── theme.ts                         # Diplomatic design tokens
+│   │   ├── haptics.ts                       # tap/pulse/tick/done/error
+│   │   └── index.ts
 │   ├── screens/
-│   │   ├── ConversationScreen.tsx    # Main bidirectional surface
-│   │   ├── LanguagePairScreen.tsx    # First-run language setup
-│   │   ├── SettingsScreen.tsx        # API key + history
-│   │   └── ModelDownloadScreen.tsx   # Model loader
+│   │   ├── ConversationScreen.tsx           # Main bidirectional surface
+│   │   ├── LanguagePairScreen.tsx           # First-run language setup
+│   │   ├── SettingsScreen.tsx               # Onboarding + connection status
+│   │   └── LogsScreen.tsx                   # Diagnostics
 │   └── navigation/
 │       └── types.ts
-├── ios/ / android/ — native modules
+├── android/                                  # Bare RN Android shell
+├── ios/                                      # Bare RN iOS shell
+├── __tests__/                                # App-level integration test
 └── App.tsx
 ```
 
@@ -206,59 +243,64 @@ parly/
 
 ## Key Design Decisions
 
-1. **Voice cloning zero-shot:** No setup. Each PTT utterance becomes the voice reference for the next synthesis. First utterance per speaker uses OS TTS (no reference yet).
+1. **Cloud STT + cloud translation, OS-native TTS.** Voxtral handles 30+ languages with quality far above what a phone-bundled whisper-small could deliver, at a fraction of the install footprint. Translation streams sentence-by-sentence via Mistral SSE so TTS starts speaking the first sentence while the second is still arriving from the model. TTS itself is OS-native (zero install, voices already on the device).
 
-2. **Half-duplex:** One speaker at a time. Avoids feedback and simplifies the pipeline.
+2. **Streaming end to end.** Voxtral WS streams partial transcriptions; Mistral SSE streams translation tokens; TTS queues sentences as they boundary-fire. There's no "wait until done" anywhere in the path. The first audible word arrives a beat after the user releases PTT, not after the full translation lands.
 
-3. **Vertical PTT axis:** PTT at each phone edge (not center bar). Partner's thumb lands at top edge; user's at bottom. More natural for a table-flat phone.
+3. **Strict half-duplex state machine.** Mic and speaker are never live at the same time. The lock release is the single auditable bottleneck. Hard sequential states make every code path provably terminate and prevent the worst failure mode for a face-to-face translator: an interleaved/confused turn.
 
-4. **No divider line:** Silence between the source lines IS the visual divider. Honors the 180° split naturally.
+4. **Fresh WS per turn.** Idle WebSockets are subject to opaque server-side timeouts (30–90 s observed) and to network-change drops on mobile. Each turn opens a new socket; TLS session reuse keeps subsequent handshakes at ~50–150 ms.
 
-5. **Object metaphor with halos:** Depth on true black via translucent layering, never drop shadows. Halos always-on at idle so the disc feels like a physical object resting in the screen.
+5. **API key in OS keychain.** `react-native-keychain` keeps the key in iOS Keychain / Android Keystore. It only ever appears in the `Authorization: Bearer …` header on requests to `api.mistral.ai`. No telemetry. No analytics.
 
-6. **OS-native translation:** Zero extra memory footprint vs. bringing NLLB (~300MB).
+6. **Vertical PTT axis, no divider, halos for depth.** See UI section. The phone-on-the-table metaphor is the spatial logic for the whole screen.
 
-7. **All on-device:** Zero cloud calls. Conversations never leave the phone.
+7. **Mom-tier onboarding.** Every piece of API-key jargon was stripped from the first-run flow. If a non-technical user can get a working key without help, the rest of the conversation UI is already legible (PTT + halos + microcopy + first-run hint).
 
 ---
 
 ## Roadmap
 
-- **Phase 0** — Spike (Voxtral eval → ZipVoice chosen) ✅
-- **Phase 1** — Shell + PTT + STT ✅
-- **Phase 2** — Translation (iOS/Android) ✅
-- **Phase 3** — TTS (ZipVoice + fallback) ✅
-- **Phase 4** — VAD + Polish ✅
-- **Phase 5** — UI Redesign (vertical PTT, halos, editorial theme) ✅ (commit a43525e)
-- **Phase 6** — Final polish: haptic choreography across the turn lifecycle, tap-to-replay on translated text, status microcopy beside StateMorph, settling reveal with translateY, first-run hint, mom-tier guided onboarding for the API key (3-step plain-Spanish flow with Linking to Mistral console) ✅ (commit a34e6e7)
+| Phase | Status | Highlights |
+|-------|--------|-----------|
+| **0** — Spike: on-device STT + voice cloning | Discarded | whisper.rn (no Voxtral support) and ZipVoice/sherpa-onnx voice-cloning evaluated; abandoned in favor of cloud STT for quality + footprint. |
+| **1–4** — Earlier on-device pipeline | Superseded | See `PLAN.md` for the historical phase log. |
+| **v4 pivot** — Voxtral + Mistral + native TTS | ✅ | New orchestrator, streaming end-to-end, half-duplex lock, Mistral key validation. |
+| **v5 — UI redesign** | ✅ commit `a43525e` | Vertical PTT axis, halo'd disc, editorial restraint, Diplomatic theme. |
+| **v6 — Final polish** | ✅ commit `a34e6e7` | Haptic choreography, tap-to-replay, status microcopy, settling reveal, first-run hint, mom-tier onboarding. |
 
 ---
 
 ## Troubleshooting
 
-**Build fails on Pod install (iOS):**
-```bash
-cd ios
-rm -rf Pods Podfile.lock
-pod install
-cd ..
-```
+**"Falta la API key" banner won't go away after pasting:**  
+Tap **Verificar clave**. Successful validation flips the banner. If you see `KEY RECHAZADA`, the key is invalid; regenerate it in [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys). If you see `SIN RED`, your phone is offline.
+
+**TTS doesn't speak in the target language:**  
+The OS may not have a voice installed for that language. On Android, open *Settings → Accessibility → Text-to-speech → Install voice data* and download the language pack. The translation still appears on screen even when TTS can't speak it.
+
+**Picker animates erratically when you select a language:**  
+Fixed in commit `a34e6e7` (frozenExclude snapshot). Pull `main`.
 
 **Metro bundler issues:**
 ```bash
 npm start -- --reset-cache
 ```
 
-**Whisper/ZipVoice models not downloading:**
-- Check device has >1GB free storage
-- Verify network connectivity
-- Logs available in Settings → Diagnóstico
+**iOS Pod install fails:**
+```bash
+cd ios && rm -rf Pods Podfile.lock && bundle exec pod install && cd ..
+```
+
+**Logs:** Settings → *Diagnóstico* → *Ver logs* (only visible after a key is configured).
 
 ---
 
 ## References
 
-- **React Native Docs:** https://reactnative.dev
-- **Whisper.rn:** https://github.com/recognito-ai/whisper-rn
-- **Sherpa ONNX (ZipVoice):** https://github.com/k2-fsa/sherpa-onnx
+- **Mistral Voxtral (audio realtime):** https://docs.mistral.ai/api/#tag/audio/operation/audio_transcriptions_realtime_v1_audio_transcriptions_realtime_get
+- **Mistral chat completions (translation backbone):** https://docs.mistral.ai/api/#tag/chat
+- **react-native-tts:** https://github.com/ak1394/react-native-tts
+- **react-native-keychain:** https://github.com/oblador/react-native-keychain
 - **Reanimated:** https://docs.swmansion.com/react-native-reanimated/
+- **React Native:** https://reactnative.dev
