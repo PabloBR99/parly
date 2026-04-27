@@ -9,8 +9,8 @@
 // Visual: same dark editorial language as the rest of the app. Sections
 // are titled in mono uppercase microcopy; rows live inside Surface cards.
 
-import React from 'react';
-import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import React, { useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import Animated, {
@@ -25,6 +25,7 @@ import {
 } from '../store/settingsStore';
 import { useConversationStore } from '../store/conversationStore';
 import { nativeTTSService } from '../services/tts/NativeTTSService';
+import { validateMistralApiKey, type KeyValidation } from '../services/auth/validateApiKey';
 import { getLanguage } from '../app/languages';
 import type { RootStackParamList } from '../navigation/types';
 import {
@@ -54,6 +55,24 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
 
   const langA = personA.language ? getLanguage(personA.language) : null;
   const langB = personB.language ? getLanguage(personB.language) : null;
+
+  // API-key validation state. `null` = not yet checked since last edit.
+  const [keyValidation, setKeyValidation] = useState<KeyValidation | null>(null);
+  const [validating, setValidating] = useState(false);
+
+  const onValidateKey = async () => {
+    haptics.tap();
+    setValidating(true);
+    setKeyValidation(null);
+    try {
+      const result = await validateMistralApiKey(apiKey);
+      setKeyValidation(result);
+      if (result.status === 'ok') haptics.tick();
+      else haptics.error();
+    } finally {
+      setValidating(false);
+    }
+  };
 
   const previewVoice = (langCode: string, sample: string) => {
     haptics.tap();
@@ -92,7 +111,10 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         <Surface style={styles.inputCard}>
           <TextInput
             value={apiKey}
-            onChangeText={setApiKey}
+            onChangeText={(v) => {
+              setApiKey(v);
+              setKeyValidation(null);
+            }}
             secureTextEntry
             autoCapitalize="none"
             autoCorrect={false}
@@ -101,6 +123,25 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
             placeholderTextColor={color.fgGhost}
           />
         </Surface>
+        <View style={styles.keyActionRow}>
+          <KeyValidationLine state={keyValidation} validating={validating} />
+          <Pressable
+            onPress={onValidateKey}
+            disabled={validating || apiKey.trim().length === 0}
+            accessibilityRole="button"
+            accessibilityLabel="Verificar API key"
+            style={({ pressed }) => [
+              styles.verifyBtn,
+              pressed && styles.verifyBtnPressed,
+              (validating || apiKey.trim().length === 0) && styles.verifyBtnDisabled,
+            ]}>
+            {validating ? (
+              <ActivityIndicator color={color.fgMuted} size="small" />
+            ) : (
+              <Text variant="mono" tone="fgMuted">VERIFICAR</Text>
+            )}
+          </Pressable>
+        </View>
         <Text variant="bodySmall" tone="fgFaint" style={styles.hint}>
           Pégala tal cual te la dio Mistral —{' '}
           <Text variant="bodySmall" tone="fgMuted" style={styles.mono}>sin</Text>{' '}
@@ -179,6 +220,53 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         PARLY v4.1 — DIPLOMATIC
       </Text>
     </ScrollView>
+  );
+}
+
+// ── Key validation feedback ──────────────────────────────────────────────────
+
+function KeyValidationLine({
+  state,
+  validating,
+}: {
+  readonly state: KeyValidation | null;
+  readonly validating: boolean;
+}): React.JSX.Element {
+  if (validating) {
+    return (
+      <Text variant="mono" tone="fgFaint" style={styles.keyStatus}>
+        VERIFICANDO…
+      </Text>
+    );
+  }
+  if (state === null) {
+    return <View style={styles.keyStatus} />;
+  }
+  if (state.status === 'ok') {
+    return (
+      <Text variant="mono" tone="ok" style={styles.keyStatus}>
+        ●  KEY VÁLIDA
+      </Text>
+    );
+  }
+  if (state.status === 'invalid') {
+    return (
+      <Text variant="mono" tone="error" style={styles.keyStatus}>
+        ●  KEY RECHAZADA
+      </Text>
+    );
+  }
+  if (state.status === 'network') {
+    return (
+      <Text variant="mono" tone="warn" style={styles.keyStatus}>
+        ●  SIN RED
+      </Text>
+    );
+  }
+  return (
+    <Text variant="mono" tone="warn" style={styles.keyStatus}>
+      ●  HTTP {state.httpStatus}
+    </Text>
   );
 }
 
@@ -360,6 +448,33 @@ const styles = StyleSheet.create({
   },
   mono: {
     fontFamily: 'monospace',
+  },
+  keyActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: space.sm,
+    paddingHorizontal: 4,
+    minHeight: 30,
+  },
+  keyStatus: {
+    flex: 1,
+  },
+  verifyBtn: {
+    paddingHorizontal: space.md,
+    paddingVertical: 8,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: color.hairlineStrong,
+    minWidth: 100,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  verifyBtnPressed: {
+    backgroundColor: color.surface2,
+  },
+  verifyBtnDisabled: {
+    opacity: 0.4,
   },
 
   list: {

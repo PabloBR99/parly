@@ -21,7 +21,7 @@
 // half — i.e. translated text appears upright in the language the listener
 // reads.
 
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, StatusBar, StyleSheet, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
@@ -39,6 +39,7 @@ import { getLanguage } from '../app/languages';
 import type { PersonId } from '../app/types';
 import type { RootStackParamList } from '../navigation/types';
 import {
+  LanguagePickerSheet,
   PTTButton,
   StateMorph,
   Text,
@@ -49,15 +50,19 @@ import {
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Conversation'>;
 
+type PickerSlot = 'partner' | 'self' | null;
+
 export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   const insets = useSafeAreaInsets();
   const personA = useSettingsStore(s => s.personA);
   const personB = useSettingsStore(s => s.personB);
+  const setPersonLanguage = useSettingsStore(s => s.setPersonLanguage);
   const apiKey = useSettingsStore(s => s.mistralApiKey);
   const translationModel = useSettingsStore(s => s.translationModel);
   const turns = useConversationStore(s => s.turns);
   const activeTurnId = useConversationStore(s => s.activeTurnId);
   const networkState = useNetworkStore(s => s.state);
+  const [pickerSlot, setPickerSlot] = useState<PickerSlot>(null);
 
   // Configure + prewarm orchestrator whenever credentials change.
   useEffect(() => {
@@ -95,6 +100,17 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
     });
   };
 
+  const onPickLanguage = (code: string) => {
+    if (pickerSlot === 'partner') setPersonLanguage('B', code);
+    else if (pickerSlot === 'self') setPersonLanguage('A', code);
+    setPickerSlot(null);
+  };
+
+  const excludeForPicker =
+    pickerSlot === 'partner' ? personA.language
+      : pickerSlot === 'self' ? personB.language
+      : undefined;
+
   // Top half belongs to the partner (Person B). Their accent is azure.
   // Bottom half belongs to the user (Person A). Their accent is amber.
   const topActiveTurn = activeTurn?.speakerId === 'person_b' ? activeTurn : null;
@@ -127,6 +143,7 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
             incomingTurn={topIncomingTurn}
             accent={color.accentB}
             side="top"
+            onChangeLanguage={() => setPickerSlot('partner')}
           />
         </View>
       </View>
@@ -167,6 +184,7 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
           incomingTurn={bottomIncomingTurn}
           accent={color.accentA}
           side="bottom"
+          onChangeLanguage={() => setPickerSlot('self')}
         />
         <View style={styles.bottomChromeRow}>
           <View style={styles.flex} />
@@ -191,6 +209,13 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
           </Pressable>
         </View>
       )}
+
+      <LanguagePickerSheet
+        visible={pickerSlot !== null}
+        excludeCode={excludeForPicker}
+        onSelect={onPickLanguage}
+        onClose={() => setPickerSlot(null)}
+      />
     </View>
   );
 }
@@ -213,6 +238,7 @@ interface SpeakerPaneProps {
   readonly incomingTurn: Turn | null;
   readonly accent: string;
   readonly side: 'top' | 'bottom';
+  readonly onChangeLanguage: () => void;
 }
 
 function SpeakerPane({
@@ -222,6 +248,7 @@ function SpeakerPane({
   incomingTurn,
   accent,
   side,
+  onChangeLanguage,
 }: SpeakerPaneProps): React.JSX.Element {
   const speakerLang = getLanguage(speakerLanguage);
   const partnerLang = getLanguage(partnerLanguage);
@@ -253,12 +280,23 @@ function SpeakerPane({
 
   return (
     <View style={[paneStyles.pane, side === 'top' ? paneStyles.topAlign : paneStyles.bottomAlign]}>
-      {/* Identity strip — language code + script morph */}
+      {/* Identity strip — tap to change this speaker's language without
+          leaving the conversation. */}
       <View style={paneStyles.identity}>
-        <View style={[paneStyles.identityDot, { backgroundColor: accent }]} />
-        <Text variant="mono" tone="fgFaint">
-          {speakerLang.endonym.toUpperCase()}  ·  {speakerLang.code.toUpperCase()}
-        </Text>
+        <Pressable
+          onPress={onChangeLanguage}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel={`Cambiar idioma. Actual: ${speakerLang.name}`}
+          style={({ pressed }) => [paneStyles.identityChip, pressed && paneStyles.identityChipPressed]}>
+          <View style={[paneStyles.identityDot, { backgroundColor: accent }]} />
+          <Text variant="mono" tone="fgFaint">
+            {speakerLang.endonym.toUpperCase()}  ·  {speakerLang.code.toUpperCase()}
+          </Text>
+          <Text variant="mono" tone="fgGhost" style={paneStyles.changeHint}>
+            ▾
+          </Text>
+        </Pressable>
         <View style={paneStyles.flex} />
         {stageForMorph !== null && stageForMorph !== 'done' && (
           <View style={paneStyles.morphSlot}>
@@ -397,11 +435,26 @@ const paneStyles = StyleSheet.create({
     marginBottom: space.sm,
     minHeight: 18,
   },
+  identityChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.hairline,
+  },
+  identityChipPressed: {
+    backgroundColor: color.surface2,
+  },
   identityDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
     marginRight: space.xs,
+  },
+  changeHint: {
+    marginLeft: 6,
   },
   morphSlot: {
     width: 22,
