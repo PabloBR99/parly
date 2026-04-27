@@ -68,10 +68,13 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
       {/* HEADER */}
       <View style={styles.header}>
         <Text variant="caption" tone="fgGhost" style={styles.eyebrow}>
-          PARLY  ·  AJUSTES
+          PARLY
         </Text>
         <Text variant="displayLarge" tone="fg">
-          Configuración
+          Ajustes
+        </Text>
+        <Text variant="bodySmall" tone="fgFaint" style={styles.subhead}>
+          Configura la conexión y limpia el historial.
         </Text>
       </View>
 
@@ -222,10 +225,15 @@ const styles = StyleSheet.create({
   },
 
   header: {
-    paddingBottom: space.xl,
+    paddingTop: space.md,
+    paddingBottom: space.xxl,
   },
   eyebrow: {
-    marginBottom: space.xs,
+    marginBottom: space.md,
+    letterSpacing: 2.4,
+  },
+  subhead: {
+    marginTop: space.sm,
   },
 
   section: {
@@ -233,6 +241,7 @@ const styles = StyleSheet.create({
   },
   sectionLabel: {
     marginBottom: space.sm,
+    letterSpacing: 1.8,
   },
   sectionBody: {},
 
@@ -241,10 +250,11 @@ const styles = StyleSheet.create({
   },
   input: {
     color: color.fg,
-    fontSize: 14,
+    fontSize: 15,
     fontFamily: undefined,
     paddingHorizontal: space.sm,
-    paddingVertical: 10,
+    paddingVertical: 12,
+    letterSpacing: 0.2,
   },
   hint: {
     marginTop: space.xs,

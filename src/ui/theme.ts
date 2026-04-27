@@ -1,9 +1,10 @@
 // Parly design tokens — "Diplomatic" theme.
 //
 // Aesthetic: editorial dark. Black surface, restrained palette, two quiet
-// accent hues (warm amber for "you" / Person A, cool azure for "them" /
-// Person B). Mono numerals for technical detail; system sans for everything
-// else. No drop shadows on dark — we use translucent-on-black layering.
+// accent hues — warm platinum-amber for "you" / Person A, cool ice-blue for
+// "them" / Person B. Mono for technical detail; system sans for everything
+// else. No drop shadows on dark — depth comes from concentric translucent
+// halos and tiered opacity, never from grey rectangles.
 
 import { Platform } from 'react-native';
 
@@ -15,24 +16,30 @@ export const color = {
   surface1:  'rgba(255,255,255,0.035)',  // card / pill
   surface2:  'rgba(255,255,255,0.065)',  // hover / pressed
   surface3:  'rgba(255,255,255,0.10)',   // filled state
-  hairline:  'rgba(255,255,255,0.07)',
-  hairlineStrong: 'rgba(255,255,255,0.16)',
+  hairline:  'rgba(255,255,255,0.06)',
+  hairlineStrong: 'rgba(255,255,255,0.14)',
 
   // Foreground — inverted, with a discipline of opacity tiers.
-  fg:        'rgba(255,255,255,0.96)',
+  fg:        'rgba(255,255,255,0.97)',
   fgMuted:   'rgba(255,255,255,0.62)',
-  fgFaint:   'rgba(255,255,255,0.38)',
-  fgGhost:   'rgba(255,255,255,0.18)',
+  fgFaint:   'rgba(255,255,255,0.36)',
+  fgGhost:   'rgba(255,255,255,0.16)',
+  fgWhisper: 'rgba(255,255,255,0.07)',
   fgInk:     '#000000',  // text on a light/inverted surface
 
-  // Speaker accents — chosen so they never compete with the text. Used
-  // sparingly: ring around active mic, micro-tag, ambient edge tint.
-  accentA:        '#F4B26A',  // warm amber — "you"
-  accentASoft:    'rgba(244,178,106,0.18)',
-  accentARing:    'rgba(244,178,106,0.55)',
-  accentB:        '#7AB8FF',  // cool azure — "them"
-  accentBSoft:    'rgba(122,184,255,0.18)',
-  accentBRing:    'rgba(122,184,255,0.55)',
+  // Speaker accents — chosen so they never compete with text. Used sparingly:
+  // ring around active mic, quiet halo around idle mic, micro-tag.
+  accentA:        '#F2B473',  // platinum amber — "you"
+  accentASoft:    'rgba(242,180,115,0.16)',
+  accentARing:    'rgba(242,180,115,0.55)',
+  accentAGlow:    'rgba(242,180,115,0.10)',  // outermost halo tint
+  accentAWhisper: 'rgba(242,180,115,0.045)', // far-field glow
+
+  accentB:        '#86BFFF',  // ice blue — "them"
+  accentBSoft:    'rgba(134,191,255,0.16)',
+  accentBRing:    'rgba(134,191,255,0.55)',
+  accentBGlow:    'rgba(134,191,255,0.10)',
+  accentBWhisper: 'rgba(134,191,255,0.045)',
 
   // Status
   ok:        '#7CD9A0',
@@ -77,7 +84,7 @@ const sansFamily: string | undefined = Platform.select({
 
 const monoFamily: string = Platform.select({
   ios: 'Menlo',
-  android: 'monospace',     // Roboto Mono / Droid Sans Mono
+  android: 'monospace',
   default: 'monospace',
 });
 
@@ -85,28 +92,36 @@ export const font = {
   sansFamily,
   monoFamily,
 
-  // Display — the big translation surface. Weighty, comfortable line-height,
-  // slight negative tracking for the "editorial" feel.
+  // Display — the big translation surface. Lighter weight, generous
+  // line-height, negative tracking for editorial feel.
   display: {
     fontFamily: sansFamily,
     fontSize: 30,
     lineHeight: 38,
-    fontWeight: '400' as const,
+    fontWeight: '300' as const,
     letterSpacing: -0.4,
   },
   displayLarge: {
     fontFamily: sansFamily,
-    fontSize: 38,
-    lineHeight: 46,
+    fontSize: 36,
+    lineHeight: 44,
     fontWeight: '300' as const,
-    letterSpacing: -0.6,
+    letterSpacing: -0.7,
   },
   displayHuge: {
     fontFamily: sansFamily,
     fontSize: 48,
     lineHeight: 56,
+    fontWeight: '200' as const,
+    letterSpacing: -1.0,
+  },
+  // Hero — the main translated text in conversation. Even more breathing.
+  displayHero: {
+    fontFamily: sansFamily,
+    fontSize: 34,
+    lineHeight: 42,
     fontWeight: '300' as const,
-    letterSpacing: -0.8,
+    letterSpacing: -0.6,
   },
 
   // Body
@@ -129,7 +144,7 @@ export const font = {
     fontSize: 11,
     lineHeight: 14,
     fontWeight: '500' as const,
-    letterSpacing: 0.6,
+    letterSpacing: 0.8,
   },
 
   // Mono — technical (lang code, model id, durations)
@@ -138,14 +153,14 @@ export const font = {
     fontSize: 11,
     lineHeight: 14,
     fontWeight: '400' as const,
-    letterSpacing: 0.3,
+    letterSpacing: 0.4,
   },
   monoSmall: {
     fontFamily: monoFamily,
     fontSize: 10,
     lineHeight: 13,
     fontWeight: '400' as const,
-    letterSpacing: 0.4,
+    letterSpacing: 0.5,
   },
 
   // Button label
@@ -161,16 +176,15 @@ export const font = {
 // ── Motion ───────────────────────────────────────────────────────────────────
 
 export const motion = {
-  // Spring presets, tuned to feel snappy without being bouncy.
   springSnappy:   { damping: 22, stiffness: 240, mass: 1 },
   springSoft:     { damping: 18, stiffness: 160, mass: 1 },
   springSubtle:   { damping: 28, stiffness: 320, mass: 1 },
   springBouncy:   { damping: 12, stiffness: 180, mass: 1 },
 
-  // Timing presets for opacity/color (avoid spring on those — feels weird).
   fast:   140,
   normal: 240,
   slow:   400,
+  glacial: 800,
 } as const;
 
 // ── Speaker accent helper ────────────────────────────────────────────────────
@@ -178,7 +192,9 @@ export const motion = {
 export type SpeakerSide = 'A' | 'B';
 
 export const accentFor = (side: SpeakerSide) => ({
-  base: side === 'A' ? color.accentA : color.accentB,
-  soft: side === 'A' ? color.accentASoft : color.accentBSoft,
-  ring: side === 'A' ? color.accentARing : color.accentBRing,
+  base:    side === 'A' ? color.accentA    : color.accentB,
+  soft:    side === 'A' ? color.accentASoft: color.accentBSoft,
+  ring:    side === 'A' ? color.accentARing: color.accentBRing,
+  glow:    side === 'A' ? color.accentAGlow: color.accentBGlow,
+  whisper: side === 'A' ? color.accentAWhisper: color.accentBWhisper,
 });

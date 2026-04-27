@@ -118,10 +118,14 @@ export function LanguagePairScreen({ navigation }: Props): React.JSX.Element {
       <View style={styles.header}>
         <View style={styles.headerInner}>
           <Text variant="caption" tone="fgGhost" style={styles.eyebrow}>
-            PARLY  ·  CONFIGURACIÓN
+            PARLY
           </Text>
           <Text variant="displayLarge" tone="fg" style={styles.headline}>
-            Elige los dos idiomas{'\n'}de la conversación.
+            Dos idiomas.{'\n'}Una conversación.
+          </Text>
+          <Text variant="bodySmall" tone="fgFaint" style={styles.subhead}>
+            Elige el de cada hablante. Podrás intercambiarlos o cambiarlos
+            durante la charla.
           </Text>
         </View>
       </View>
@@ -180,15 +184,21 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: space.xl,
-    paddingTop: space.xl,
-    paddingBottom: space.lg,
+    paddingTop: space.xxl,
+    paddingBottom: space.xl,
   },
   headerInner: {},
   eyebrow: {
-    marginBottom: space.sm,
+    marginBottom: space.md,
+    letterSpacing: 2.4,
   },
   headline: {
     marginRight: space.sm,
+  },
+  subhead: {
+    marginTop: space.md,
+    paddingRight: space.xl,
+    lineHeight: 20,
   },
   cards: {
     flex: 1,
@@ -205,8 +215,10 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     paddingVertical: 16,
     marginBottom: space.md,
+    borderRadius: 16,
   },
   settingsLink: {
     paddingVertical: space.xs,
+    letterSpacing: 1.6,
   },
 });

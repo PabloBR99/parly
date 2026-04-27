@@ -40,51 +40,45 @@ export function SwapButton({ disabled, onPress }: SwapButtonProps): React.JSX.El
 
   return (
     <View style={styles.row}>
-      <View style={styles.line} />
       <Pressable
         onPressIn={() => { press.value = withSpring(1, motion.springSnappy); }}
         onPressOut={() => { press.value = withSpring(0, motion.springSnappy); }}
         onPress={handle}
         disabled={disabled}
-        hitSlop={12}
+        hitSlop={16}
         accessibilityRole="button"
         accessibilityLabel="Intercambiar idiomas"
         accessibilityState={{ disabled }}>
         <Animated.View style={[styles.btn, animated, disabled && styles.btnDisabled]}>
-          <Text variant="body" tone={disabled ? 'fgGhost' : 'fgMuted'}>
+          <Text variant="body" tone={disabled ? 'fgGhost' : 'fgMuted'} style={styles.glyph}>
             ⇅
           </Text>
         </Animated.View>
       </Pressable>
-      <View style={styles.line} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   row: {
-    flexDirection: 'row',
     alignItems: 'center',
-    height: 36,
-    marginVertical: 4,
-  },
-  line: {
-    flex: 1,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: color.hairline,
+    justifyContent: 'center',
+    paddingVertical: 8,
   },
   btn: {
-    width: 32,
-    height: 32,
+    width: 36,
+    height: 36,
     borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: color.surface1,
-    borderWidth: 1,
+    backgroundColor: 'transparent',
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.hairline,
-    marginHorizontal: 12,
   },
   btnDisabled: {
     opacity: 0.4,
+  },
+  glyph: {
+    fontSize: 16,
   },
 });

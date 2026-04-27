@@ -97,43 +97,46 @@ export function LanguageCard({
 
 const styles = StyleSheet.create({
   card: {
-    paddingHorizontal: space.xl,
-    paddingTop: space.lg,
-    paddingBottom: space.xl,
+    paddingHorizontal: space.lg,
+    paddingTop: space.md,
+    paddingBottom: space.lg,
     borderRadius: radius.xl,
-    borderWidth: 1,
-    minHeight: 130,
+    borderWidth: StyleSheet.hairlineWidth,
+    minHeight: 132,
     justifyContent: 'space-between',
   },
   cardEmpty: {
-    backgroundColor: color.surface1,
+    backgroundColor: 'transparent',
     borderColor: color.hairline,
   },
   cardFilled: {
-    backgroundColor: color.surface2,
+    backgroundColor: color.surface1,
   },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: space.sm,
+    marginBottom: space.xs,
   },
   dot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    marginRight: space.xs,
+    marginRight: 8,
   },
-  metaLabel: {},
+  metaLabel: {
+    letterSpacing: 1.4,
+  },
   endonym: {
-    marginTop: 0,
+    marginTop: 4,
   },
   placeholder: {
     marginTop: space.xs,
+    fontWeight: '300',
   },
   subRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: space.xs,
+    marginTop: space.sm,
   },
   emoji: {
     fontSize: 16,
@@ -141,5 +144,6 @@ const styles = StyleSheet.create({
   },
   code: {
     marginLeft: 'auto',
+    letterSpacing: 1.2,
   },
 });

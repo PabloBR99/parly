@@ -1,25 +1,37 @@
 // ConversationScreen — bidirectional translation surface.
 //
-//   Phone laid flat on the table between two speakers:
+//   Phone laid flat on the table between two speakers. Each speaker's PTT
+//   sits at THEIR edge of the phone — partner's at the top, user's at the
+//   bottom — so each thumb lands naturally on the closest button. The
+//   translated text leans toward the center of the device, where the
+//   conversation actually happens. There is no hairline divider: the
+//   silence between the two source lines IS the divider.
 //
 //   ┌─────────────────────────────┐
-//   │  ⌘ ajustes    ●  online     │ ← top status row (rotated for partner)
+//   │   ●  online                 │ ← partner's edge chrome
 //   │                             │
-//   │  TOP HALF — partner's view  │   text rotated 180°
-//   │  reads upright across the   │   so the counterparty sees normal
-//   │  table                      │
+//   │           ◯                 │ ← partner's PTT (rotated)
 //   │                             │
-//   │═══ MIC BAR ═════════════════│   two PTT buttons sit on the divider
+//   │   español  ▾                │ ← partner identity
 //   │                             │
-//   │  BOTTOM HALF — your view    │   text upright
+//   │   Lo que el usuario         │ ← what partner reads
+//   │   acaba de decir            │
 //   │                             │
+//   │   — fuente —                │ ← small source line
+//   │                             │
+//   │           (gap)             │ ← center: pure space, no line
+//   │                             │
+//   │   — fuente —                │
+//   │                             │
+//   │   What the partner          │ ← what user reads
+//   │   just said                 │
+//   │                             │
+//   │   english  ▾                │
+//   │                             │
+//   │           ◯                 │ ← user's PTT
+//   │                             │
+//   │   ⌘  ajustes                │ ← user's edge chrome
 //   └─────────────────────────────┘
-//
-// One speaker presses the PTT closest to them, holds while talking,
-// releases. The orchestrator's half-duplex lock guarantees only one turn
-// runs at a time. Each turn's translation is rendered on the recipient's
-// half — i.e. translated text appears upright in the language the listener
-// reads.
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, StatusBar, StyleSheet, View } from 'react-native';
@@ -64,7 +76,6 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   const networkState = useNetworkStore(s => s.state);
   const [pickerSlot, setPickerSlot] = useState<PickerSlot>(null);
 
-  // Configure + prewarm orchestrator whenever credentials change.
   useEffect(() => {
     conversationOrchestrator.configure({ apiKey, translationModel });
     if (apiKey) {
@@ -111,7 +122,7 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
       : pickerSlot === 'self' ? personB.language
       : undefined;
 
-  // Top half belongs to the partner (Person B). Their accent is azure.
+  // Top half belongs to the partner (Person B). Their accent is ice blue.
   // Bottom half belongs to the user (Person A). Their accent is amber.
   const topActiveTurn = activeTurn?.speakerId === 'person_b' ? activeTurn : null;
   const bottomActiveTurn = activeTurn?.speakerId === 'person_a' ? activeTurn : null;
@@ -126,76 +137,56 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
     <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor={color.bg} />
 
-      {/* TOP HALF — rotated 180° so partner reads upright across the table */}
-      <View style={[styles.half, styles.halfTop, { paddingTop: insets.top + space.sm }]}>
+      {/* TOP HALF — rotated 180° so the partner sees everything upright. */}
+      <View style={styles.half}>
         <View style={styles.flipped}>
-          {/* The status row sits at what is visually the "top" of the
-              partner's reading orientation, i.e. the chrome closest to the
-              centre divider. */}
-          <View style={styles.topChromeRow}>
-            <NetworkPill state={networkState} />
-            <View style={styles.flex} />
-          </View>
-          <SpeakerPane
+          <SpeakerHalf
             speakerLanguage={personB.language}
             partnerLanguage={personA.language}
             activeTurn={topActiveTurn}
             incomingTurn={topIncomingTurn}
             accent={color.accentB}
-            side="top"
+            accentRing={color.accentBRing}
+            accentGlow={color.accentBGlow}
+            accentWhisper={color.accentBWhisper}
+            edgePadding={insets.top + space.md}
+            edgeContent={<NetworkPill state={networkState} />}
+            disabled={noKey || (!!activeTurn && activeTurn?.speakerId !== 'person_b')}
+            onPressIn={() => handleMicPressIn('person_b')}
+            onPressOut={handleMicPressOut}
             onChangeLanguage={() => setPickerSlot('partner')}
           />
         </View>
       </View>
 
-      {/* CENTER MIC BAR */}
-      <View style={styles.micBar}>
-        <View style={styles.dividerLine} />
-        <View style={styles.micRow}>
-          <PTTButton
-            label={personB.language || '—'}
-            accent={color.accentB}
-            accentRing={color.accentBRing}
-            active={!!topActiveTurn}
-            disabled={noKey || (!!activeTurn && activeTurn?.speakerId !== 'person_b')}
-            onPressIn={() => handleMicPressIn('person_b')}
-            onPressOut={handleMicPressOut}
-            inverted
-          />
-          <PTTButton
-            label={personA.language || '—'}
-            accent={color.accentA}
-            accentRing={color.accentARing}
-            active={!!bottomActiveTurn}
-            disabled={noKey || (!!activeTurn && activeTurn?.speakerId !== 'person_a')}
-            onPressIn={() => handleMicPressIn('person_a')}
-            onPressOut={handleMicPressOut}
-          />
-        </View>
-        <View style={styles.dividerLine} />
-      </View>
-
-      {/* BOTTOM HALF — user's upright view */}
-      <View style={[styles.half, styles.halfBottom, { paddingBottom: insets.bottom + space.sm }]}>
-        <SpeakerPane
+      {/* BOTTOM HALF — user's upright view. */}
+      <View style={styles.half}>
+        <SpeakerHalf
           speakerLanguage={personA.language}
           partnerLanguage={personB.language}
           activeTurn={bottomActiveTurn}
           incomingTurn={bottomIncomingTurn}
           accent={color.accentA}
-          side="bottom"
+          accentRing={color.accentARing}
+          accentGlow={color.accentAGlow}
+          accentWhisper={color.accentAWhisper}
+          edgePadding={insets.bottom + space.md}
+          edgeContent={
+            <Pressable
+              onPress={() => navigation.navigate('Settings')}
+              hitSlop={14}
+              accessibilityRole="button"
+              accessibilityLabel="Ajustes">
+              <Text variant="mono" tone="fgFaint" style={styles.settingsLink}>
+                ajustes
+              </Text>
+            </Pressable>
+          }
+          disabled={noKey || (!!activeTurn && activeTurn?.speakerId !== 'person_a')}
+          onPressIn={() => handleMicPressIn('person_a')}
+          onPressOut={handleMicPressOut}
           onChangeLanguage={() => setPickerSlot('self')}
         />
-        <View style={styles.bottomChromeRow}>
-          <View style={styles.flex} />
-          <Pressable
-            onPress={() => navigation.navigate('Settings')}
-            hitSlop={14}
-            accessibilityRole="button"
-            accessibilityLabel="Ajustes">
-            <Text variant="mono" tone="fgFaint">AJUSTES</Text>
-          </Pressable>
-        </View>
       </View>
 
       {noKey && (
@@ -203,8 +194,14 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
           <Pressable
             style={styles.banner}
             onPress={() => navigation.navigate('Settings')}>
-            <Text variant="bodySmall" tone="fg">
-              Falta la API key de Mistral. Tócame para configurarla.
+            <Text variant="caption" tone="fgFaint" style={styles.bannerEyebrow}>
+              CONFIGURACIÓN
+            </Text>
+            <Text variant="body" tone="fg" style={styles.bannerBody}>
+              Falta la API key de Mistral.
+            </Text>
+            <Text variant="bodySmall" tone="fgMuted" style={styles.bannerHint}>
+              Toca para añadirla.
             </Text>
           </Pressable>
         </View>
@@ -229,42 +226,70 @@ function findLastTurn(turns: readonly Turn[], speakerId: PersonId): Turn | null 
   return null;
 }
 
-// ── SpeakerPane ──────────────────────────────────────────────────────────────
+// ── SpeakerHalf ──────────────────────────────────────────────────────────────
+//
+// One speaker's entire reading area, written in their reading order top-down.
+// On the partner's half, the parent View is rotated 180° so this same
+// reading-order layout flips into the correct on-screen position (PTT lands
+// at the partner's edge of the phone).
+//
+//   reading top:    edge chrome  (status / settings)  ←- wait, no.
+//
+// Actually written top-down:
+//   1. source line  (closest to center divider in user's POV)
+//   2. big text
+//   3. identity chip
+//   4. PTT button
+//   5. edge chrome  (closest to phone edge in user's POV)
 
-interface SpeakerPaneProps {
+interface SpeakerHalfProps {
   readonly speakerLanguage: string;
   readonly partnerLanguage: string;
   readonly activeTurn: Turn | null;
   readonly incomingTurn: Turn | null;
   readonly accent: string;
-  readonly side: 'top' | 'bottom';
+  readonly accentRing: string;
+  readonly accentGlow: string;
+  readonly accentWhisper: string;
+  readonly edgePadding: number;
+  readonly edgeContent: React.ReactNode;
+  readonly disabled: boolean;
+  readonly onPressIn: () => void;
+  readonly onPressOut: () => void;
   readonly onChangeLanguage: () => void;
 }
 
-function SpeakerPane({
+function SpeakerHalf({
   speakerLanguage,
   partnerLanguage,
   activeTurn,
   incomingTurn,
   accent,
-  side,
+  accentRing,
+  accentGlow,
+  accentWhisper,
+  edgePadding,
+  edgeContent,
+  disabled,
+  onPressIn,
+  onPressOut,
   onChangeLanguage,
-}: SpeakerPaneProps): React.JSX.Element {
+}: SpeakerHalfProps): React.JSX.Element {
   const speakerLang = getLanguage(speakerLanguage);
   const partnerLang = getLanguage(partnerLanguage);
 
-  // Big text: what THIS speaker should READ — i.e. the OTHER side's
-  // translated text in MY language.
+  // The big text — what THIS speaker reads — is the OTHER side's translation
+  // rendered in MY language.
   const incomingText = incomingTurn?.translatedText ?? '';
   const incomingStage = incomingTurn?.stage ?? null;
 
-  // Small text: this speaker's own source captured live, OR the partner's
-  // source if we just finished a turn (so the speaker can verify what was
-  // said vs how it was rendered).
+  // Source line — the user's own captured speech while talking, OR the
+  // partner's source if a turn just completed (so the listener can verify
+  // what was said vs how it was rendered).
   const ownSource = activeTurn?.sourceText ?? '';
   const partnerSource = incomingTurn?.sourceText ?? '';
 
-  // Animate the big text in when it changes.
+  // Animate big text in.
   const opacity = useSharedValue(0);
   useEffect(() => {
     if (incomingText.length > 0) {
@@ -277,59 +302,81 @@ function SpeakerPane({
   const bigStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
 
   const stageForMorph: TurnStage | null = activeTurn?.stage ?? incomingStage ?? null;
+  const showMorph = stageForMorph !== null && stageForMorph !== 'done';
+
+  // Reveal source line either while speaking (own) or after a completed turn
+  // (partner's, paired with the translated text above).
+  const sourceNode =
+    activeTurn !== null && ownSource.length > 0 ? (
+      <SourceLine label={speakerLang.endonym} text={ownSource} />
+    ) : activeTurn === null && partnerSource.length > 0 && incomingText.length > 0 ? (
+      <SourceLine label={partnerLang.endonym} text={partnerSource} />
+    ) : null;
 
   return (
-    <View style={[paneStyles.pane, side === 'top' ? paneStyles.topAlign : paneStyles.bottomAlign]}>
-      {/* Identity strip — tap to change this speaker's language without
-          leaving the conversation. */}
-      <View style={paneStyles.identity}>
+    <View style={halfStyles.root}>
+      {/* 1. Source line — closest to the center divider. */}
+      <View style={halfStyles.sourceSlot}>{sourceNode}</View>
+
+      {/* 2. Big translated text — the hero. */}
+      <View style={halfStyles.big}>
+        {incomingText.length > 0 ? (
+          <Animated.Text style={[halfStyles.bigText, bigStyle]}>{incomingText}</Animated.Text>
+        ) : (
+          <Text variant="displayHuge" tone="fgGhost" style={halfStyles.placeholder}>
+            {speakerLang.endonym}
+          </Text>
+        )}
+        {incomingTurn?.stage === 'error' && (
+          <Text variant="bodySmall" tone="error" style={halfStyles.errorText}>
+            ⚠  {incomingTurn.errorMessage ?? 'Error de traducción'}
+          </Text>
+        )}
+      </View>
+
+      {/* 3. Identity strip — language label + state morph. Tap to change. */}
+      <View style={halfStyles.identityRow}>
         <Pressable
           onPress={onChangeLanguage}
-          hitSlop={10}
+          hitSlop={14}
           accessibilityRole="button"
           accessibilityLabel={`Cambiar idioma. Actual: ${speakerLang.name}`}
-          style={({ pressed }) => [paneStyles.identityChip, pressed && paneStyles.identityChipPressed]}>
-          <View style={[paneStyles.identityDot, { backgroundColor: accent }]} />
-          <Text variant="mono" tone="fgFaint">
-            {speakerLang.endonym.toUpperCase()}  ·  {speakerLang.code.toUpperCase()}
+          style={({ pressed }) => [halfStyles.identityChip, pressed && halfStyles.identityChipPressed]}>
+          <View style={[halfStyles.identityDot, { backgroundColor: accent }]} />
+          <Text variant="caption" tone="fgMuted">
+            {speakerLang.endonym.toUpperCase()}
           </Text>
-          <Text variant="mono" tone="fgGhost" style={paneStyles.changeHint}>
+          <Text variant="mono" tone="fgGhost" style={halfStyles.changeChevron}>
             ▾
           </Text>
         </Pressable>
-        <View style={paneStyles.flex} />
-        {stageForMorph !== null && stageForMorph !== 'done' && (
-          <View style={paneStyles.morphSlot}>
-            <StateMorph stage={stageForMorph} accent={accent} size={16} />
+        <View style={halfStyles.flex} />
+        {showMorph && (
+          <View style={halfStyles.morphSlot}>
+            <StateMorph stage={stageForMorph} accent={accent} size={18} />
           </View>
         )}
       </View>
 
-      {/* Big translated text or empty placeholder */}
-      <View style={paneStyles.big}>
-        {incomingText.length > 0 ? (
-          <Animated.Text style={[paneStyles.bigText, bigStyle]}>{incomingText}</Animated.Text>
-        ) : (
-          <Text variant="displayLarge" tone="fgGhost" style={paneStyles.placeholder}>
-            {speakerLang.endonym}
-          </Text>
-        )}
+      {/* 4. PTT button — the object. */}
+      <View style={halfStyles.buttonSlot}>
+        <PTTButton
+          label={speakerLanguage || '—'}
+          accent={accent}
+          accentRing={accentRing}
+          accentGlow={accentGlow}
+          accentWhisper={accentWhisper}
+          active={activeTurn !== null}
+          disabled={disabled}
+          onPressIn={onPressIn}
+          onPressOut={onPressOut}
+        />
       </View>
 
-      {/* Source line — what was actually said */}
-      <View style={paneStyles.sourceLine}>
-        {activeTurn !== null && ownSource.length > 0 ? (
-          <SourceLine label={speakerLang.endonym} text={ownSource} />
-        ) : activeTurn === null && partnerSource.length > 0 && incomingText.length > 0 ? (
-          <SourceLine label={partnerLang.endonym} text={partnerSource} />
-        ) : null}
+      {/* 5. Edge chrome — at the speaker's near-edge of the phone. */}
+      <View style={[halfStyles.edgeRow, { paddingBottom: edgePadding }]}>
+        {edgeContent}
       </View>
-
-      {incomingTurn?.stage === 'error' && (
-        <Text variant="bodySmall" tone="error" style={paneStyles.errorText}>
-          ⚠  {incomingTurn.errorMessage ?? 'Error de traducción'}
-        </Text>
-      )}
     </View>
   );
 }
@@ -337,7 +384,7 @@ function SpeakerPane({
 function SourceLine({ label, text }: { readonly label: string; readonly text: string }): React.JSX.Element {
   return (
     <View>
-      <Text variant="caption" tone="fgGhost" style={paneStyles.sourceLabel}>
+      <Text variant="mono" tone="fgGhost" style={halfStyles.sourceLabel}>
         {label.toUpperCase()}
       </Text>
       <Text variant="bodySmall" tone="fgFaint" numberOfLines={3}>
@@ -355,13 +402,13 @@ function NetworkPill({ state }: { readonly state: 'unknown' | 'online' | 'offlin
     state === 'offline' ? color.error :
     color.fgGhost;
   const label =
-    state === 'online' ? 'EN LÍNEA' :
-    state === 'offline' ? 'SIN CONEXIÓN' :
-    'CONECTANDO';
+    state === 'online' ? 'en línea' :
+    state === 'offline' ? 'sin conexión' :
+    'conectando';
   return (
     <View style={pillStyles.pill}>
       <View style={[pillStyles.dot, { backgroundColor: dotColor }]} />
-      <Text variant="mono" tone="fgFaint">{label}</Text>
+      <Text variant="mono" tone="fgFaint" style={pillStyles.label}>{label}</Text>
     </View>
   );
 }
@@ -370,91 +417,111 @@ function NetworkPill({ state }: { readonly state: 'unknown' | 'online' | 'offlin
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: color.bg },
-  flex: { flex: 1 },
 
-  half: { flex: 1, paddingHorizontal: space.xl },
-  halfTop: { justifyContent: 'flex-end' },
-  halfBottom: { justifyContent: 'space-between' },
+  half: { flex: 1 },
   flipped: { flex: 1, transform: [{ rotate: '180deg' }] },
 
-  topChromeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingTop: space.xs,
-    paddingBottom: space.xs,
-  },
-  bottomChromeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingTop: space.xs,
-  },
-
-  micBar: {
+  settingsLink: {
+    letterSpacing: 1.4,
     paddingVertical: space.xs,
-  },
-  dividerLine: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: color.hairline,
-  },
-  micRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingVertical: space.md,
   },
 
   bannerWrap: {
     position: 'absolute',
-    left: space.md,
-    right: space.md,
-    top: '45%',
+    left: space.lg,
+    right: space.lg,
+    top: '47%',
     alignItems: 'center',
   },
   banner: {
-    backgroundColor: '#141414',
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    borderRadius: 14,
-    borderWidth: 1,
+    backgroundColor: '#0E0E0E',
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.hairlineStrong,
+    alignItems: 'center',
+    minWidth: 240,
   },
+  bannerEyebrow: {
+    marginBottom: 6,
+  },
+  bannerBody: {
+    marginBottom: 4,
+  },
+  bannerHint: {},
 });
 
-const paneStyles = StyleSheet.create({
-  pane: {
+const halfStyles = StyleSheet.create({
+  root: {
     flex: 1,
-    paddingVertical: space.md,
+    paddingHorizontal: space.xl,
   },
-  topAlign: { justifyContent: 'flex-end' },
-  bottomAlign: { justifyContent: 'flex-start' },
   flex: { flex: 1 },
 
-  identity: {
+  // 1. Source line — small, near the center divider.
+  sourceSlot: {
+    minHeight: 36,
+    paddingTop: space.lg,
+    paddingBottom: space.xs,
+  },
+  sourceLabel: {
+    marginBottom: 4,
+    fontSize: 9.5,
+    letterSpacing: 1.2,
+  },
+
+  // 2. Big text — fills the middle of the half.
+  big: {
+    flex: 1,
+    justifyContent: 'flex-start',
+    paddingTop: space.xs,
+    paddingBottom: space.sm,
+  },
+  bigText: {
+    color: color.fg,
+    fontSize: 34,
+    lineHeight: 42,
+    fontWeight: '300',
+    letterSpacing: -0.6,
+  },
+  placeholder: {
+    opacity: 0.18,
+    fontWeight: '200',
+  },
+  errorText: {
+    marginTop: space.sm,
+  },
+
+  // 3. Identity row.
+  identityRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: space.sm,
-    minHeight: 18,
+    minHeight: 22,
+    marginBottom: space.md,
   },
   identityChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: 999,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.hairline,
   },
   identityChipPressed: {
     backgroundColor: color.surface2,
+    borderColor: color.hairlineStrong,
   },
   identityDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    marginRight: space.xs,
+    marginRight: 8,
   },
-  changeHint: {
-    marginLeft: 6,
+  changeChevron: {
+    marginLeft: 8,
+    opacity: 0.7,
   },
   morphSlot: {
     width: 22,
@@ -463,30 +530,19 @@ const paneStyles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  big: {
-    minHeight: 110,
-    justifyContent: 'flex-start',
-  },
-  bigText: {
-    color: color.fg,
-    fontSize: 30,
-    lineHeight: 38,
-    fontWeight: '300',
-    letterSpacing: -0.4,
-  },
-  placeholder: {
-    opacity: 0.45,
+  // 4. PTT button slot.
+  buttonSlot: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: -space.lg, // pull the halo into surrounding chrome
   },
 
-  sourceLine: {
-    marginTop: space.md,
-    minHeight: 36,
-  },
-  sourceLabel: {
-    marginBottom: 4,
-  },
-  errorText: {
-    marginTop: space.xs,
+  // 5. Edge chrome.
+  edgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: space.xs,
   },
 });
 
@@ -494,17 +550,16 @@ const pillStyles = StyleSheet.create({
   pill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: color.surface1,
-    paddingHorizontal: space.sm,
+    paddingHorizontal: 0,
     paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: color.hairline,
   },
   dot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    marginRight: 6,
+    marginRight: 8,
+  },
+  label: {
+    letterSpacing: 1.4,
   },
 });
