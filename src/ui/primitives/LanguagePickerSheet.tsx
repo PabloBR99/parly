@@ -1,16 +1,17 @@
 // LanguagePickerSheet — modal bottom sheet for picking a language.
 //
 // Behavior:
-//   - Backdrop fades + sheet rises when `visible` flips to true.
+//   - Backdrop fades + sheet rises when `visible` flips to true (native Modal slide).
 //   - Tapping a row → onSelect(code).
 //   - Tapping backdrop or pull-down handle → onClose().
 //
-// Implementation note: we render the sheet inside a native <Modal> for
-// reliability across Android versions. Earlier hand-rolled overlay used a
-// runOnJS callback inside withTiming + autoFocus on a TextInput, which on
-// some Android builds crashed under React 19 + Reanimated 4. The Modal
-// path avoids both: it appears/disappears instantly, and we layer a
-// Reanimated entrance animation on top for polish.
+// Implementation note: we deliberately use the platform <Modal> with its
+// native `animationType="slide"` and NO Reanimated entrance/exit. An earlier
+// version layered a Reanimated `useAnimatedStyle` over the Modal — on Android,
+// when the user tapped a row the parent flipped `visible=false` while a
+// trailing Reanimated useEffect tried to write shared values into views that
+// the Modal had already begun tearing down, producing a hard JNI crash. The
+// purely-native path eliminates that race.
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
@@ -23,15 +24,9 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import Animated, {
-  Easing,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from './Text';
-import { color, motion, radius, space } from '../theme';
+import { color, radius, space } from '../theme';
 import { LANGUAGES } from '../../app/languages';
 import type { Language } from '../../app/types';
 
@@ -94,120 +89,58 @@ export function LanguagePickerSheet({
       visible={visible}
       onRequestClose={onClose}
       transparent
-      animationType="none"
+      animationType="slide"
       statusBarTranslucent>
-      <SheetContent
-        visible={visible}
-        groups={groups}
-        filter={filter}
-        onFilterChange={setFilter}
-        onSelect={onSelect}
-        onClose={onClose}
-        insetBottom={insets.bottom}
-      />
-    </Modal>
-  );
-}
-
-interface SheetContentProps {
-  readonly visible: boolean;
-  readonly groups: { title: string; languages: Language[] }[];
-  readonly filter: string;
-  readonly onFilterChange: (s: string) => void;
-  readonly onSelect: (code: string) => void;
-  readonly onClose: () => void;
-  readonly insetBottom: number;
-}
-
-function SheetContent({
-  visible,
-  groups,
-  filter,
-  onFilterChange,
-  onSelect,
-  onClose,
-  insetBottom,
-}: SheetContentProps): React.JSX.Element {
-  const opacity = useSharedValue(0);
-  const translate = useSharedValue(40);
-
-  useEffect(() => {
-    if (visible) {
-      opacity.value = withTiming(1, { duration: motion.normal, easing: Easing.out(Easing.quad) });
-      translate.value = withTiming(0, { duration: motion.normal + 80, easing: Easing.out(Easing.cubic) });
-    } else {
-      opacity.value = 0;
-      translate.value = 40;
-    }
-  }, [visible, opacity, translate]);
-
-  const backdropStyle = useAnimatedStyle(() => ({
-    opacity: opacity.value * 0.62,
-  }));
-
-  const sheetStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: translate.value }],
-    opacity: opacity.value,
-  }));
-
-  return (
-    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-      <Animated.View style={[styles.backdrop, backdropStyle]}>
+      <View style={styles.fill} pointerEvents="box-none">
         <Pressable
-          style={StyleSheet.absoluteFill}
+          style={styles.backdrop}
           onPress={onClose}
           accessibilityRole="button"
           accessibilityLabel="Cerrar selector"
         />
-      </Animated.View>
-
-      <Animated.View
-        style={[
-          styles.sheet,
-          { paddingBottom: insetBottom + space.md },
-          sheetStyle,
-        ]}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.kavoid}>
-          <View style={styles.handle} />
-          <View style={styles.searchWrap}>
-            <Text variant="caption" tone="fgFaint" style={styles.searchLabel}>
-              ELEGIR IDIOMA
-            </Text>
-            <TextInput
-              style={styles.search}
-              placeholder="Buscar — Español, English, 日本語…"
-              placeholderTextColor={color.fgGhost}
-              value={filter}
-              onChangeText={onFilterChange}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-          </View>
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.list}>
-            {groups.map(g => (
-              <View key={g.title} style={styles.group}>
-                <Text variant="caption" tone="fgGhost" style={styles.groupTitle}>
-                  {g.title.toUpperCase()}
-                </Text>
-                {g.languages.map(l => (
-                  <LanguageRow key={l.code} language={l} onPress={() => onSelect(l.code)} />
-                ))}
-              </View>
-            ))}
-            {groups.length === 0 && (
-              <Text variant="body" tone="fgFaint" style={styles.empty}>
-                Sin coincidencias.
+        <View style={[styles.sheet, { paddingBottom: insets.bottom + space.md }]}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.kavoid}>
+            <View style={styles.handle} />
+            <View style={styles.searchWrap}>
+              <Text variant="caption" tone="fgFaint" style={styles.searchLabel}>
+                ELEGIR IDIOMA
               </Text>
-            )}
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </Animated.View>
-    </View>
+              <TextInput
+                style={styles.search}
+                placeholder="Buscar — Español, English, 日本語…"
+                placeholderTextColor={color.fgGhost}
+                value={filter}
+                onChangeText={setFilter}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.list}>
+              {groups.map(g => (
+                <View key={g.title} style={styles.group}>
+                  <Text variant="caption" tone="fgGhost" style={styles.groupTitle}>
+                    {g.title.toUpperCase()}
+                  </Text>
+                  {g.languages.map(l => (
+                    <LanguageRow key={l.code} language={l} onPress={() => onSelect(l.code)} />
+                  ))}
+                </View>
+              ))}
+              {groups.length === 0 && (
+                <Text variant="body" tone="fgFaint" style={styles.empty}>
+                  Sin coincidencias.
+                </Text>
+              )}
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -235,9 +168,12 @@ function LanguageRow({
 }
 
 const styles = StyleSheet.create({
+  fill: {
+    flex: 1,
+  },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#000',
+    backgroundColor: 'rgba(0,0,0,0.62)',
   },
   sheet: {
     position: 'absolute',
