@@ -119,10 +119,12 @@ export function PTTButton({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    // Slightly brighter than `hairlineStrong` so the disc edge reads as
-    // a real ring catching ambient light, not just a thin outline.
-    borderColor: active ? accentRing : 'rgba(255,255,255,0.18)',
-    backgroundColor: active ? `${accent}1A` : 'rgba(255,255,255,0.025)',
+    // Idle uses the speaker's accent for both fill and rim (low alpha) so the
+    // disc reads as that speaker's territory even without a label inside.
+    // Active is the same hue at higher intensity, with the canonical ring
+    // colour for the rim.
+    borderColor: active ? accentRing : `${accent}66`,    // ~40% accent
+    backgroundColor: active ? `${accent}26` : `${accent}1A`, // 15% / 10% accent
     overflow: 'hidden',
   };
 

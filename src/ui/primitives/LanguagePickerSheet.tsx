@@ -1,29 +1,40 @@
-// LanguagePickerSheet — modal bottom sheet for picking a language.
+// LanguagePickerSheet — bottom-sheet language picker.
 //
-// Behavior:
-//   - Backdrop fades + sheet rises when `visible` flips to true (native Modal slide).
+// Implementation: an in-screen overlay (NOT a native <Modal>), animated by
+// Reanimated. The sheet is always mounted; opening/closing translates it
+// in and out via a shared value. We chose this over the platform Modal
+// because the Modal's Android Dialog window kept producing a visible
+// upward jump whenever the user touched the sheet — multiple iterations
+// of fixes inside the Modal couldn't make the slide stable. An in-screen
+// overlay sidesteps the entire native Dialog layer.
+//
+// Two earlier risks we explicitly handle:
+//   1) JNI crash from a previous Reanimated-on-Modal layering — that race
+//      doesn't apply here because the views are never unmounted; we only
+//      translate them off-screen on close.
+//   2) Bottom-anchored content shifting when its measured height changed
+//      mid-animation — we cache the exclude-language during render via a
+//      ref so the list stays byte-identical through close.
+//
+// Behaviour:
+//   - Backdrop fades + sheet rises when `visible` flips to true.
 //   - Tapping a row → onSelect(code).
-//   - Tapping backdrop or pull-down handle → onClose().
-//
-// Implementation note: we deliberately use the platform <Modal> with its
-// native `animationType="slide"` and NO Reanimated entrance/exit. An earlier
-// version layered a Reanimated `useAnimatedStyle` over the Modal — on Android,
-// when the user tapped a row the parent flipped `visible=false` while a
-// trailing Reanimated useEffect tried to write shared values into views that
-// the Modal had already begun tearing down, producing a hard JNI crash. The
-// purely-native path eliminates that race.
+//   - Tapping the backdrop or the pull handle → onClose().
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
+  Dimensions,
   Pressable,
   ScrollView,
   StyleSheet,
   TextInput,
   View,
 } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from './Text';
 import { color, radius, space } from '../theme';
@@ -52,6 +63,14 @@ const SCRIPT_GROUPS: { readonly title: string; readonly codes: readonly string[]
   { title: 'Thai', codes: ['th'] },
 ];
 
+// Off-screen distance used to park the sheet when not visible. Using the
+// full screen height guarantees the sheet is fully out of view regardless
+// of its measured height.
+const SCREEN_HEIGHT = Dimensions.get('window').height;
+
+const SLIDE_IN_MS = 320;
+const SLIDE_OUT_MS = 260;
+
 export function LanguagePickerSheet({
   visible,
   excludeCode,
@@ -61,23 +80,17 @@ export function LanguagePickerSheet({
   const insets = useSafeAreaInsets();
   const [filter, setFilter] = useState('');
 
-  // Snapshot `excludeCode` during render via a ref, not in a useEffect. An
-  // effect runs AFTER the first paint with `visible=true`, so the list
-  // briefly renders without the exclude applied, then re-renders with it —
-  // a two-frame flicker the bottom-anchored sheet translates into an UPWARD
-  // jump (smaller content → top edge slides down → close-then-rise read).
-  // Mutating a ref during render is the React-approved pattern for
-  // "remember the last X" without a setState round-trip. The ref freezes
-  // its value while `visible=false`, so the close animation runs over a
-  // byte-identical list.
+  // Snapshot `excludeCode` during render via a ref. An effect would update
+  // AFTER the first paint, briefly rendering with the exclude not applied,
+  // which the bottom-anchored sheet translates into a top-edge jump.
   const cachedExcludeRef = useRef<string | undefined>(excludeCode);
   if (visible) {
     cachedExcludeRef.current = excludeCode;
   }
   const frozenExclude = cachedExcludeRef.current;
 
-  // Reset the search filter on the visible: false → true transition.
-  // Closing keeps the filter so the list size doesn't change mid-slide-down.
+  // Reset the search filter on the false → true transition only. Closing
+  // keeps the filter so the list size doesn't change mid-slide-out.
   const wasVisibleRef = useRef(visible);
   useEffect(() => {
     if (visible && !wasVisibleRef.current) {
@@ -86,6 +99,30 @@ export function LanguagePickerSheet({
     wasVisibleRef.current = visible;
   }, [visible]);
 
+  // ── Slide + fade animation ────────────────────────────────────────────────
+  // translateY: SCREEN_HEIGHT (parked) → 0 (in place). Initial value parks
+  // the sheet off-screen on first mount so it doesn't flash visible.
+  const translateY = useSharedValue(SCREEN_HEIGHT);
+  const backdropOpacity = useSharedValue(0);
+
+  useEffect(() => {
+    if (visible) {
+      translateY.value = withTiming(0, { duration: SLIDE_IN_MS });
+      backdropOpacity.value = withTiming(0.62, { duration: SLIDE_IN_MS });
+    } else {
+      translateY.value = withTiming(SCREEN_HEIGHT, { duration: SLIDE_OUT_MS });
+      backdropOpacity.value = withTiming(0, { duration: SLIDE_OUT_MS });
+    }
+  }, [visible, translateY, backdropOpacity]);
+
+  const sheetStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: translateY.value }],
+  }));
+  const backdropStyle = useAnimatedStyle(() => ({
+    opacity: backdropOpacity.value,
+  }));
+
+  // ── List composition ──────────────────────────────────────────────────────
   const filterLower = filter.trim().toLowerCase();
 
   const groups = useMemo(() => {
@@ -107,62 +144,77 @@ export function LanguagePickerSheet({
   }, [frozenExclude, filterLower]);
 
   return (
-    <Modal
-      visible={visible}
-      onRequestClose={onClose}
-      transparent
-      animationType="slide"
-      statusBarTranslucent>
-      <View style={styles.fill} pointerEvents="box-none">
+    // Outer wrapper — absoluteFill within parent. pointerEvents toggles on
+    // visibility so taps pass through to underlying UI when the sheet is
+    // closed (it's still mounted and laid out).
+    <View
+      style={StyleSheet.absoluteFillObject}
+      pointerEvents={visible ? 'auto' : 'none'}>
+      {/* Backdrop — Reanimated opacity from 0 → 0.62. */}
+      <Animated.View
+        pointerEvents={visible ? 'auto' : 'none'}
+        style={[styles.backdrop, backdropStyle]}>
         <Pressable
-          style={styles.backdrop}
+          style={StyleSheet.absoluteFillObject}
           onPress={onClose}
           accessibilityRole="button"
           accessibilityLabel="Close picker"
         />
-        <View style={[styles.sheet, { paddingBottom: insets.bottom + space.md }]}>
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            style={styles.kavoid}>
-            <View style={styles.handle} />
-            <View style={styles.searchWrap}>
-              <Text variant="caption" tone="fgFaint" style={styles.searchLabel}>
-                CHOOSE LANGUAGE
-              </Text>
-              <TextInput
-                style={styles.search}
-                placeholder="Search — English, Español, 日本語…"
-                placeholderTextColor={color.fgGhost}
-                value={filter}
-                onChangeText={setFilter}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-            </View>
-            <ScrollView
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.list}>
-              {groups.map(g => (
-                <View key={g.title} style={styles.group}>
-                  <Text variant="caption" tone="fgGhost" style={styles.groupTitle}>
-                    {g.title.toUpperCase()}
-                  </Text>
-                  {g.languages.map(l => (
-                    <LanguageRow key={l.code} language={l} onPress={() => onSelect(l.code)} />
-                  ))}
-                </View>
-              ))}
-              {groups.length === 0 && (
-                <Text variant="body" tone="fgFaint" style={styles.empty}>
-                  No matches.
-                </Text>
-              )}
-            </ScrollView>
-          </KeyboardAvoidingView>
+      </Animated.View>
+
+      {/* Sheet — fixed-height bottom-anchored panel. translateY drives the
+          slide. Height is a percentage of the parent so the sheet adapts
+          when the keyboard opens (Android adjustResize shrinks the parent),
+          but the LAYOUT never depends on the inner content's measured size. */}
+      <Animated.View
+        style={[
+          styles.sheet,
+          { paddingBottom: insets.bottom + space.md },
+          sheetStyle,
+        ]}>
+        <Pressable
+          onPress={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+          hitSlop={8}>
+          <View style={styles.handle} />
+        </Pressable>
+        <View style={styles.searchWrap}>
+          <Text variant="caption" tone="fgFaint" style={styles.searchLabel}>
+            CHOOSE LANGUAGE
+          </Text>
+          <TextInput
+            style={styles.search}
+            placeholder="Search — English, Español, 日本語…"
+            placeholderTextColor={color.fgGhost}
+            value={filter}
+            onChangeText={setFilter}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
         </View>
-      </View>
-    </Modal>
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.list}>
+          {groups.map(g => (
+            <View key={g.title} style={styles.group}>
+              <Text variant="caption" tone="fgGhost" style={styles.groupTitle}>
+                {g.title.toUpperCase()}
+              </Text>
+              {g.languages.map(l => (
+                <LanguageRow key={l.code} language={l} onPress={() => onSelect(l.code)} />
+              ))}
+            </View>
+          ))}
+          {groups.length === 0 && (
+            <Text variant="body" tone="fgFaint" style={styles.empty}>
+              No matches.
+            </Text>
+          )}
+        </ScrollView>
+      </Animated.View>
+    </View>
   );
 }
 
@@ -195,19 +247,16 @@ function LanguageRow({
 }
 
 const styles = StyleSheet.create({
-  fill: {
-    flex: 1,
-  },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.62)',
+    backgroundColor: 'black',
   },
   sheet: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    maxHeight: '88%',
+    height: '88%',
     backgroundColor: '#0B0B0B',
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
@@ -215,9 +264,6 @@ const styles = StyleSheet.create({
     borderLeftWidth: 1,
     borderRightWidth: 1,
     borderColor: color.hairline,
-  },
-  kavoid: {
-    minHeight: 240,
   },
   handle: {
     alignSelf: 'center',
