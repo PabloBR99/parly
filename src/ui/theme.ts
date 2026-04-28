@@ -17,17 +17,10 @@ import { Platform } from 'react-native';
 
 export const color = {
   // Surfaces — base is no longer pure black. A hair toward dusk so the warm
-  // and cool overlays read as warmth, not a colour cast.
-  //
-  // bgCoolEdge / bgWarmEdge are TINTS (rgba) layered over `bg` to paint the
-  // dusk atmosphere on each half of the screen. Calibrated so the blue-top /
-  // orange-bottom feel reads clearly against `bg` without overpowering the
-  // watercolour blooms that sit on top.
-  bg:        '#0B0B11',                              // base midnight, slightly violet-warm
-  bgCoolEdge:'rgba(168,178,255,0.14)',               // periwinkle wash — partner's edge (top-half base)
-  bgCoolBoost:'rgba(168,178,255,0.10)',              // extra periwinkle in the top corners (stacks on bgCoolEdge)
-  bgWarmEdge:'rgba(255,179,122,0.14)',               // peach wash — user's edge (bottom-half base)
-  bgWarmBoost:'rgba(255,179,122,0.10)',              // extra peach in the bottom corners (stacks on bgWarmEdge)
+  // and cool overlays read as warmth, not a colour cast. The full
+  // periwinkle→bg→peach sky is painted by `DuskBackdrop` via a real
+  // LinearGradient, so we don't carry any wash-tint tokens here anymore.
+  bg:        '#0B0B11',                  // base midnight, slightly violet-warm
   surface1:  'rgba(255,255,255,0.035)',  // card / pill
   surface2:  'rgba(255,255,255,0.065)',  // hover / pressed
   surface3:  'rgba(255,255,255,0.10)',   // filled state
