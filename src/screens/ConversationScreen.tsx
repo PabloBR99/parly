@@ -51,6 +51,7 @@ import { getLanguage } from '../app/languages';
 import type { PersonId } from '../app/types';
 import type { RootStackParamList } from '../navigation/types';
 import {
+  DuskBackdrop,
   FirstTouchTrace,
   LanguagePickerSheet,
   PTTButton,
@@ -178,10 +179,9 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
     <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor={color.bg} />
 
-      {/* Dusk gradient — faked with two flat half-overlays since the project
-          has no gradient lib. They sit above bg, below the seam and halves. */}
-      <View pointerEvents="none" style={styles.coolWash} />
-      <View pointerEvents="none" style={styles.warmWash} />
+      {/* Dusk atmosphere — multi-band warm/cool gradient sits above bg and
+          below the seam, blooms, and halves. */}
+      <DuskBackdrop />
       <Seam activeSide={activeSide} />
       <FirstTouchTrace
         side={traceSide}
@@ -553,23 +553,6 @@ function NetworkPill({ state }: { readonly state: 'unknown' | 'online' | 'offlin
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: color.bg },
-
-  coolWash: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    height: '50%',
-    backgroundColor: 'rgba(168,178,255,0.022)',
-  },
-  warmWash: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: '50%',
-    backgroundColor: 'rgba(255,179,122,0.022)',
-  },
 
   half: { flex: 1 },
   flipped: { flex: 1, transform: [{ rotate: '180deg' }] },

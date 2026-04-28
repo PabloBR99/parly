@@ -18,9 +18,16 @@ import { Platform } from 'react-native';
 export const color = {
   // Surfaces — base is no longer pure black. A hair toward dusk so the warm
   // and cool overlays read as warmth, not a colour cast.
-  bg:        '#0B0B11',                  // base midnight, slightly violet-warm
-  bgCoolEdge:'#0A0E14',                  // partner's edge — cool dusk
-  bgWarmEdge:'#0E0B12',                  // user's edge — warm dusk
+  //
+  // bgCoolEdge / bgWarmEdge are TINTS (rgba) layered over `bg` to paint the
+  // dusk atmosphere on each half of the screen. Calibrated so the blue-top /
+  // orange-bottom feel reads clearly against `bg` without overpowering the
+  // watercolour blooms that sit on top.
+  bg:        '#0B0B11',                              // base midnight, slightly violet-warm
+  bgCoolEdge:'rgba(168,178,255,0.14)',               // periwinkle wash — partner's edge (top-half base)
+  bgCoolBoost:'rgba(168,178,255,0.10)',              // extra periwinkle in the top corners (stacks on bgCoolEdge)
+  bgWarmEdge:'rgba(255,179,122,0.14)',               // peach wash — user's edge (bottom-half base)
+  bgWarmBoost:'rgba(255,179,122,0.10)',              // extra peach in the bottom corners (stacks on bgWarmEdge)
   surface1:  'rgba(255,255,255,0.035)',  // card / pill
   surface2:  'rgba(255,255,255,0.065)',  // hover / pressed
   surface3:  'rgba(255,255,255,0.10)',   // filled state
@@ -63,10 +70,13 @@ export const color = {
   bloomCoolMid:   'rgba(127,216,201,0.38)',  // #7FD8C9
   bloomCoolDeep:  'rgba(156,138,230,0.34)',  // #9C8AE6
 
-  // Seam — where the two halves meet. A faint horizontal wash plus a hair-line.
-  seamCool:       'rgba(168,178,255,0.06)',
-  seamWarm:       'rgba(255,179,122,0.06)',
-  seamLine:       'rgba(255,255,255,0.16)',
+  // Seam — where the two halves meet. A clear horizontal zone, not an
+  // afterthought. Bands stack on top of the half-washes to amplify the
+  // warm/cool encounter at the horizon, with a crisp shimmering hairline
+  // through the middle.
+  seamCool:       'rgba(168,178,255,0.12)',
+  seamWarm:       'rgba(255,179,122,0.12)',
+  seamLine:       'rgba(255,255,255,0.32)',
 
   // Status — re-tinted so success aligns with the cool palette (seafoam) and
   // warning doesn't clash with the warm palette.
@@ -161,6 +171,17 @@ export const font = {
     lineHeight: 42,
     fontWeight: '300' as const,
     letterSpacing: -0.6,
+  },
+  // Editorial hero — used for setup-screen headlines and chrome-y display
+  // text. Serif italic, big, generous line-height. The literary voice of
+  // Dusk's setup surfaces (LanguagePair, eventually Settings hero, etc).
+  serifHero: {
+    fontFamily: serifFamily,
+    fontStyle: 'italic' as const,
+    fontSize: 30,
+    lineHeight: 38,
+    fontWeight: '400' as const,
+    letterSpacing: -0.4,
   },
 
   // Body

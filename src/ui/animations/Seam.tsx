@@ -22,9 +22,9 @@ interface SeamProps {
   readonly activeSide: 'A' | 'B' | null;
 }
 
-const BAND_HEIGHT = 36;
-const SEAM_HEIGHT = 80;
-const PUSH_PX = 4;
+const BAND_HEIGHT = 56;
+const SEAM_HEIGHT = 120;
+const PUSH_PX = 6;
 
 export function Seam({ activeSide }: SeamProps): React.JSX.Element {
   // Push: A (warm, bottom) speaking → seam shifts UP (negative).

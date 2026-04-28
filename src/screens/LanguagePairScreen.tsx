@@ -18,6 +18,7 @@ import { log } from '../services/log/logStore';
 import type { RootStackParamList } from '../navigation/types';
 import {
   Button,
+  DuskBackdrop,
   LanguageCard,
   LanguagePickerSheet,
   SwapButton,
@@ -114,16 +115,25 @@ export function LanguagePairScreen({ navigation }: Props): React.JSX.Element {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
-      {/* Hairline header */}
+      {/* Dusk atmosphere — same warm/cool gradient as the conversation
+          surface, so the setup screen lives in the same world. */}
+      <DuskBackdrop />
+
+      {/* Hairline header — editorial serif italic, peach + periwinkle dots
+          flank the eyebrow as a tiny preview of the speaker palette. */}
       <View style={styles.header}>
         <View style={styles.headerInner}>
-          <Text variant="caption" tone="fgGhost" style={styles.eyebrow}>
-            PARLY
+          <View style={styles.eyebrowRow}>
+            <View style={[styles.eyebrowDot, { backgroundColor: color.accentB }]} />
+            <Text variant="caption" tone="fgGhost" style={styles.eyebrow}>
+              PARLY — DUSK
+            </Text>
+            <View style={[styles.eyebrowDot, { backgroundColor: color.accentA }]} />
+          </View>
+          <Text variant="serifHero" tone="fg" style={styles.headline}>
+            Two suns meeting{'\n'}at the edge of the day.
           </Text>
-          <Text variant="displayLarge" tone="fg" style={styles.headline}>
-            Two languages.{'\n'}One conversation.
-          </Text>
-          <Text variant="bodySmall" tone="fgFaint" style={styles.subhead}>
+          <Text variant="serif" tone="fgFaint" style={styles.subhead}>
             Pick one for each speaker. You can swap or change them during
             the conversation.
           </Text>
@@ -188,8 +198,19 @@ const styles = StyleSheet.create({
     paddingBottom: space.xl,
   },
   headerInner: {},
-  eyebrow: {
+  eyebrowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginBottom: space.md,
+  },
+  eyebrowDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    marginHorizontal: 8,
+    opacity: 0.85,
+  },
+  eyebrow: {
     letterSpacing: 2.4,
   },
   headline: {

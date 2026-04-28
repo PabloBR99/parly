@@ -39,15 +39,21 @@ interface PTTButtonProps {
 }
 
 const SIZE = 96;
-const BLOOM_SIZE = 280;
-const FOOTPRINT = BLOOM_SIZE;
+// BLOOM_SIZE is the visual reach of each watercolour stain. FOOTPRINT is the
+// layout box the parent reserves for the PTT. Keeping FOOTPRINT smaller than
+// BLOOM_SIZE lets the bloom paint OUTSIDE the slot — into the chip above,
+// the edge chrome below, and the seam zone — which is what makes the
+// atmosphere feel painterly instead of disc-bound.
+const BLOOM_SIZE = 340;
+const FOOTPRINT = 240;
 
 // Asymmetric stain offsets — the three blobs cluster around the disc but
 // never share a centre, so their overlapping edges form a watercolour shape
-// rather than concentric rings.
-const TOP_OFFSET = { x: -22, y: -28 };
-const MID_OFFSET = { x:  24, y:  18 };
-const DEEP_OFFSET = { x:  -2, y:  30 };
+// rather than concentric rings. Pushed harder than the original (which read
+// as concentric on-device, against the mockup's painterly feel).
+const TOP_OFFSET = { x: -38, y: -46 };
+const MID_OFFSET = { x:  42, y:  28 };
+const DEEP_OFFSET = { x:  -6, y:  52 };
 
 // Per-stain breath tempos (ms). Coprime-ish so the stain phases never lock.
 const TOP_PERIOD = 5400;
