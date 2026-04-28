@@ -25,14 +25,20 @@ import React from 'react';
 import { StyleSheet } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 
+// Six stops, asymmetric mid-darks at 42% and 58% — Apple Weather's trick
+// for "atmosphere not centred". Two-stop or symmetric-3-stop gradients
+// read as engineered; pulling the dark anchors off-centre by 8% gives
+// the sky a painted feel. Saturated extremes pulled up so the dusk reads
+// at a glance, not just as a tint cast on otherwise-black canvas.
 const DUSK_STOPS = [
-  '#181B33', // 0%   — periwinkle dark, partner's sky
-  '#11111F', // 30%  — cool fading toward neutral
-  '#0B0B11', // 50%  — bg (the seam sits here)
-  '#13100E', // 70%  — warm fading in
-  '#2E1810', // 100% — peach-terracotta dark, user's horizon
+  '#1B1F38', //   0% — periwinkle dark, partner's sky
+  '#14152A', //  22% — cool fading toward neutral
+  '#0E0E18', //  42% — pre-centre dark
+  '#110E10', //  58% — post-centre dark
+  '#1A130D', //  78% — warm fading in
+  '#341B10', // 100% — peach-terracotta dark, user's horizon
 ];
-const DUSK_LOCATIONS = [0, 0.3, 0.5, 0.7, 1];
+const DUSK_LOCATIONS = [0, 0.22, 0.42, 0.58, 0.78, 1];
 
 export function DuskBackdrop(): React.JSX.Element {
   return (

@@ -58,14 +58,10 @@ export const color = {
   // governs intensity. Keeping a parallel rgba copy here was a footgun —
   // when we tuned alpha on the SVG side, the tokens silently rotted.
 
-  // Seam — where the two halves meet. A clear horizontal zone, not an
-  // afterthought. Bands stack on top of the half-washes to amplify the
-  // warm/cool encounter at the horizon. The shimmering hairline through
-  // the middle is rendered as an SVG horizontal gradient inline in
-  // Seam.tsx so it can fade at the edges instead of butting hard up
-  // against the screen sides.
-  seamCool:       'rgba(168,178,255,0.12)',
-  seamWarm:       'rgba(255,179,122,0.12)',
+  // Seam — the warm/cool transition is now painted as a single vertical
+  // LinearGradient inline in Seam.tsx (cool→warm), and the hairline is a
+  // horizontal SVG gradient. No theme tokens needed: keeping a parallel
+  // colour copy here was a footgun (drifted away from the SVG side).
 
   // Status — re-tinted so success aligns with the cool palette (seafoam) and
   // warning doesn't clash with the warm palette.

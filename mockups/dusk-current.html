@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Parly — Dusk · current code mirror</title>
+<style>
+  /* ---------------------------------------------------------------
+     dusk-current.html
+     A faithful CSS mirror of the React Native code as it stands now.
+     Constraint: ONLY use CSS features that RN can replicate natively
+     (no filter:blur, no mix-blend-mode, no backdrop-filter). This
+     keeps the HTML honest — what we see here is what the device sees.
+
+     Side-by-side with mockups/dusk-concept.html, this is the iteration
+     surface: change RN code, mirror here, refresh, see the result.
+     --------------------------------------------------------------- */
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #1c1c20;
+    min-height: 100%;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    display: grid;
+    place-items: center;
+    padding: 60px 24px;
+    box-sizing: border-box;
+    gap: 48px;
+  }
+  .label {
+    text-align: center;
+    color: rgba(255,255,255,0.6);
+    font-size: 12px;
+    letter-spacing: 1.6px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+
+  /* ---------------------------------------------------------------
+     Phone frame — matches the device aspect on the user's CMF Phone 1.
+     Width:height ~ 1080:2400 → 380:844 at our scale.
+     --------------------------------------------------------------- */
+  .phone {
+    position: relative;
+    width: 380px;
+    height: 844px;
+    border-radius: 44px;
+    overflow: hidden;
+    box-shadow:
+      0 0 0 1.5px rgba(255,255,255,0.05),
+      0 60px 120px -30px rgba(0,0,0,0.7);
+    background: #0B0B11;
+  }
+
+  /* ---------------------------------------------------------------
+     DuskBackdrop — exactly the LinearGradient stops in
+     src/ui/animations/DuskBackdrop.tsx
+     --------------------------------------------------------------- */
+  /* DuskBackdrop — 6-stop asymmetric gradient (mid-darks at 42% & 58%,
+     not 50%, gives the sky a "painted not centred" feel). Saturated
+     extremes pulled up a hair from the previous version so the dusk
+     reads at a glance, not as cast on otherwise-black canvas. */
+  .dusk-backdrop {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg,
+      #1B1F38 0%,
+      #14152A 22%,
+      #0E0E18 42%,
+      #110E10 58%,
+      #1A130D 78%,
+      #341B10 100%);
+  }
+
+  /* ---------------------------------------------------------------
+     Seam — Seam.tsx: 120px tall, centred, two 56px bands + hairline.
+     Token alphas: seamCool 0.12, seamWarm 0.12.
+     Hairline: SVG horizontal gradient transparent→0.32→0.55→0.32→transparent,
+     shimmer animates opacity 0.55→1.0 + scaleX 0.94→1.0 over 8s.
+     --------------------------------------------------------------- */
+  .seam {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 140px;
+    transform: translateY(-50%);
+    pointer-events: none;
+    z-index: 2;
+  }
+  /* Single vertical gradient covering the whole seam zone — cool fades
+     in from the top, meets warm at the centre, fades out at the bottom.
+     Replaces two distinct bands that were reading as engineered stripes
+     instead of an atmospheric horizon. */
+  .seam .haze {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg,
+      rgba(168,178,255,0.00) 0%,
+      rgba(168,178,255,0.16) 28%,
+      rgba(168,178,255,0.20) 45%,
+      rgba(255,179,122,0.20) 55%,
+      rgba(255,179,122,0.16) 72%,
+      rgba(255,179,122,0.00) 100%);
+  }
+  .seam .hairline {
+    position: absolute;
+    left: 0; right: 0;
+    top: calc(50% - 0.75px);
+    height: 1.5px;
+    /* 5-stop horizontal hairline — fades to transparent at the screen
+       edges, peaks bright at the centre. Brighter than the previous pass
+       so the horizon line actually reads against the warm/cool bands. */
+    background: linear-gradient(90deg,
+      rgba(255,255,255,0)    0%,
+      rgba(255,255,255,0.42) 18%,
+      rgba(255,255,255,0.78) 50%,
+      rgba(255,255,255,0.42) 82%,
+      rgba(255,255,255,0)    100%);
+    animation: seam-shimmer 9s ease-in-out infinite alternate;
+  }
+  @keyframes seam-shimmer {
+    0%   { opacity: 0.65; transform: scaleX(0.95); }
+    100% { opacity: 1.00; transform: scaleX(1.00); }
+  }
+
+  /* ---------------------------------------------------------------
+     Halves — top half is rotated 180° so the partner reads upright.
+     Each half has its reading-order layout: source (near seam) → big
+     text → identity chip → PTT slot → edge chrome (near phone edge).
+     --------------------------------------------------------------- */
+  .half {
+    position: absolute;
+    left: 0; right: 0;
+    height: 50%;
+    padding: 16px 24px;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    z-index: 3;
+  }
+  .half.top { top: 0; transform: rotate(180deg); }
+  .half.bot { bottom: 0; }
+
+  .source-slot {
+    min-height: 36px;
+    padding-top: 20px;
+    padding-bottom: 8px;
+  }
+  .source .label-line {
+    display: block;
+    font-family: Georgia, serif;
+    font-style: italic;
+    font-size: 10px;
+    letter-spacing: 1.4px;
+    color: rgba(255,255,255,0.16);
+    text-transform: lowercase;
+    margin-bottom: 4px;
+  }
+  .source .text {
+    display: block;
+    font-family: Georgia, serif;
+    font-style: italic;
+    font-size: 13px;
+    line-height: 18px;
+    color: rgba(255,255,255,0.36);
+  }
+
+  .big {
+    flex: 1;
+    padding: 8px 0 12px 0;
+    display: flex;
+    align-items: flex-start;
+  }
+  .big-text {
+    color: rgba(255,255,255,0.97);
+    font-size: 34px;
+    line-height: 42px;
+    font-weight: 300;
+    letter-spacing: -0.6px;
+  }
+  .placeholder-endonym {
+    font-size: 48px;
+    line-height: 56px;
+    font-weight: 200;
+    letter-spacing: -1.0px;
+    color: rgba(255,255,255,0.16);
+    opacity: 0.18;
+  }
+
+  .identity-row {
+    display: flex;
+    align-items: center;
+    min-height: 22px;
+    margin-bottom: 16px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 0.5px solid rgba(255,255,255,0.06);
+    background: transparent;
+  }
+  .chip .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    margin-right: 8px;
+  }
+  .chip .endonym {
+    font-size: 11px;
+    letter-spacing: 0.8px;
+    color: rgba(255,255,255,0.62);
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+  .chip .code {
+    margin-left: 8px;
+    font-family: Georgia, serif;
+    font-style: italic;
+    font-size: 11px;
+    color: rgba(255,255,255,0.36);
+  }
+  .chip .chev {
+    margin-left: 8px;
+    font-family: Georgia, serif;
+    font-style: italic;
+    font-size: 11px;
+    color: rgba(255,255,255,0.16);
+    opacity: 0.7;
+  }
+
+  /* ---------------------------------------------------------------
+     PTT slot — Bloom (BLOOM_SIZE 280) + disc (96px). FOOTPRINT (200)
+     reserves layout space; bloom paints OUTSIDE the slot.
+     --------------------------------------------------------------- */
+  .ptt-slot {
+    position: relative;
+    height: 200px;
+    margin: -20px 0;
+    display: grid;
+    place-items: center;
+  }
+
+  /* Bloom container = 280x280 centred on disc. */
+  .bloom {
+    position: absolute;
+    width: 280px;
+    height: 280px;
+    pointer-events: none;
+    display: grid;
+    place-items: center;
+  }
+
+  /* Each stain is a 280x280 layer with a centred radial gradient,
+     fading from solid centre to transparent edge. translate() positions
+     the stain at its asymmetric offset; scale() and opacity breathe. */
+  .stain {
+    position: absolute;
+    width: 280px;
+    height: 280px;
+    /* DEFAULT (will be overridden per-stain). Keep transparent. */
+    background: transparent;
+  }
+
+  /* WARM palette — apricot / peach / terracotta.
+     5-stop falloff with mid-stops at 18/42/72 (asymmetric, painterly).
+     Peak alpha 0.40 on top stain, slightly less on mid/deep so the
+     deepest hue sinks rather than dominates. Long tail past 70% gives
+     the soft halo the blur substitute is supposed to produce. */
+  .bloom.warm .stain.top {
+    background: radial-gradient(circle at 50% 50%,
+      rgba(255,179,122,0.42) 0%,
+      rgba(255,179,122,0.28) 18%,
+      rgba(255,179,122,0.14) 42%,
+      rgba(255,179,122,0.05) 72%,
+      rgba(255,179,122,0)    100%);
+    animation: breath-top 7.4s ease-in-out infinite alternate;
+  }
+  .bloom.warm .stain.mid {
+    background: radial-gradient(circle at 50% 50%,
+      rgba(255,142,118,0.38) 0%,
+      rgba(255,142,118,0.25) 18%,
+      rgba(255,142,118,0.12) 42%,
+      rgba(255,142,118,0.04) 72%,
+      rgba(255,142,118,0)    100%);
+    animation: breath-mid 8.0s ease-in-out infinite alternate;
+  }
+  .bloom.warm .stain.deep {
+    background: radial-gradient(circle at 50% 50%,
+      rgba(226,111,92,0.34) 0%,
+      rgba(226,111,92,0.22) 18%,
+      rgba(226,111,92,0.10) 42%,
+      rgba(226,111,92,0.03) 72%,
+      rgba(226,111,92,0)    100%);
+    animation: breath-deep 8.6s ease-in-out infinite alternate;
+  }
+  /* COOL palette — periwinkle / seafoam / iris. Each stop +0.05 over
+     the warm equivalents because cool tones perceptually retreat
+     against a cool-tinted bg (Loóna's compensation trick). */
+  .bloom.cool .stain.top {
+    background: radial-gradient(circle at 50% 50%,
+      rgba(168,178,255,0.48) 0%,
+      rgba(168,178,255,0.32) 18%,
+      rgba(168,178,255,0.16) 42%,
+      rgba(168,178,255,0.06) 72%,
+      rgba(168,178,255,0)    100%);
+    animation: breath-top 7.4s ease-in-out infinite alternate;
+  }
+  .bloom.cool .stain.mid {
+    background: radial-gradient(circle at 50% 50%,
+      rgba(127,216,201,0.44) 0%,
+      rgba(127,216,201,0.30) 18%,
+      rgba(127,216,201,0.14) 42%,
+      rgba(127,216,201,0.05) 72%,
+      rgba(127,216,201,0)    100%);
+    animation: breath-mid 8.0s ease-in-out infinite alternate;
+  }
+  .bloom.cool .stain.deep {
+    background: radial-gradient(circle at 50% 50%,
+      rgba(156,138,230,0.40) 0%,
+      rgba(156,138,230,0.26) 18%,
+      rgba(156,138,230,0.12) 42%,
+      rgba(156,138,230,0.04) 72%,
+      rgba(156,138,230,0)    100%);
+    animation: breath-deep 8.6s ease-in-out infinite alternate;
+  }
+
+  /* Breath keyframes — calmed per references: opacity drift &lt;0.05,
+     translation drift ±1px (was ±3), tempo 7-9s (was 5-6s). The
+     bloom should LIVE, not pulse.
+       top:  scale 0.97→1.02 + translate (-38,-46) → (-37,-45), opacity 0.92→1.00
+       mid:  scale 0.98→1.02 + translate (42,28)   → (41,27),   opacity 0.92→1.00
+       deep: scale 0.98→1.02 + translate (-6,52)   → (-5,51),   opacity 0.92→1.00
+  */
+  @keyframes breath-top {
+    0%   { transform: translate(-38px, -46px) scale(0.97); opacity: 0.92; }
+    100% { transform: translate(-37px, -45px) scale(1.02); opacity: 1.00; }
+  }
+  @keyframes breath-mid {
+    0%   { transform: translate(42px, 28px) scale(0.98);   opacity: 0.92; }
+    100% { transform: translate(41px, 27px) scale(1.02);   opacity: 1.00; }
+  }
+  @keyframes breath-deep {
+    0%   { transform: translate(-6px, 52px) scale(0.98);   opacity: 0.92; }
+    100% { transform: translate(-5px, 51px) scale(1.02);   opacity: 1.00; }
+  }
+
+  /* ---------------------------------------------------------------
+     Disc — 96px polished button, with inner SVG halo. Hairline border.
+     --------------------------------------------------------------- */
+  /* Disc — polished button. Subtle vertical gradient on the body gives
+     it weight (top edge slightly brighter than bottom = lit-from-above),
+     plus a brighter inset border ring catching ambient light. The inner
+     halo is the moving highlight off-centre. Without these the disc
+     just reads as a hairline circle. */
+  .disc {
+    position: relative;
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    background:
+      linear-gradient(180deg,
+        rgba(255,255,255,0.06) 0%,
+        rgba(255,255,255,0.02) 100%),
+      rgba(255,255,255,0.025);
+    border: 1px solid rgba(255,255,255,0.18);
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    z-index: 1;
+    box-shadow:
+      inset 0 1px 1px rgba(255,255,255,0.10),
+      inset 0 -1px 0 rgba(0,0,0,0.30);
+  }
+  /* Inner halo — radial at (35%, 30%) brighter-and-bigger than before.
+     The mockup's halo was easy to miss at 0.06 alpha; pushing it to
+     0.14 reads as gloss without breaking the dark vibe. */
+  .disc::before {
+    content: '';
+    position: absolute;
+    inset: 6px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%,
+      rgba(255,255,255,0.14) 0%,
+      rgba(255,255,255,0.04) 35%,
+      rgba(255,255,255,0)    65%);
+    pointer-events: none;
+  }
+  .disc .label-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    z-index: 1;
+  }
+  .disc .tick {
+    width: 14px;
+    height: 1.5px;
+    border-radius: 1px;
+    background: rgba(255,255,255,0.36);
+    margin-bottom: 8px;
+  }
+  .disc .lang {
+    font-family: Georgia, serif;
+    font-style: italic;
+    font-size: 13px;
+    letter-spacing: 0.8px;
+    color: rgba(255,255,255,0.62);
+    text-transform: lowercase;
+  }
+
+  /* Edge chrome — the speaker's near-edge of the phone (status / settings). */
+  .edge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding-top: 8px;
+    padding-bottom: 24px;
+    color: rgba(255,255,255,0.36);
+    font-family: Georgia, serif;
+    font-style: italic;
+    font-size: 13px;
+    letter-spacing: 0.2px;
+  }
+  .edge .net {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #7FD8C9;
+  }
+</style>
+</head>
+<body>
+
+  <div>
+    <div class="label">dusk · current code (HTML mirror, idle)</div>
+    <div class="phone">
+
+      <!-- bg gradient -->
+      <div class="dusk-backdrop"></div>
+
+      <!-- TOP half — partner (cool, rotated 180°) -->
+      <div class="half top">
+        <div class="source-slot"><!-- empty: idle, no incoming text yet --></div>
+
+        <div class="big"><!-- idle (en): bloom + chip carry identity --></div>
+
+        <div class="identity-row">
+          <div class="chip">
+            <span class="dot" style="background:#A8B2FF"></span>
+            <span class="endonym">ENGLISH</span>
+            <span class="code">en</span>
+            <span class="chev">▾</span>
+          </div>
+        </div>
+
+        <div class="ptt-slot">
+          <div class="bloom cool">
+            <div class="stain top"></div>
+            <div class="stain mid"></div>
+            <div class="stain deep"></div>
+          </div>
+          <div class="disc">
+            <div class="label-stack">
+              <div class="tick"></div>
+              <div class="lang">en</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="edge">
+          <span class="net"></span>
+          <span>online</span>
+        </div>
+      </div>
+
+      <!-- Seam at the centre -->
+      <div class="seam">
+        <div class="haze"></div>
+        <div class="hairline"></div>
+      </div>
+
+      <!-- BOTTOM half — user (warm, upright) -->
+      <div class="half bot">
+        <div class="source-slot"><!-- empty: idle --></div>
+
+        <div class="big">
+          <!-- idle (es): bloom + chip carry identity -->
+        </div>
+
+        <div class="identity-row">
+          <div class="chip">
+            <span class="dot" style="background:#FF8E76"></span>
+            <span class="endonym">ESPAÑOL</span>
+            <span class="code">es</span>
+            <span class="chev">▾</span>
+          </div>
+        </div>
+
+        <div class="ptt-slot">
+          <div class="bloom warm">
+            <div class="stain top"></div>
+            <div class="stain mid"></div>
+            <div class="stain deep"></div>
+          </div>
+          <div class="disc">
+            <div class="label-stack">
+              <div class="tick"></div>
+              <div class="lang">es</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="edge">
+          <span>settings</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</body>
+</html>

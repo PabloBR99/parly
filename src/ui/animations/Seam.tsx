@@ -1,21 +1,13 @@
 // Seam — the horizon where warm and cool halves meet.
 //
-// Not a divider, an encounter: a soft warm/cool transition zone (faked
-// with two stacked translucent bands since RN can't blur a region) plus
-// a CRISP HAIRLINE through the middle that fades from transparent at the
-// edges to a clear bright line at the centre. The hairline gives the seam
-// a real horizon line — without it, the warm/cool bands just blend into
-// the gradient.
-//
-// The hairline is rendered as an SVG horizontal LinearGradient (transparent
-// → bright → transparent) instead of a flat View, so it actually fades at
-// the edges instead of butting up hard against the screen sides.
-//
-// Idle: the hairline shimmers softly. Active: the whole seam nudges toward
-// the OTHER side — the partner's light retreating to make room.
+// One vertical LinearGradient cool → warm covers the seam zone (was two
+// solid bands in the previous pass — that read as engineered stripes,
+// not an atmospheric horizon). A bright SVG hairline crosses the centre
+// and shimmers gently. When one side is speaking, the whole seam nudges
+// toward the OTHER side — the partner's light retreating to make room.
 
 import React, { useEffect } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet } from 'react-native';
 import Animated, {
   cancelAnimation,
   Easing,
@@ -24,15 +16,15 @@ import Animated, {
   withRepeat,
   withTiming,
 } from 'react-native-reanimated';
-import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
-import { color, motion } from '../theme';
+import LinearGradient from 'react-native-linear-gradient';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from 'react-native-svg';
+import { motion } from '../theme';
 
 interface SeamProps {
   readonly activeSide: 'A' | 'B' | null;
 }
 
-const BAND_HEIGHT = 56;
-const SEAM_HEIGHT = 120;
+const SEAM_HEIGHT = 140;
 const PUSH_PX = 6;
 const HAIRLINE_HEIGHT = 1.5;
 
@@ -52,7 +44,7 @@ export function Seam({ activeSide }: SeamProps): React.JSX.Element {
   const shimmer = useSharedValue(0);
   useEffect(() => {
     shimmer.value = withRepeat(
-      withTiming(1, { duration: 8000, easing: Easing.inOut(Easing.sin) }),
+      withTiming(1, { duration: 9000, easing: Easing.inOut(Easing.sin) }),
       -1,
       true,
     );
@@ -64,32 +56,52 @@ export function Seam({ activeSide }: SeamProps): React.JSX.Element {
     transform: [{ translateY: -SEAM_HEIGHT / 2 + push.value }],
   }));
 
-  // Hairline — opacity + scaleX shimmer on the GPU compositor.
+  // Hairline shimmer — opacity + scaleX on the GPU compositor. Kept small
+  // (≤0.05 amplitude on opacity, ≤0.05 on scaleX) so the line doesn't
+  // pulse like a loading state.
   const hairlineStyle = useAnimatedStyle(() => ({
-    opacity: 0.55 + 0.45 * shimmer.value,
-    transform: [{ scaleX: 0.94 + 0.06 * shimmer.value }],
+    opacity: 0.65 + 0.35 * shimmer.value,
+    transform: [{ scaleX: 0.95 + 0.05 * shimmer.value }],
   }));
 
-  // pointerEvents="none" so the seam never intercepts PTT presses near
-  // the centre of the screen.
   return (
     <Animated.View pointerEvents="none" style={[styles.container, containerStyle]}>
-      <View style={styles.coolBand} />
+      {/* Single vertical haze: cool fades in from the top, meets warm at
+          the centre, fades out at the bottom. The previous two-band
+          approach read as two distinct stripes; one continuous gradient
+          reads as a horizon. */}
+      <LinearGradient
+        pointerEvents="none"
+        colors={[
+          'rgba(168,178,255,0.00)',
+          'rgba(168,178,255,0.16)',
+          'rgba(168,178,255,0.20)',
+          'rgba(255,179,122,0.20)',
+          'rgba(255,179,122,0.16)',
+          'rgba(255,179,122,0.00)',
+        ]}
+        locations={[0, 0.28, 0.45, 0.55, 0.72, 1]}
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
+
+      {/* Hairline — 5-stop horizontal gradient, fades to transparent at
+          the screen edges, peaks bright (0.78) at the centre. */}
       <Animated.View style={[styles.hairline, hairlineStyle]}>
         <Svg width="100%" height={HAIRLINE_HEIGHT}>
           <Defs>
-            <LinearGradient id="seam-hairline" x1="0" y1="0" x2="1" y2="0">
+            <SvgLinearGradient id="seam-hairline" x1="0" y1="0" x2="1" y2="0">
               <Stop offset="0"    stopColor="#FFFFFF" stopOpacity="0" />
-              <Stop offset="0.20" stopColor="#FFFFFF" stopOpacity="0.32" />
-              <Stop offset="0.50" stopColor="#FFFFFF" stopOpacity="0.55" />
-              <Stop offset="0.80" stopColor="#FFFFFF" stopOpacity="0.32" />
+              <Stop offset="0.18" stopColor="#FFFFFF" stopOpacity="0.42" />
+              <Stop offset="0.50" stopColor="#FFFFFF" stopOpacity="0.78" />
+              <Stop offset="0.82" stopColor="#FFFFFF" stopOpacity="0.42" />
               <Stop offset="1"    stopColor="#FFFFFF" stopOpacity="0" />
-            </LinearGradient>
+            </SvgLinearGradient>
           </Defs>
           <Rect x="0" y="0" width="100%" height={HAIRLINE_HEIGHT} fill="url(#seam-hairline)" />
         </Svg>
       </Animated.View>
-      <View style={styles.warmBand} />
     </Animated.View>
   );
 }
@@ -101,22 +113,6 @@ const styles = StyleSheet.create({
     right: 0,
     top: '50%',
     height: SEAM_HEIGHT,
-  },
-  coolBand: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    height: BAND_HEIGHT,
-    backgroundColor: color.seamCool,
-  },
-  warmBand: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: BAND_HEIGHT,
-    backgroundColor: color.seamWarm,
   },
   hairline: {
     position: 'absolute',

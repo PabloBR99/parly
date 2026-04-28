@@ -437,16 +437,14 @@ function SpeakerHalf({
       {/* 1. Source line — closest to the center divider. */}
       <View style={halfStyles.sourceSlot}>{sourceNode}</View>
 
-      {/* 2. Big translated text — the hero. */}
+      {/* 2. Big translated text — the hero when there's content; left empty
+              in idle so the bloom + chip + disc carry visual identity. The
+              previous big-endonym placeholder was visual noise on idle. */}
       <View style={halfStyles.big}>
-        {hasIncomingText ? (
+        {hasIncomingText && (
           <Animated.Text style={[halfStyles.bigText, bigStyle]}>
             {incomingText}
           </Animated.Text>
-        ) : (
-          <Text variant="displayHuge" tone="fgGhost" style={halfStyles.placeholder}>
-            {speakerLang.endonym}
-          </Text>
         )}
         {incomingTurn?.stage === 'error' && (
           <Text variant="bodySmall" tone="error" style={halfStyles.errorText}>
@@ -617,10 +615,6 @@ const halfStyles = StyleSheet.create({
     lineHeight: 42,
     fontWeight: '300',
     letterSpacing: -0.6,
-  },
-  placeholder: {
-    opacity: 0.18,
-    fontWeight: '200',
   },
   errorText: {
     marginTop: space.sm,

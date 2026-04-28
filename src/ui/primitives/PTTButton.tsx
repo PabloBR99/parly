@@ -17,6 +17,7 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
+import LinearGradient from 'react-native-linear-gradient';
 import Svg, { Defs, RadialGradient, Stop, Circle } from 'react-native-svg';
 import { Text } from './Text';
 import { color, motion, radius } from '../theme';
@@ -121,8 +122,10 @@ export function PTTButton({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: active ? accentRing : color.hairlineStrong,
-    backgroundColor: active ? `${accent}1A` : color.surface1,
+    // Slightly brighter than `hairlineStrong` so the disc edge reads as
+    // a real ring catching ambient light, not just a thin outline.
+    borderColor: active ? accentRing : 'rgba(255,255,255,0.18)',
+    backgroundColor: active ? `${accent}1A` : 'rgba(255,255,255,0.025)',
     overflow: 'hidden',
   };
 
@@ -165,10 +168,22 @@ export function PTTButton({
           />
         )}
 
-        {/* The disc itself — polished button with a quiet inner halo. */}
+        {/* The disc itself — polished button with a body gradient
+            (lit-from-above) and an off-centre inner halo. The body
+            gradient gives the disc weight; without it the disc reads as
+            a flat hairline circle. */}
         <Animated.View style={[disk, diskStyle, disabled && styles.disabled]}>
-          {/* Inner halo — SVG radial highlight, off-centre to read as a
-              real surface catching ambient light. */}
+          {/* Body gradient — top edge slightly brighter than bottom so
+              the disc looks lit from above, like a real polished surface. */}
+          <LinearGradient
+            pointerEvents="none"
+            colors={['rgba(255,255,255,0.06)', 'rgba(255,255,255,0.01)']}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+          {/* Inner halo — SVG radial highlight at (35%, 30%), brighter than
+              before so it reads as gloss without breaking the dark vibe. */}
           <View style={styles.haloLayer} pointerEvents="none">
             <Svg width={HALO_SIZE} height={HALO_SIZE}>
               <Defs>
@@ -176,12 +191,13 @@ export function PTTButton({
                   id={`disc-halo-${side}`}
                   cx={`${HALO_CX * 100}%`}
                   cy={`${HALO_CY * 100}%`}
-                  rx="60%"
-                  ry="60%"
+                  rx="65%"
+                  ry="65%"
                   fx={`${HALO_CX * 100}%`}
                   fy={`${HALO_CY * 100}%`}>
-                  <Stop offset="0" stopColor="#FFFFFF" stopOpacity="0.10" />
-                  <Stop offset="1" stopColor="#FFFFFF" stopOpacity="0" />
+                  <Stop offset="0"    stopColor="#FFFFFF" stopOpacity="0.14" />
+                  <Stop offset="0.35" stopColor="#FFFFFF" stopOpacity="0.04" />
+                  <Stop offset="1"    stopColor="#FFFFFF" stopOpacity="0" />
                 </RadialGradient>
               </Defs>
               <Circle

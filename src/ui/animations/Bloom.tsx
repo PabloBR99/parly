@@ -1,23 +1,29 @@
 // Bloom — the watercolour stain that breathes around each PTT.
 //
-// Three radial gradient blobs (top / mid / deep) drifting around the disc,
-// each on its own coprime breath tempo so the cluster's silhouette keeps
-// shifting like ink drying on paper. Warm palette (apricot / peach /
-// terracotta) for the user's side, cool palette (periwinkle / seafoam /
-// iris) for the partner's.
+// Three SVG radial-gradient stains drifting around the disc on coprime
+// breath tempos. The cluster's silhouette keeps shifting like ink drying
+// on paper. Warm palette (apricot / peach / terracotta) for the user's
+// side, cool palette (periwinkle / seafoam / iris) for the partner's.
 //
-// Why SVG radial gradients instead of translucent <View> circles: a flat
-// rgba View renders a HARD-edged circle. Stacking three of them produces
-// concentric ring artefacts and visible disc edges — what the user saw
-// in the previous build, "discos de color apilados" instead of pigment.
-// SVG <RadialGradient> interpolates per-pixel from solid centre to fully
-// transparent edge, no border. With three offset stains drifting on
-// independent tempos, the result reads as paint on wet paper.
+// Why SVG radial gradients with a 5-stop falloff (0.42 → 0.28 → 0.14 →
+// 0.05 → 0) instead of CSS-style 3-stop tighter falloff: a 3-stop with
+// a high centre alpha (0.72 was our previous attempt) renders as a hard
+// circle with a halo — the "spotlight" failure mode. A 5-stop with a
+// long alpha tail past 70% radius simulates the blur the HTML mockup
+// gets from `filter: blur(30px)`. References (Loóna, Endel, Headspace)
+// all use this pattern.
 //
-// The stain layout (offsets, breath tempos, opacity ranges) lives here in
-// module scope; only `side`/`size`/`active`/`disabled` cross the prop
-// boundary, so a parent can drop a Bloom anywhere without re-deriving
-// palette and animation choreography.
+// Why cool stains carry a +0.06 alpha bonus on every stop: cool tones
+// perceptually retreat against the cool-tinted top half of the dusk
+// gradient (color theory: warm advances, cool retreats). Without the
+// boost the cool bloom reads visibly fainter than the warm at equal
+// nominal alpha. Loóna does the same thing.
+//
+// Why the breath drift is now ±1px and opacity drifts 0.92→1.00 (was
+// ±3px and 0.55→0.85): ≥0.05 opacity drift reads as pulsing or loading
+// state, not "alive". Premium atmospheric apps keep drift tiny.
+// Tempos lengthened to 7.4 / 8.0 / 8.6s (was 5.4 / 6.0 / 6.6) so the
+// motion feels meditative, not anxious.
 
 import React, { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -53,23 +59,21 @@ const MID_OFFSET  = { x:  42, y:  28 };
 const DEEP_OFFSET = { x:  -6, y:  52 };
 
 // Coprime-ish breath periods so the three stains never lock phase.
-const TOP_PERIOD  = 5400;
-const MID_PERIOD  = 6000;
-const DEEP_PERIOD = 6600;
+// Slowed from the previous pass — the bloom should feel meditative.
+const TOP_PERIOD  = 7400;
+const MID_PERIOD  = 8000;
+const DEEP_PERIOD = 8600;
 
 // Palettes — order is (top stain, mid stain, deep stain).
 const WARM = ['#FFB37A', '#FF8E76', '#E26F5C'] as const;  // apricot / peach / terracotta
 const COOL = ['#A8B2FF', '#7FD8C9', '#9C8AE6'] as const;  // periwinkle / seafoam / iris
 
-// Each stain's radial gradient stops. Solid-ish at centre, mid-fade at the
-// halfway radius, fully transparent at the edge. Tuned to compensate for
-// the lack of `mix-blend-mode: screen` and `filter: blur(30px)` that the
-// HTML mockup uses — alpha-blend over near-black bg lifts less than screen
-// blend, so the centre alpha is pushed harder than the mockup's 0.85.
-const STAIN_STOPS = {
-  centre: '0.72',
-  mid:    '0.18',
-  edge:   '0',
+// Per-stain peak alphas. Top stain is brightest, deep is most saturated
+// but lowest alpha so its hue tints the cluster without dominating.
+// Cool side gets +0.06 across the board (perceptual compensation).
+const ALPHAS = {
+  warm: { top: 0.42, mid: 0.38, deep: 0.34 },
+  cool: { top: 0.48, mid: 0.44, deep: 0.40 },
 } as const;
 
 export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.Element {
@@ -111,14 +115,20 @@ export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.E
   // auto-promote module-scope arrow helpers to worklets, so the math is
   // inlined here in each style. Calling a non-worklet from inside a
   // useAnimatedStyle callback crashes the screen on first frame on Android.
+  //
+  // Drift is calibrated tiny — premium atmospheric apps keep amplitude
+  // below the perceptual "is something animating?" threshold. The bloom
+  // breathes; it doesn't pulse.
 
   const topStainStyle = useAnimatedStyle(() => {
     const t = breathTop.value;
-    const scale = (0.92 + 0.14 * t) + 0.06 * activeBoost.value;
-    const dx = TOP_OFFSET.x + (-3 + 6 * t);
-    const dy = TOP_OFFSET.y + (-3 + 6 * t);
-    const baseOpacity = 0.55 + 0.30 * t;
-    const boosted = baseOpacity + 0.20 * activeBoost.value;
+    const scale = (0.97 + 0.05 * t) + 0.04 * activeBoost.value;
+    const dx = TOP_OFFSET.x + (-0.5 + 1.0 * t);
+    const dy = TOP_OFFSET.y + (-0.5 + 1.0 * t);
+    // Opacity drift 0.92→1.00 (drift 0.08) — gentle. Active adds 0.04
+    // so an active bloom is just-perceptibly fuller-bodied.
+    const baseOpacity = 0.92 + 0.08 * t;
+    const boosted = baseOpacity + 0.04 * activeBoost.value;
     const faded = boosted * (1 - disabledFade.value) + 0.05 * disabledFade.value;
     return {
       opacity: faded,
@@ -128,11 +138,11 @@ export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.E
 
   const midStainStyle = useAnimatedStyle(() => {
     const t = breathMid.value;
-    const scale = (0.94 + 0.10 * t) + 0.06 * activeBoost.value;
-    const dx = MID_OFFSET.x + (3 - 6 * t);
-    const dy = MID_OFFSET.y + (3 - 6 * t);
-    const baseOpacity = 0.62 + 0.30 * t;
-    const boosted = baseOpacity + 0.20 * activeBoost.value;
+    const scale = (0.97 + 0.05 * t) + 0.04 * activeBoost.value;
+    const dx = MID_OFFSET.x + (0.5 - 1.0 * t);
+    const dy = MID_OFFSET.y + (0.5 - 1.0 * t);
+    const baseOpacity = 0.92 + 0.08 * t;
+    const boosted = baseOpacity + 0.04 * activeBoost.value;
     const faded = boosted * (1 - disabledFade.value) + 0.05 * disabledFade.value;
     return {
       opacity: faded,
@@ -142,11 +152,11 @@ export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.E
 
   const deepStainStyle = useAnimatedStyle(() => {
     const t = breathDeep.value;
-    const scale = (0.95 + 0.10 * t) + 0.06 * activeBoost.value;
-    const dx = DEEP_OFFSET.x + (-3 + 6 * t);
-    const dy = DEEP_OFFSET.y + (3 - 6 * t);
-    const baseOpacity = 0.68 + 0.30 * t;
-    const boosted = baseOpacity + 0.20 * activeBoost.value;
+    const scale = (0.97 + 0.05 * t) + 0.04 * activeBoost.value;
+    const dx = DEEP_OFFSET.x + (-0.5 + 1.0 * t);
+    const dy = DEEP_OFFSET.y + (0.5 - 1.0 * t);
+    const baseOpacity = 0.92 + 0.08 * t;
+    const boosted = baseOpacity + 0.04 * activeBoost.value;
     const faded = boosted * (1 - disabledFade.value) + 0.05 * disabledFade.value;
     return {
       opacity: faded,
@@ -155,17 +165,18 @@ export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.E
   });
 
   const palette = side === 'A' ? WARM : COOL;
+  const alphas  = side === 'A' ? ALPHAS.warm : ALPHAS.cool;
 
   return (
     <View pointerEvents="none" style={[styles.container, { width: size, height: size }]}>
       <Animated.View style={[styles.stain, topStainStyle]}>
-        <StainCircle size={size} fill={palette[0]} idSuffix={`${side}-top`} />
+        <StainCircle size={size} fill={palette[0]} peak={alphas.top}  idSuffix={`${side}-top`} />
       </Animated.View>
       <Animated.View style={[styles.stain, midStainStyle]}>
-        <StainCircle size={size} fill={palette[1]} idSuffix={`${side}-mid`} />
+        <StainCircle size={size} fill={palette[1]} peak={alphas.mid}  idSuffix={`${side}-mid`} />
       </Animated.View>
       <Animated.View style={[styles.stain, deepStainStyle]}>
-        <StainCircle size={size} fill={palette[2]} idSuffix={`${side}-deep`} />
+        <StainCircle size={size} fill={palette[2]} peak={alphas.deep} idSuffix={`${side}-deep`} />
       </Animated.View>
     </View>
   );
@@ -174,20 +185,30 @@ export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.E
 interface StainCircleProps {
   readonly size: number;
   readonly fill: string;
+  /** Peak alpha at the centre. Tail stops are computed as fixed ratios. */
+  readonly peak: number;
   readonly idSuffix: string;
 }
 
-function StainCircle({ size, fill, idSuffix }: StainCircleProps): React.JSX.Element {
-  // Each <Svg> is its own scope, so `id` collisions across Svg roots are
-  // harmless — but we suffix anyway to keep things obvious in dev tools.
+function StainCircle({ size, fill, peak, idSuffix }: StainCircleProps): React.JSX.Element {
+  // 5-stop falloff with mid-stops at 18%/42%/72% — asymmetric, painterly.
+  // Each subsequent stop is a fixed fraction of the centre alpha so the
+  // curve shape stays the same regardless of palette. Long alpha tail
+  // past 72% is the "blur substitute" that softens the stain edge.
+  const a0 = peak;
+  const a1 = peak * 0.66;
+  const a2 = peak * 0.32;
+  const a3 = peak * 0.11;
   const id = `bloom-${idSuffix}`;
   return (
     <Svg width={size} height={size}>
       <Defs>
         <RadialGradient id={id} cx="50%" cy="50%" rx="50%" ry="50%" fx="50%" fy="50%">
-          <Stop offset="0"    stopColor={fill} stopOpacity={STAIN_STOPS.centre} />
-          <Stop offset="0.45" stopColor={fill} stopOpacity={STAIN_STOPS.mid} />
-          <Stop offset="1"    stopColor={fill} stopOpacity={STAIN_STOPS.edge} />
+          <Stop offset="0"    stopColor={fill} stopOpacity={a0.toString()} />
+          <Stop offset="0.18" stopColor={fill} stopOpacity={a1.toString()} />
+          <Stop offset="0.42" stopColor={fill} stopOpacity={a2.toString()} />
+          <Stop offset="0.72" stopColor={fill} stopOpacity={a3.toString()} />
+          <Stop offset="1"    stopColor={fill} stopOpacity="0" />
         </RadialGradient>
       </Defs>
       <Rect width={size} height={size} fill={`url(#${id})`} />
