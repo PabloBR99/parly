@@ -124,11 +124,6 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
     setPickerSlot(null);
   };
 
-  const excludeForPicker =
-    pickerSlot === 'partner' ? personA.language
-      : pickerSlot === 'self' ? personB.language
-      : undefined;
-
   // Top half belongs to the partner (Person B) — cool bloom, periwinkle.
   // Bottom half belongs to the user (Person A) — warm bloom, peach.
   const topActiveTurn = activeTurn?.speakerId === 'person_b' ? activeTurn : null;
@@ -223,9 +218,22 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
         </View>
       )}
 
+      {/* Two pickers — one for each speaker. The partner's picker docks
+          to the screen's top edge (their "bottom" in the rotated half) and
+          renders content rotated 180° so they read it upright. The user's
+          picker is a conventional bottom sheet. Each is always mounted;
+          only the one whose slot is active is visible. */}
       <LanguagePickerSheet
-        visible={pickerSlot !== null}
-        excludeCode={excludeForPicker}
+        side="top"
+        visible={pickerSlot === 'partner'}
+        excludeCode={personA.language}
+        onSelect={onPickLanguage}
+        onClose={() => setPickerSlot(null)}
+      />
+      <LanguagePickerSheet
+        side="bottom"
+        visible={pickerSlot === 'self'}
+        excludeCode={personB.language}
         onSelect={onPickLanguage}
         onClose={() => setPickerSlot(null)}
       />

@@ -1,4 +1,14 @@
-// LanguagePickerSheet — bottom-sheet language picker.
+// LanguagePickerSheet — language picker that docks to either the top or
+// bottom edge of the screen.
+//
+// In the conversation screen the phone is a flat table between two
+// speakers. Each speaker has THEIR OWN picker that slides from THEIR side
+// of the table, with content oriented for THEIR view:
+//   - Bottom picker (`side='bottom'`): the conventional bottom sheet for
+//     the local user.
+//   - Top picker (`side='top'`): anchored to the screen's top edge, with
+//     bottom-rounded corners (mirror of the bottom variant) and the entire
+//     inner content rotated 180° so the partner reads it upright.
 //
 // Implementation: an in-screen overlay (NOT a native <Modal>), animated by
 // Reanimated. The sheet is always mounted; opening/closing translates it
@@ -9,17 +19,12 @@
 // overlay sidesteps the entire native Dialog layer.
 //
 // Two earlier risks we explicitly handle:
-//   1) JNI crash from a previous Reanimated-on-Modal layering — that race
-//      doesn't apply here because the views are never unmounted; we only
+//   1) JNI crash from a previous Reanimated-on-Modal layering — doesn't
+//      apply here because the views are never unmounted; we only
 //      translate them off-screen on close.
 //   2) Bottom-anchored content shifting when its measured height changed
 //      mid-animation — we cache the exclude-language during render via a
 //      ref so the list stays byte-identical through close.
-//
-// Behaviour:
-//   - Backdrop fades + sheet rises when `visible` flips to true.
-//   - Tapping a row → onSelect(code).
-//   - Tapping the backdrop or the pull handle → onClose().
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -45,6 +50,8 @@ import type { Language } from '../../app/types';
 
 interface LanguagePickerSheetProps {
   readonly visible: boolean;
+  /** Which edge the picker docks to. Defaults to 'bottom'. */
+  readonly side?: 'top' | 'bottom';
   readonly excludeCode?: string;     // hide language already used by the other slot
   readonly onSelect: (code: string) => void;
   readonly onClose: () => void;
@@ -73,6 +80,7 @@ const SLIDE_OUT_MS = 260;
 
 export function LanguagePickerSheet({
   visible,
+  side = 'bottom',
   excludeCode,
   onSelect,
   onClose,
@@ -100,9 +108,12 @@ export function LanguagePickerSheet({
   }, [visible]);
 
   // ── Slide + fade animation ────────────────────────────────────────────────
-  // translateY: SCREEN_HEIGHT (parked) → 0 (in place). Initial value parks
-  // the sheet off-screen on first mount so it doesn't flash visible.
-  const translateY = useSharedValue(SCREEN_HEIGHT);
+  // translateY: parked at +SCREEN_HEIGHT (bottom variant) or -SCREEN_HEIGHT
+  // (top variant) → 0 (in place). The sheet container itself is NOT rotated
+  // (that's only for the inner content), so translateY moves it in normal
+  // screen coordinates regardless of side. We just enter from the right edge.
+  const offscreenY = side === 'top' ? -SCREEN_HEIGHT : SCREEN_HEIGHT;
+  const translateY = useSharedValue(offscreenY);
   const backdropOpacity = useSharedValue(0);
 
   useEffect(() => {
@@ -110,10 +121,10 @@ export function LanguagePickerSheet({
       translateY.value = withTiming(0, { duration: SLIDE_IN_MS });
       backdropOpacity.value = withTiming(0.62, { duration: SLIDE_IN_MS });
     } else {
-      translateY.value = withTiming(SCREEN_HEIGHT, { duration: SLIDE_OUT_MS });
+      translateY.value = withTiming(offscreenY, { duration: SLIDE_OUT_MS });
       backdropOpacity.value = withTiming(0, { duration: SLIDE_OUT_MS });
     }
-  }, [visible, translateY, backdropOpacity]);
+  }, [visible, offscreenY, translateY, backdropOpacity]);
 
   const sheetStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: translateY.value }],
@@ -143,6 +154,18 @@ export function LanguagePickerSheet({
     }).filter(g => g.languages.length > 0);
   }, [frozenExclude, filterLower]);
 
+  // Per-side styling. The sheet container's docking edge, rounded corners,
+  // and safe-area padding all flip. The inner CONTENT (handle, search,
+  // list) is wrapped in a 180° rotation for the top variant so the partner
+  // reads it upright — the wrapper has flex:1 so the rotation pivots on
+  // the sheet's centre.
+  const sheetEdgeStyle = side === 'top' ? styles.sheetTop : styles.sheetBottom;
+  const sheetSafePadding =
+    side === 'top'
+      ? { paddingTop: insets.top + space.md }
+      : { paddingBottom: insets.bottom + space.md };
+  const contentStyle = side === 'top' ? styles.contentRotated : styles.contentUpright;
+
   return (
     // Outer wrapper — absoluteFill within parent. pointerEvents toggles on
     // visibility so taps pass through to underlying UI when the sheet is
@@ -162,57 +185,59 @@ export function LanguagePickerSheet({
         />
       </Animated.View>
 
-      {/* Sheet — fixed-height bottom-anchored panel. translateY drives the
-          slide. Height is a percentage of the parent so the sheet adapts
-          when the keyboard opens (Android adjustResize shrinks the parent),
-          but the LAYOUT never depends on the inner content's measured size. */}
+      {/* Sheet — fixed-percentage height, anchored to the side's edge.
+          translateY drives the slide. Height is `'88%'` of the parent so
+          the layout never depends on inner content size. */}
       <Animated.View
         style={[
           styles.sheet,
-          { paddingBottom: insets.bottom + space.md },
+          sheetEdgeStyle,
+          sheetSafePadding,
           sheetStyle,
         ]}>
-        <Pressable
-          onPress={onClose}
-          accessibilityRole="button"
-          accessibilityLabel="Close"
-          hitSlop={8}>
-          <View style={styles.handle} />
-        </Pressable>
-        <View style={styles.searchWrap}>
-          <Text variant="caption" tone="fgFaint" style={styles.searchLabel}>
-            CHOOSE LANGUAGE
-          </Text>
-          <TextInput
-            style={styles.search}
-            placeholder="Search — English, Español, 日本語…"
-            placeholderTextColor={color.fgGhost}
-            value={filter}
-            onChangeText={setFilter}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-        </View>
-        <ScrollView
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.list}>
-          {groups.map(g => (
-            <View key={g.title} style={styles.group}>
-              <Text variant="caption" tone="fgGhost" style={styles.groupTitle}>
-                {g.title.toUpperCase()}
-              </Text>
-              {g.languages.map(l => (
-                <LanguageRow key={l.code} language={l} onPress={() => onSelect(l.code)} />
-              ))}
-            </View>
-          ))}
-          {groups.length === 0 && (
-            <Text variant="body" tone="fgFaint" style={styles.empty}>
-              No matches.
+        <View style={contentStyle}>
+          <Pressable
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            hitSlop={8}>
+            <View style={styles.handle} />
+          </Pressable>
+          <View style={styles.searchWrap}>
+            <Text variant="caption" tone="fgFaint" style={styles.searchLabel}>
+              CHOOSE LANGUAGE
             </Text>
-          )}
-        </ScrollView>
+            <TextInput
+              style={styles.search}
+              placeholder="Search — English, Español, 日本語…"
+              placeholderTextColor={color.fgGhost}
+              value={filter}
+              onChangeText={setFilter}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </View>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.list}>
+            {groups.map(g => (
+              <View key={g.title} style={styles.group}>
+                <Text variant="caption" tone="fgGhost" style={styles.groupTitle}>
+                  {g.title.toUpperCase()}
+                </Text>
+                {g.languages.map(l => (
+                  <LanguageRow key={l.code} language={l} onPress={() => onSelect(l.code)} />
+                ))}
+              </View>
+            ))}
+            {groups.length === 0 && (
+              <Text variant="body" tone="fgFaint" style={styles.empty}>
+                No matches.
+              </Text>
+            )}
+          </ScrollView>
+        </View>
       </Animated.View>
     </View>
   );
@@ -255,15 +280,30 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 0,
     height: '88%',
     backgroundColor: '#0B0B0B',
-    borderTopLeftRadius: radius.xl,
-    borderTopRightRadius: radius.xl,
-    borderTopWidth: 1,
     borderLeftWidth: 1,
     borderRightWidth: 1,
     borderColor: color.hairline,
+  },
+  sheetBottom: {
+    bottom: 0,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    borderTopWidth: 1,
+  },
+  sheetTop: {
+    top: 0,
+    borderBottomLeftRadius: radius.xl,
+    borderBottomRightRadius: radius.xl,
+    borderBottomWidth: 1,
+  },
+  contentUpright: {
+    flex: 1,
+  },
+  contentRotated: {
+    flex: 1,
+    transform: [{ rotate: '180deg' }],
   },
   handle: {
     alignSelf: 'center',
