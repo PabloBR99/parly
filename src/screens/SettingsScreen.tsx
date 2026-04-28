@@ -17,12 +17,12 @@
 // each side). The translation model is fixed to Mistral Small for this
 // build — no selector exposed.
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  KeyboardAvoidingView,
+  Dimensions,
+  Keyboard,
   Linking,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -61,17 +61,41 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const [keyValidation, setKeyValidation] = useState<KeyValidation | null>(null);
   const [validating, setValidating] = useState(false);
 
-  // Refs for the API-key field flow. With Android `adjustResize` the
-  // ScrollView shrinks when the keyboard appears, but a focused input deep
-  // in the content does not auto-scroll into view. We push to the end after
-  // a beat so the input — and the verify button under it — sit above the
-  // keyboard, leaving room to long-press → paste.
+  // API-key field flow. With Android `adjustResize` the activity content
+  // shrinks when the keyboard appears, but a focused input deep in a
+  // ScrollView does not auto-scroll into view. The fix: when the keyboard
+  // shows AND our input is focused, measure the input's window position,
+  // compare against the keyboard top, and scroll up by the overlap so the
+  // input sits ~40px above the keyboard. This leaves room to long-press →
+  // Paste comfortably.
   const scrollRef = useRef<ScrollView>(null);
-  const onApiInputFocus = () => {
-    setTimeout(() => {
-      scrollRef.current?.scrollToEnd({ animated: true });
-    }, 220);
-  };
+  const inputRef = useRef<TextInput>(null);
+  const inputFocusedRef = useRef(false);
+  const scrollYRef = useRef(0);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', e => {
+      if (!inputFocusedRef.current || !inputRef.current || !scrollRef.current) return;
+      const kbHeight = e.endCoordinates.height;
+      inputRef.current.measure((_fx, _fy, _w, h, _px, py) => {
+        const screenHeight = Dimensions.get('window').height;
+        const inputBottom = py + h;
+        const visibleBottom = screenHeight - kbHeight;
+        const breathing = 48; // input sits this far above the keyboard
+        if (inputBottom > visibleBottom - breathing) {
+          const delta = inputBottom - (visibleBottom - breathing);
+          scrollRef.current?.scrollTo({
+            y: scrollYRef.current + delta,
+            animated: true,
+          });
+        }
+      });
+    });
+    return () => showSub.remove();
+  }, []);
+
+  const onApiInputFocus = () => { inputFocusedRef.current = true; };
+  const onApiInputBlur = () => { inputFocusedRef.current = false; };
 
   const onValidateKey = async () => {
     haptics.tap();
@@ -111,15 +135,21 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   return (
     <View style={styles.root}>
       <DuskBackdrop />
-      <KeyboardAvoidingView
+      <ScrollView
+        ref={scrollRef}
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={insets.top}>
-        <ScrollView
-          ref={scrollRef}
-          style={styles.flex}
-          contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + space.xxl }]}
-          keyboardShouldPersistTaps="handled">
+        contentContainerStyle={[
+          styles.content,
+          // Generous bottom room so we can scroll the API input well above
+          // any Android keyboard (~280-340px tall) without bumping into the
+          // end of the content.
+          { paddingBottom: insets.bottom + space.xxl + 280 },
+        ]}
+        onScroll={e => {
+          scrollYRef.current = e.nativeEvent.contentOffset.y;
+        }}
+        scrollEventThrottle={16}
+        keyboardShouldPersistTaps="handled">
           {/* HEADER */}
           <View style={styles.header}>
             <View style={styles.eyebrowRow}>
@@ -154,7 +184,9 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
                 onOpenConsole={openMistralConsole}
                 onValidate={onValidateKey}
                 onStart={onStartConversation}
+                inputRef={inputRef}
                 onApiInputFocus={onApiInputFocus}
+                onApiInputBlur={onApiInputBlur}
               />
             </View>
           ) : (
@@ -232,8 +264,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           <Text variant="serif" tone="fgGhost" style={styles.versionTag}>
             PARLY — DUSK
           </Text>
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </ScrollView>
     </View>
   );
 }
@@ -296,7 +327,9 @@ interface OnboardingStepsProps {
   readonly onOpenConsole: () => void;
   readonly onValidate: () => void;
   readonly onStart: () => void;
+  readonly inputRef: React.RefObject<TextInput | null>;
   readonly onApiInputFocus: () => void;
+  readonly onApiInputBlur: () => void;
 }
 
 function OnboardingSteps({
@@ -308,7 +341,9 @@ function OnboardingSteps({
   onOpenConsole,
   onValidate,
   onStart,
+  inputRef,
   onApiInputFocus,
+  onApiInputBlur,
 }: OnboardingStepsProps): React.JSX.Element {
   const hasInput = apiKey.trim().length > 0;
   return (
@@ -355,9 +390,11 @@ function OnboardingSteps({
         title="Paste it here">
         <Surface style={styles.inputCard}>
           <TextInput
+            ref={inputRef}
             value={apiKey}
             onChangeText={onChangeKey}
             onFocus={onApiInputFocus}
+            onBlur={onApiInputBlur}
             secureTextEntry={false}
             autoCapitalize="none"
             autoCorrect={false}

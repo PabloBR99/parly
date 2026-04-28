@@ -19,7 +19,6 @@ import Animated, {
 } from 'react-native-reanimated';
 import LinearGradient from 'react-native-linear-gradient';
 import Svg, { Defs, RadialGradient, Stop, Circle } from 'react-native-svg';
-import { Text } from './Text';
 import { color, motion, radius } from '../theme';
 import { Waveform } from '../animations/Waveform';
 import { Bloom } from '../animations/Bloom';
@@ -112,8 +111,6 @@ export function PTTButton({
     transform: [{ scale: 1 + ring.value * 0.55 }],
     opacity: 0.6 * (1 - ring.value),
   }));
-
-  const labelTone = disabled ? 'fgGhost' : active ? 'fg' : 'fgMuted';
 
   const disk: ViewStyle = {
     width: SIZE,
@@ -209,26 +206,10 @@ export function PTTButton({
             </Svg>
           </View>
 
-          {active ? (
-            <Waveform active color={accent} bars={5} height={30} />
-          ) : (
-            <View style={styles.labelStack}>
-              {/* Subtle horizontal mic-affordance: a clean tick line above
-                  the language code. */}
-              <View
-                style={{
-                  width: 14,
-                  height: 1.5,
-                  borderRadius: 1,
-                  backgroundColor: disabled ? color.fgGhost : color.fgFaint,
-                  marginBottom: 8,
-                }}
-              />
-              <Text variant="serifSmall" tone={labelTone} style={styles.codeLabel}>
-                {label.toLowerCase()}
-              </Text>
-            </View>
-          )}
+          {active && <Waveform active color={accent} bars={5} height={30} />}
+          {/* Idle state intentionally has no glyph or text inside the disc —
+              the bloom + halo carry the affordance. The disc is only a
+              polished surface to press, not a label-bearing widget. */}
         </Animated.View>
       </View>
     </Pressable>
@@ -258,13 +239,6 @@ const styles = StyleSheet.create({
     left: HALO_INSET,
     width: HALO_SIZE,
     height: HALO_SIZE,
-  },
-  labelStack: {
-    alignItems: 'center',
-  },
-  codeLabel: {
-    fontSize: 13,
-    letterSpacing: 0.8,
   },
   disabled: {
     opacity: 0.32,

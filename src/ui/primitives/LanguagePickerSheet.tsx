@@ -13,7 +13,7 @@
 // the Modal had already begun tearing down, producing a hard JNI crash. The
 // purely-native path eliminates that race.
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Modal,
@@ -61,19 +61,29 @@ export function LanguagePickerSheet({
   const insets = useSafeAreaInsets();
   const [filter, setFilter] = useState('');
 
-  // Both `frozenExclude` and the search filter are reset ON OPEN, never on
-  // close. The sheet is bottom-anchored (position:absolute; bottom:0) so any
-  // change to its content height during the close animation translates into
-  // an UPWARD jump of the top edge — exactly the erratic motion the user
-  // reported. By only mutating these on open, the list stays byte-identical
-  // through the entire slide-down, and the close reads as a clean drop.
-  const [frozenExclude, setFrozenExclude] = useState(excludeCode);
+  // Snapshot `excludeCode` during render via a ref, not in a useEffect. An
+  // effect runs AFTER the first paint with `visible=true`, so the list
+  // briefly renders without the exclude applied, then re-renders with it —
+  // a two-frame flicker the bottom-anchored sheet translates into an UPWARD
+  // jump (smaller content → top edge slides down → close-then-rise read).
+  // Mutating a ref during render is the React-approved pattern for
+  // "remember the last X" without a setState round-trip. The ref freezes
+  // its value while `visible=false`, so the close animation runs over a
+  // byte-identical list.
+  const cachedExcludeRef = useRef<string | undefined>(excludeCode);
+  if (visible) {
+    cachedExcludeRef.current = excludeCode;
+  }
+  const frozenExclude = cachedExcludeRef.current;
+
+  // Reset the search filter on the visible: false → true transition.
+  // Closing keeps the filter so the list size doesn't change mid-slide-down.
+  const wasVisibleRef = useRef(visible);
   useEffect(() => {
-    if (visible) {
-      setFrozenExclude(excludeCode);
+    if (visible && !wasVisibleRef.current) {
       setFilter('');
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    wasVisibleRef.current = visible;
   }, [visible]);
 
   const filterLower = filter.trim().toLowerCase();
