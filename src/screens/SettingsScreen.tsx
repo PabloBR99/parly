@@ -17,10 +17,12 @@
 // each side). The translation model is fixed to Mistral Small for this
 // build — no selector exposed.
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -36,6 +38,7 @@ import { log } from '../services/log/logStore';
 import type { RootStackParamList } from '../navigation/types';
 import {
   Button,
+  DuskBackdrop,
   Surface,
   Text,
   color,
@@ -57,6 +60,18 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   // API-key validation state. `null` = not yet checked since last edit.
   const [keyValidation, setKeyValidation] = useState<KeyValidation | null>(null);
   const [validating, setValidating] = useState(false);
+
+  // Refs for the API-key field flow. With Android `adjustResize` the
+  // ScrollView shrinks when the keyboard appears, but a focused input deep
+  // in the content does not auto-scroll into view. We push to the end after
+  // a beat so the input — and the verify button under it — sit above the
+  // keyboard, leaving room to long-press → paste.
+  const scrollRef = useRef<ScrollView>(null);
+  const onApiInputFocus = () => {
+    setTimeout(() => {
+      scrollRef.current?.scrollToEnd({ animated: true });
+    }, 220);
+  };
 
   const onValidateKey = async () => {
     haptics.tap();
@@ -94,118 +109,132 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const keyOk = keyValidation?.status === 'ok';
 
   return (
-    <ScrollView
-      style={styles.root}
-      contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + space.xxl }]}
-      keyboardShouldPersistTaps="handled">
-      {/* HEADER */}
-      <View style={styles.header}>
-        <Text variant="caption" tone="fgGhost" style={styles.eyebrow}>
-          PARLY
-        </Text>
-        <Text variant="displayLarge" tone="fg">
-          {noKey ? 'Welcome' : 'Settings'}
-        </Text>
-        <Text variant="bodySmall" tone="fgFaint" style={styles.subhead}>
-          {noKey
-            ? "Let's get Parly up and running in three steps."
-            : 'Manage your connection and clear history.'}
-        </Text>
-      </View>
-
-      {/* CONEXIÓN — guided onboarding when empty, compact status when set. */}
-      {noKey ? (
-        <View style={styles.section}>
-          <OnboardingSteps
-            apiKey={apiKey}
-            keyValidation={keyValidation}
-            validating={validating}
-            keyOk={keyOk}
-            onChangeKey={(v) => {
-              setApiKey(v);
-              setKeyValidation(null);
-            }}
-            onOpenConsole={openMistralConsole}
-            onValidate={onValidateKey}
-            onStart={onStartConversation}
-          />
-        </View>
-      ) : (
-        <Section label="CONNECTION">
-          <Surface style={styles.connectedCard}>
-            <View style={styles.connectedRow}>
-              <View style={[styles.connectedDot, { backgroundColor: color.ok }]} />
-              <View style={styles.flex}>
-                <Text variant="body" tone="fg">Connected to Mistral</Text>
-                <Text variant="bodySmall" tone="fgFaint">
-                  Your key is stored securely on this device.
-                </Text>
-              </View>
+    <View style={styles.root}>
+      <DuskBackdrop />
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={insets.top}>
+        <ScrollView
+          ref={scrollRef}
+          style={styles.flex}
+          contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + space.xxl }]}
+          keyboardShouldPersistTaps="handled">
+          {/* HEADER */}
+          <View style={styles.header}>
+            <View style={styles.eyebrowRow}>
+              <View style={[styles.eyebrowDot, { backgroundColor: color.accentB }]} />
+              <Text variant="caption" tone="fgGhost" style={styles.eyebrow}>
+                PARLY — DUSK
+              </Text>
+              <View style={[styles.eyebrowDot, { backgroundColor: color.accentA }]} />
             </View>
-          </Surface>
-          <View style={styles.keyActionRow}>
-            <KeyValidationLine state={keyValidation} validating={validating} />
-            <Pressable
-              onPress={onValidateKey}
-              disabled={validating}
-              accessibilityRole="button"
-              accessibilityLabel="Check connection"
-              style={({ pressed }) => [
-                styles.verifyBtn,
-                pressed && styles.verifyBtnPressed,
-                validating && styles.verifyBtnDisabled,
-              ]}>
-              {validating ? (
-                <ActivityIndicator color={color.fgMuted} size="small" />
-              ) : (
-                <Text variant="serifSmall" tone="fgMuted">check</Text>
-              )}
-            </Pressable>
-          </View>
-          <Pressable
-            onPress={() => {
-              haptics.tap();
-              setApiKey('');
-              setKeyValidation(null);
-            }}
-            hitSlop={10}
-            accessibilityRole="button"
-            accessibilityLabel="Change key"
-            style={({ pressed }) => [styles.replaceLink, pressed && styles.replaceLinkPressed]}>
-            <Text variant="serifSmall" tone="fgFaint" style={styles.replaceLabel}>
-              change key
+            <Text variant="serifHero" tone="fg">
+              {noKey ? 'Welcome.' : 'Settings.'}
             </Text>
-          </Pressable>
-        </Section>
-      )}
+            <Text variant="serif" tone="fgFaint" style={styles.subhead}>
+              {noKey
+                ? "Let's get Parly up and running in three steps."
+                : 'Manage your connection and clear history.'}
+            </Text>
+          </View>
 
-      {/* Lower sections — hidden until the user has a working connection.
-          On first run there's no history to clear and no diagnostics to
-          show, and the visual silence keeps the welcome focused. */}
-      {!noKey && (
-        <>
-          <Section label="CONVERSATION">
-            <Button
-              label="Clear history"
-              variant="danger"
-              onPress={onClearHistory}
-            />
-          </Section>
+          {/* CONEXIÓN — guided onboarding when empty, compact status when set. */}
+          {noKey ? (
+            <View style={styles.section}>
+              <OnboardingSteps
+                apiKey={apiKey}
+                keyValidation={keyValidation}
+                validating={validating}
+                keyOk={keyOk}
+                onChangeKey={(v) => {
+                  setApiKey(v);
+                  setKeyValidation(null);
+                }}
+                onOpenConsole={openMistralConsole}
+                onValidate={onValidateKey}
+                onStart={onStartConversation}
+                onApiInputFocus={onApiInputFocus}
+              />
+            </View>
+          ) : (
+            <Section label="CONNECTION">
+              <Surface style={styles.connectedCard}>
+                <View style={styles.connectedRow}>
+                  <View style={[styles.connectedDot, { backgroundColor: color.ok }]} />
+                  <View style={styles.flex}>
+                    <Text variant="body" tone="fg">Connected to Mistral</Text>
+                    <Text variant="bodySmall" tone="fgFaint">
+                      Your key is stored securely on this device.
+                    </Text>
+                  </View>
+                </View>
+              </Surface>
+              <View style={styles.keyActionRow}>
+                <KeyValidationLine state={keyValidation} validating={validating} />
+                <Pressable
+                  onPress={onValidateKey}
+                  disabled={validating}
+                  accessibilityRole="button"
+                  accessibilityLabel="Check connection"
+                  style={({ pressed }) => [
+                    styles.verifyBtn,
+                    pressed && styles.verifyBtnPressed,
+                    validating && styles.verifyBtnDisabled,
+                  ]}>
+                  {validating ? (
+                    <ActivityIndicator color={color.fgMuted} size="small" />
+                  ) : (
+                    <Text variant="serifSmall" tone="fgMuted">check</Text>
+                  )}
+                </Pressable>
+              </View>
+              <Pressable
+                onPress={() => {
+                  haptics.tap();
+                  setApiKey('');
+                  setKeyValidation(null);
+                }}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel="Change key"
+                style={({ pressed }) => [styles.replaceLink, pressed && styles.replaceLinkPressed]}>
+                <Text variant="serifSmall" tone="fgFaint" style={styles.replaceLabel}>
+                  change key
+                </Text>
+              </Pressable>
+            </Section>
+          )}
 
-          <Section label="DIAGNOSTICS">
-            <Button
-              label="View logs"
-              variant="secondary"
-              onPress={() => navigation.navigate('Logs')}
-            />
-          </Section>
-        </>
-      )}
+          {/* Lower sections — hidden until the user has a working connection.
+              On first run there's no history to clear and no diagnostics to
+              show, and the visual silence keeps the welcome focused. */}
+          {!noKey && (
+            <>
+              <Section label="CONVERSATION">
+                <Button
+                  label="Clear history"
+                  variant="danger"
+                  onPress={onClearHistory}
+                />
+              </Section>
 
-      <Text variant="serif" tone="fgGhost" style={styles.versionTag}>
-        PARLY — DUSK
-      </Text>
-    </ScrollView>
+              <Section label="DIAGNOSTICS">
+                <Button
+                  label="View logs"
+                  variant="secondary"
+                  onPress={() => navigation.navigate('Logs')}
+                />
+              </Section>
+            </>
+          )}
+
+          <Text variant="serif" tone="fgGhost" style={styles.versionTag}>
+            PARLY — DUSK
+          </Text>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -267,6 +296,7 @@ interface OnboardingStepsProps {
   readonly onOpenConsole: () => void;
   readonly onValidate: () => void;
   readonly onStart: () => void;
+  readonly onApiInputFocus: () => void;
 }
 
 function OnboardingSteps({
@@ -278,6 +308,7 @@ function OnboardingSteps({
   onOpenConsole,
   onValidate,
   onStart,
+  onApiInputFocus,
 }: OnboardingStepsProps): React.JSX.Element {
   const hasInput = apiKey.trim().length > 0;
   return (
@@ -326,6 +357,7 @@ function OnboardingSteps({
           <TextInput
             value={apiKey}
             onChangeText={onChangeKey}
+            onFocus={onApiInputFocus}
             secureTextEntry={false}
             autoCapitalize="none"
             autoCorrect={false}
@@ -447,12 +479,25 @@ const styles = StyleSheet.create({
     paddingTop: space.md,
     paddingBottom: space.xxl,
   },
-  eyebrow: {
+  eyebrowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginBottom: space.md,
+  },
+  eyebrowDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    marginHorizontal: 8,
+    opacity: 0.85,
+  },
+  eyebrow: {
     letterSpacing: 2.4,
   },
   subhead: {
-    marginTop: space.sm,
+    marginTop: space.md,
+    paddingRight: space.xl,
+    lineHeight: 20,
   },
 
   section: {

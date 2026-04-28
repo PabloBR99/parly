@@ -72,7 +72,7 @@ export function LanguageCard({
 
         {filled ? (
           <View>
-            <Text variant="displayHuge" tone="fg" style={styles.endonym}>
+            <Text variant="displayLarge" tone="fg" style={styles.endonym}>
               {language!.endonym}
             </Text>
             <View style={styles.subRow}>

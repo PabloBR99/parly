@@ -61,21 +61,19 @@ export function LanguagePickerSheet({
   const insets = useSafeAreaInsets();
   const [filter, setFilter] = useState('');
 
-  // Snapshot of excludeCode while the sheet is open. We deliberately do NOT
-  // re-read excludeCode during dismissal — when the parent flips the picker
-  // slot to null, the prop becomes `undefined` and the "excluded" language
-  // would re-enter the list, growing the sheet by one row in the same frame
-  // the slide-down animation begins. Bottom-anchored content + a taller
-  // measurement makes the top edge jump UP, exactly the erratic motion the
-  // user reported.
+  // Both `frozenExclude` and the search filter are reset ON OPEN, never on
+  // close. The sheet is bottom-anchored (position:absolute; bottom:0) so any
+  // change to its content height during the close animation translates into
+  // an UPWARD jump of the top edge — exactly the erratic motion the user
+  // reported. By only mutating these on open, the list stays byte-identical
+  // through the entire slide-down, and the close reads as a clean drop.
   const [frozenExclude, setFrozenExclude] = useState(excludeCode);
   useEffect(() => {
-    if (visible) setFrozenExclude(excludeCode);
-  }, [visible, excludeCode]);
-
-  // Reset filter when sheet closes/reopens.
-  useEffect(() => {
-    if (!visible) setFilter('');
+    if (visible) {
+      setFrozenExclude(excludeCode);
+      setFilter('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
   const filterLower = filter.trim().toLowerCase();

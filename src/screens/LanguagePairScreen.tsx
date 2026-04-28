@@ -131,7 +131,7 @@ export function LanguagePairScreen({ navigation }: Props): React.JSX.Element {
             <View style={[styles.eyebrowDot, { backgroundColor: color.accentA }]} />
           </View>
           <Text variant="serifHero" tone="fg" style={styles.headline}>
-            Two suns meeting{'\n'}at the edge of the day.
+            A live translator{'\n'}for two voices.
           </Text>
           <Text variant="serif" tone="fgFaint" style={styles.subhead}>
             Pick one for each speaker. You can swap or change them during
