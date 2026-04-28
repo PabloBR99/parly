@@ -42,7 +42,13 @@ const SIZE = 96;
 // smaller than BLOOM_SIZE lets the bloom paint OUTSIDE the slot — into
 // surrounding chrome — which matches the mockup's "atmosphere of the
 // disc" rather than "atmosphere of the slot".
-const BLOOM_SIZE = 280;
+//
+// Bumped from 280 → 480 to compensate for two CSS effects RN can't do
+// (`filter: blur(30px)` and `mix-blend-mode: screen`). Without them, a
+// 280px bloom reads as a small ring around the disc instead of the wide
+// warm wash of the HTML mockup. 480px ≈ phone width, so the wash spans
+// the full half of the screen edge-to-edge with soft falloff.
+const BLOOM_SIZE = 480;
 const FOOTPRINT = 200;
 
 // Inner halo — a soft off-centre highlight inside the disc, equivalent to

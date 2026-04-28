@@ -53,10 +53,11 @@ interface BloomProps {
 
 // Stain offsets — asymmetric so the three blobs cluster around the disc but
 // never share a centre. The cluster's overlapping edges form a watercolour
-// shape, not concentric rings.
-const TOP_OFFSET  = { x: -38, y: -46 };
-const MID_OFFSET  = { x:  42, y:  28 };
-const DEEP_OFFSET = { x:  -6, y:  52 };
+// shape, not concentric rings. Scaled ~1.7× to keep the asymmetric feel
+// when the bloom container grew from 280 → 480.
+const TOP_OFFSET  = { x: -64, y: -78 };
+const MID_OFFSET  = { x:  72, y:  48 };
+const DEEP_OFFSET = { x: -10, y:  88 };
 
 // Coprime-ish breath periods so the three stains never lock phase.
 // Slowed from the previous pass — the bloom should feel meditative.
@@ -70,10 +71,17 @@ const COOL = ['#A8B2FF', '#7FD8C9', '#9C8AE6'] as const;  // periwinkle / seafoa
 
 // Per-stain peak alphas. Top stain is brightest, deep is most saturated
 // but lowest alpha so its hue tints the cluster without dominating.
-// Cool side gets +0.06 across the board (perceptual compensation).
+// Cool side gets +0.08 across the board (perceptual compensation —
+// warm advances, cool retreats).
+//
+// Bumped from (0.42 / 0.38 / 0.34) for warm to compensate for the
+// missing `mix-blend-mode: screen` from the HTML mockup. Screen blend
+// effectively LIGHTENS the dark background where the bloom sits; without
+// it our normal alpha-over-dark needs higher alpha to reach a similar
+// painted-on-dark luminosity.
 const ALPHAS = {
-  warm: { top: 0.42, mid: 0.38, deep: 0.34 },
-  cool: { top: 0.48, mid: 0.44, deep: 0.40 },
+  warm: { top: 0.55, mid: 0.50, deep: 0.45 },
+  cool: { top: 0.62, mid: 0.56, deep: 0.50 },
 } as const;
 
 export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.Element {
@@ -191,23 +199,29 @@ interface StainCircleProps {
 }
 
 function StainCircle({ size, fill, peak, idSuffix }: StainCircleProps): React.JSX.Element {
-  // 5-stop falloff with mid-stops at 18%/42%/72% — asymmetric, painterly.
-  // Each subsequent stop is a fixed fraction of the centre alpha so the
-  // curve shape stays the same regardless of palette. Long alpha tail
-  // past 72% is the "blur substitute" that softens the stain edge.
+  // 5-stop falloff. Stops shifted further OUTWARD and alpha factors made
+  // softer so the gradient diffuses across more of its radius — the
+  // "blur substitute" for the mockup's `filter: blur(30px)`. The new
+  // curve has visible alpha out to 80% of the radius, so on a 480px
+  // bloom the warm wash carries to within ~50px of the bloom edge
+  // instead of fading inside the inner third.
+  //
+  // Old curve (kept for reference): stops 0/.18/.42/.72/1, factors
+  // 1/.66/.32/.11/0 — very tight, plus a hard step from .72 to 1.
+  // New curve: stops 0/.22/.50/.80/1, factors 1/.78/.50/.22/0.
   const a0 = peak;
-  const a1 = peak * 0.66;
-  const a2 = peak * 0.32;
-  const a3 = peak * 0.11;
+  const a1 = peak * 0.78;
+  const a2 = peak * 0.50;
+  const a3 = peak * 0.22;
   const id = `bloom-${idSuffix}`;
   return (
     <Svg width={size} height={size}>
       <Defs>
         <RadialGradient id={id} cx="50%" cy="50%" rx="50%" ry="50%" fx="50%" fy="50%">
           <Stop offset="0"    stopColor={fill} stopOpacity={a0.toString()} />
-          <Stop offset="0.18" stopColor={fill} stopOpacity={a1.toString()} />
-          <Stop offset="0.42" stopColor={fill} stopOpacity={a2.toString()} />
-          <Stop offset="0.72" stopColor={fill} stopOpacity={a3.toString()} />
+          <Stop offset="0.22" stopColor={fill} stopOpacity={a1.toString()} />
+          <Stop offset="0.50" stopColor={fill} stopOpacity={a2.toString()} />
+          <Stop offset="0.80" stopColor={fill} stopOpacity={a3.toString()} />
           <Stop offset="1"    stopColor={fill} stopOpacity="0" />
         </RadialGradient>
       </Defs>
