@@ -14,3 +14,4 @@ export { StateMorph } from './animations/StateMorph';
 export { Seam } from './animations/Seam';
 export { FirstTouchTrace } from './animations/FirstTouchTrace';
 export { DuskBackdrop } from './animations/DuskBackdrop';
+export { Bloom } from './animations/Bloom';

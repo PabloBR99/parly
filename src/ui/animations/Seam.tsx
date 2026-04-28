@@ -1,10 +1,18 @@
-// Seam — the soft horizontal band where the warm and cool halves meet.
+// Seam — the horizon where warm and cool halves meet.
 //
-// Not a divider, an encounter: a faked vertical gradient built from three
-// stacked translucent bands (cool above, warm below, hairline at centre)
-// because the project carries no gradient or SVG dependency. The hairline
-// shimmers in idle; when one side is speaking, the whole seam nudges
-// toward the OTHER side — the partner's light retreating to make room.
+// Not a divider, an encounter: a soft warm/cool transition zone (faked
+// with two stacked translucent bands since RN can't blur a region) plus
+// a CRISP HAIRLINE through the middle that fades from transparent at the
+// edges to a clear bright line at the centre. The hairline gives the seam
+// a real horizon line — without it, the warm/cool bands just blend into
+// the gradient.
+//
+// The hairline is rendered as an SVG horizontal LinearGradient (transparent
+// → bright → transparent) instead of a flat View, so it actually fades at
+// the edges instead of butting up hard against the screen sides.
+//
+// Idle: the hairline shimmers softly. Active: the whole seam nudges toward
+// the OTHER side — the partner's light retreating to make room.
 
 import React, { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -16,6 +24,7 @@ import Animated, {
   withRepeat,
   withTiming,
 } from 'react-native-reanimated';
+import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { color, motion } from '../theme';
 
 interface SeamProps {
@@ -25,6 +34,7 @@ interface SeamProps {
 const BAND_HEIGHT = 56;
 const SEAM_HEIGHT = 120;
 const PUSH_PX = 6;
+const HAIRLINE_HEIGHT = 1.5;
 
 export function Seam({ activeSide }: SeamProps): React.JSX.Element {
   // Push: A (warm, bottom) speaking → seam shifts UP (negative).
@@ -49,16 +59,15 @@ export function Seam({ activeSide }: SeamProps): React.JSX.Element {
     return () => cancelAnimation(shimmer);
   }, [shimmer]);
 
-  // The container holds the -50% centring transform; we stack the push
-  // translation on top so it composes cleanly with the static centring.
+  // Container — the -50% centring + push translation, composed cleanly.
   const containerStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: -SEAM_HEIGHT / 2 + push.value }],
   }));
 
-  // scaleX (not width) keeps the shimmer on the GPU compositor.
+  // Hairline — opacity + scaleX shimmer on the GPU compositor.
   const hairlineStyle = useAnimatedStyle(() => ({
-    opacity: 0.4 + 0.6 * shimmer.value,
-    transform: [{ scaleX: 0.92 + 0.08 * shimmer.value }],
+    opacity: 0.55 + 0.45 * shimmer.value,
+    transform: [{ scaleX: 0.94 + 0.06 * shimmer.value }],
   }));
 
   // pointerEvents="none" so the seam never intercepts PTT presses near
@@ -66,7 +75,20 @@ export function Seam({ activeSide }: SeamProps): React.JSX.Element {
   return (
     <Animated.View pointerEvents="none" style={[styles.container, containerStyle]}>
       <View style={styles.coolBand} />
-      <Animated.View style={[styles.hairline, hairlineStyle]} />
+      <Animated.View style={[styles.hairline, hairlineStyle]}>
+        <Svg width="100%" height={HAIRLINE_HEIGHT}>
+          <Defs>
+            <LinearGradient id="seam-hairline" x1="0" y1="0" x2="1" y2="0">
+              <Stop offset="0"    stopColor="#FFFFFF" stopOpacity="0" />
+              <Stop offset="0.20" stopColor="#FFFFFF" stopOpacity="0.32" />
+              <Stop offset="0.50" stopColor="#FFFFFF" stopOpacity="0.55" />
+              <Stop offset="0.80" stopColor="#FFFFFF" stopOpacity="0.32" />
+              <Stop offset="1"    stopColor="#FFFFFF" stopOpacity="0" />
+            </LinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width="100%" height={HAIRLINE_HEIGHT} fill="url(#seam-hairline)" />
+        </Svg>
+      </Animated.View>
       <View style={styles.warmBand} />
     </Animated.View>
   );
@@ -98,10 +120,9 @@ const styles = StyleSheet.create({
   },
   hairline: {
     position: 'absolute',
-    left: '12%',
-    right: '12%',
-    top: SEAM_HEIGHT / 2 - 0.5,
-    height: 1,
-    backgroundColor: color.seamLine,
+    left: 0,
+    right: 0,
+    top: SEAM_HEIGHT / 2 - HAIRLINE_HEIGHT / 2,
+    height: HAIRLINE_HEIGHT,
   },
 });

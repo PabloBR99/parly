@@ -47,29 +47,25 @@ export const color = {
   accentAGlow:    'rgba(255,142,118,0.10)',
   accentAWhisper: 'rgba(255,142,118,0.045)',
 
-  // Warm bloom — apricot / peach / terracotta
-  bloomWarmTop:   'rgba(255,179,122,0.42)',  // #FFB37A
-  bloomWarmMid:   'rgba(255,142,118,0.38)',  // #FF8E76
-  bloomWarmDeep:  'rgba(226,111, 92,0.34)',  // #E26F5C
-
   accentB:        '#A8B2FF',  // periwinkle — the canonical cool accent
   accentBSoft:    'rgba(168,178,255,0.16)',
   accentBRing:    'rgba(168,178,255,0.55)',
   accentBGlow:    'rgba(168,178,255,0.10)',
   accentBWhisper: 'rgba(168,178,255,0.045)',
 
-  // Cool bloom — periwinkle / seafoam / iris
-  bloomCoolTop:   'rgba(168,178,255,0.42)',  // #A8B2FF
-  bloomCoolMid:   'rgba(127,216,201,0.38)',  // #7FD8C9
-  bloomCoolDeep:  'rgba(156,138,230,0.34)',  // #9C8AE6
+  // Bloom palettes for the three watercolour stains live as hex constants
+  // inside `Bloom.tsx`, where the SVG <RadialGradient> per-stop alpha
+  // governs intensity. Keeping a parallel rgba copy here was a footgun —
+  // when we tuned alpha on the SVG side, the tokens silently rotted.
 
   // Seam — where the two halves meet. A clear horizontal zone, not an
   // afterthought. Bands stack on top of the half-washes to amplify the
-  // warm/cool encounter at the horizon, with a crisp shimmering hairline
-  // through the middle.
+  // warm/cool encounter at the horizon. The shimmering hairline through
+  // the middle is rendered as an SVG horizontal gradient inline in
+  // Seam.tsx so it can fade at the edges instead of butting hard up
+  // against the screen sides.
   seamCool:       'rgba(168,178,255,0.12)',
   seamWarm:       'rgba(255,179,122,0.12)',
-  seamLine:       'rgba(255,255,255,0.32)',
 
   // Status — re-tinted so success aligns with the cool palette (seafoam) and
   // warning doesn't clash with the warm palette.
