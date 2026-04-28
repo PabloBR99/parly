@@ -58,10 +58,8 @@ export const color = {
   // governs intensity. Keeping a parallel rgba copy here was a footgun —
   // when we tuned alpha on the SVG side, the tokens silently rotted.
 
-  // Seam — the warm/cool transition is now painted as a single vertical
-  // LinearGradient inline in Seam.tsx (cool→warm), and the hairline is a
-  // horizontal SVG gradient. No theme tokens needed: keeping a parallel
-  // colour copy here was a footgun (drifted away from the SVG side).
+  // No seam tokens — the horizon is the natural near-black band of the
+  // dusk gradient (`DuskBackdrop`), not a separate horizontal element.
 
   // Status — re-tinted so success aligns with the cool palette (seafoam) and
   // warning doesn't clash with the warm palette.

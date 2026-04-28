@@ -52,10 +52,8 @@ import type { PersonId } from '../app/types';
 import type { RootStackParamList } from '../navigation/types';
 import {
   DuskBackdrop,
-  FirstTouchTrace,
   LanguagePickerSheet,
   PTTButton,
-  Seam,
   StateMorph,
   Text,
   color,
@@ -100,23 +98,6 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
 
   const noKey = apiKey.trim() === '';
 
-  // First-touch trace — once per app session, the very first valid PTT
-  // press fires a thin coloured line that travels from the speaker's disc
-  // across the seam to the partner's edge. A wordless "I'm starting".
-  // Ref so flipping it doesn't trigger a re-render mid-press.
-  const hasGreetedRef = useRef(false);
-  const [traceSide, setTraceSide] = useState<'A' | 'B' | null>(null);
-
-  // Auto-clear the trace after the animation completes. Bound to a
-  // useEffect so navigating away mid-fire doesn't fire setState on an
-  // unmounted component (and so the timer is cancelled cleanly).
-  // Animation total ≈ 700 + 140 + 280 = 1120 ms — clear at 1300.
-  useEffect(() => {
-    if (traceSide === null) return;
-    const id = setTimeout(() => setTraceSide(null), 1300);
-    return () => clearTimeout(id);
-  }, [traceSide]);
-
   const handleMicPressIn = (speakerId: PersonId) => {
     if (noKey) return;
     if (activeTurn && activeTurn.stage !== 'done' && activeTurn.stage !== 'error') {
@@ -125,11 +106,6 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
     const sourceLang = speakerId === 'person_a' ? personA.language : personB.language;
     const targetLang = speakerId === 'person_a' ? personB.language : personA.language;
     if (!sourceLang || !targetLang) return;
-
-    if (!hasGreetedRef.current) {
-      hasGreetedRef.current = true;
-      setTraceSide(speakerId === 'person_a' ? 'A' : 'B');
-    }
 
     void conversationOrchestrator
       .beginTurn({ speakerId, sourceLang, targetLang })
@@ -170,26 +146,14 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   const topIncomingTurn = lastTurnA;
   const bottomIncomingTurn = lastTurnB;
 
-  const activeSide: 'A' | 'B' | null =
-    activeTurn?.speakerId === 'person_a' ? 'A'
-      : activeTurn?.speakerId === 'person_b' ? 'B'
-      : null;
-
   return (
     <View style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor={color.bg} />
 
-      {/* Dusk atmosphere — multi-band warm/cool gradient sits above bg and
-          below the seam, blooms, and halves. */}
+      {/* Dusk atmosphere — vertical gradient cool→near-black→warm. The
+          horizon is the natural near-black band at 50%, no separate
+          horizontal element. */}
       <DuskBackdrop />
-      <Seam activeSide={activeSide} />
-      <FirstTouchTrace
-        side={traceSide}
-        warmColor={color.accentA}
-        warmHalo={color.accentASoft}
-        coolColor={color.accentB}
-        coolHalo={color.accentBSoft}
-      />
 
       {/* TOP HALF — rotated 180° so the partner sees everything upright. */}
       <View style={styles.half}>

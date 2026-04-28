@@ -60,18 +60,20 @@
      DuskBackdrop — exactly the LinearGradient stops in
      src/ui/animations/DuskBackdrop.tsx
      --------------------------------------------------------------- */
-  /* DuskBackdrop — 6-stop asymmetric gradient (mid-darks at 42% & 58%,
-     not 50%, gives the sky a "painted not centred" feel). Saturated
-     extremes pulled up a hair from the previous version so the dusk
-     reads at a glance, not as cast on otherwise-black canvas. */
+  /* DuskBackdrop — 7-stop dusk where the centre is near-black.
+     The horizon is no longer a separate component (no haze, no hairline);
+     it's the natural dark zone of the gradient itself. Reading top→bottom:
+     cool periwinkle, fades to dark, true black band at centre, fades back
+     out to warm peach. The cool and warm sides never touch. */
   .dusk-backdrop {
     position: absolute;
     inset: 0;
     background: linear-gradient(180deg,
       #1B1F38 0%,
-      #14152A 22%,
-      #0E0E18 42%,
-      #110E10 58%,
+      #131525 22%,
+      #060609 42%,
+      #030305 50%,
+      #060406 58%,
       #1A130D 78%,
       #341B10 100%);
   }
@@ -82,51 +84,10 @@
      Hairline: SVG horizontal gradient transparent→0.32→0.55→0.32→transparent,
      shimmer animates opacity 0.55→1.0 + scaleX 0.94→1.0 over 8s.
      --------------------------------------------------------------- */
-  .seam {
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 50%;
-    height: 140px;
-    transform: translateY(-50%);
-    pointer-events: none;
-    z-index: 2;
-  }
-  /* Single vertical gradient covering the whole seam zone — cool fades
-     in from the top, meets warm at the centre, fades out at the bottom.
-     Replaces two distinct bands that were reading as engineered stripes
-     instead of an atmospheric horizon. */
-  .seam .haze {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(180deg,
-      rgba(168,178,255,0.00) 0%,
-      rgba(168,178,255,0.16) 28%,
-      rgba(168,178,255,0.20) 45%,
-      rgba(255,179,122,0.20) 55%,
-      rgba(255,179,122,0.16) 72%,
-      rgba(255,179,122,0.00) 100%);
-  }
-  .seam .hairline {
-    position: absolute;
-    left: 0; right: 0;
-    top: calc(50% - 0.75px);
-    height: 1.5px;
-    /* 5-stop horizontal hairline — fades to transparent at the screen
-       edges, peaks bright at the centre. Brighter than the previous pass
-       so the horizon line actually reads against the warm/cool bands. */
-    background: linear-gradient(90deg,
-      rgba(255,255,255,0)    0%,
-      rgba(255,255,255,0.42) 18%,
-      rgba(255,255,255,0.78) 50%,
-      rgba(255,255,255,0.42) 82%,
-      rgba(255,255,255,0)    100%);
-    animation: seam-shimmer 9s ease-in-out infinite alternate;
-  }
-  @keyframes seam-shimmer {
-    0%   { opacity: 0.65; transform: scaleX(0.95); }
-    100% { opacity: 1.00; transform: scaleX(1.00); }
-  }
+  /* Seam — DELETED. The horizon now lives inside the dusk gradient
+     (near-black band at 50%). No horizontal element overlay anywhere:
+     no cool/warm haze (was lightening centre), no hairline (was a
+     visible white horizontal line crossing the screen). */
 
   /* ---------------------------------------------------------------
      Halves — top half is rotated 180° so the partner reads upright.
@@ -476,11 +437,7 @@
         </div>
       </div>
 
-      <!-- Seam at the centre -->
-      <div class="seam">
-        <div class="haze"></div>
-        <div class="hairline"></div>
-      </div>
+      <!-- No seam element: the gradient itself paints the dark horizon. -->
 
       <!-- BOTTOM half — user (warm, upright) -->
       <div class="half bot">
