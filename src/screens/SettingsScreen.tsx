@@ -158,7 +158,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
             <View style={styles.eyebrowRow}>
               <View style={[styles.eyebrowDot, { backgroundColor: color.accentB }]} />
               <Text variant="caption" tone="fgGhost" style={styles.eyebrow}>
-                PARLY — DUSK
+                PARLY
               </Text>
               <View style={[styles.eyebrowDot, { backgroundColor: color.accentA }]} />
             </View>
