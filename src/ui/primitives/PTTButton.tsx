@@ -43,14 +43,13 @@ const SIZE = 96;
 // surrounding chrome — which matches the mockup's "atmosphere of the
 // disc" rather than "atmosphere of the slot".
 //
-// The mockup's bloom is 320px on a 380px phone — ~84% width, leaving a
-// visible margin of dark dusk on either side. A previous pass bumped this
-// to 480px (edge-to-edge) to compensate for RN missing `filter: blur(30px)`
-// and `mix-blend-mode: screen`, but the result was wider than the mockup
-// and lost the painted-island feel of the original. 340px keeps a small
-// bump over the literal mockup spec to soften the falloff without making
-// the bloom span the full width.
-const BLOOM_SIZE = 340;
+// The mockup's bloom is 320px on a 380px phone — ~84% width. RN can't do
+// `filter: blur(30px)` or `mix-blend-mode: screen`, so a too-narrow
+// bloom (340 px) showed three distinct stain centres rather than a
+// smoothed wash. 400 px lets the stains blend into a softer cluster
+// without quite reaching edge-to-edge — visible dark margin survives
+// on either side, matching the mockup's painted-island feel.
+const BLOOM_SIZE = 460;
 const FOOTPRINT = 200;
 
 // Inner halo — a soft off-centre highlight inside the disc, equivalent to
@@ -214,14 +213,18 @@ export function PTTButton({
                 cx="50%" cy="50%"
                 r="50%"
                 fx="50%" fy="50%">
-                {/* Inside the disc area (≤ disc-radius / shadow-radius =
-                    SIZE/2 / SHADOW_SIZE/2 ≈ 0.667) the disc covers, so
-                    the gradient there is moot. The visible part is the
-                    soft fringe past 0.667 fading out by 1.0 — i.e. the
-                    24 px CSS blur tail. */}
-                <Stop offset="0"     stopColor="#000" stopOpacity="0.55" />
-                <Stop offset="0.55"  stopColor="#000" stopOpacity="0.42" />
-                <Stop offset="0.78"  stopColor="#000" stopOpacity="0.18" />
+                {/* Disc-radius / shadow-radius = SIZE/2 / SHADOW_SIZE/2 ≈
+                    0.667. We keep the halo fully transparent INSIDE that
+                    boundary so the bloom passes cleanly through the disc
+                    and the disc never darkens itself. Past the edge the
+                    halo ramps quickly to its peak then tails to 0 by
+                    offset 1.0 — a soft dark ring that hugs the disc
+                    rather than a wash beneath it. */}
+                <Stop offset="0"     stopColor="#000" stopOpacity="0" />
+                <Stop offset="0.55"  stopColor="#000" stopOpacity="0" />
+                <Stop offset="0.66"  stopColor="#000" stopOpacity="0.05" />
+                <Stop offset="0.72"  stopColor="#000" stopOpacity="0.30" />
+                <Stop offset="0.85"  stopColor="#000" stopOpacity="0.14" />
                 <Stop offset="1"     stopColor="#000" stopOpacity="0" />
               </RadialGradient>
             </Defs>

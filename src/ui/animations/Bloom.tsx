@@ -80,8 +80,8 @@ const COOL = ['#A8B2FF', '#7FD8C9', '#9C8AE6'] as const;  // periwinkle / seafoa
 // it our normal alpha-over-dark needs higher alpha to reach a similar
 // painted-on-dark luminosity.
 const ALPHAS = {
-  warm: { top: 0.55, mid: 0.50, deep: 0.45 },
-  cool: { top: 0.62, mid: 0.56, deep: 0.50 },
+  warm: { top: 0.68, mid: 0.62, deep: 0.55 },
+  cool: { top: 0.72, mid: 0.66, deep: 0.58 },
 } as const;
 
 export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.Element {
