@@ -117,11 +117,11 @@ The WebSocket is opened fresh per turn. Idle WS connections are subject to opaqu
 Each `SpeakerHalf` is rendered top-down in reading order (source → big → identity → button → edge chrome). The top half wraps the whole stack in `transform: rotate(180deg)` so the partner sees everything upright from their side.
 
 **PTTButton — object metaphor:**
-- **96 pt disc** with three concentric translucent halos: whisper (far field), glow (mid), and the kiss right at the disc edge.
-- **Idle:** halos breathe (3.2 s sine), faint always-on presence so the disc feels like a physical object resting in the screen.
-- **Press:** halos brighten, disc scales by ~5 % (spring).
-- **Active:** outer ring breathes outward every 1.6 s, a 5-bar waveform pulses inside the disc.
-- **Label:** clean horizontal mic-affordance tick (14 × 1.5 pt) above the language code.
+- **96 pt disc** surrounded by an asymmetric watercolour bloom (three offset SVG radial gradients, not concentric halos).
+- **Idle:** bloom breathes subtly (±1 px drift, opacities 0.92–1.00), with meditative tempos (7.4 / 8.0 / 8.6 s) that feel alive, not anxious.
+- **Press:** disc scales by ~5 % (spring); halos brighten.
+- **Active:** outer ring breathes outward every 1.6 s, a 5-bar waveform pulses inside the disc, bloom couples to the RMS of the incoming audio.
+- **Label:** clean horizontal mic-affordance tick (14 × 1.5 pt) — **no language code text inside the disc** (removed in favor of accent tint; endonym lives in the identity chip above).
 
 **Felt rhythm — haptic choreography across the turn:**
 
@@ -214,7 +214,7 @@ parly/
 │   ├── ui/
 │   │   ├── primitives/
 │   │   │   ├── PTTButton.tsx                # The hero object
-│   │   │   ├── LanguagePickerSheet.tsx      # Modal bottom sheet
+│   │   │   ├── LanguagePickerSheet.tsx      # Reanimated overlay (top or bottom, rotated for partner)
 │   │   │   ├── LanguageCard.tsx
 │   │   │   ├── SwapButton.tsx
 │   │   │   ├── Surface.tsx
@@ -222,6 +222,7 @@ parly/
 │   │   │   └── Text.tsx
 │   │   ├── animations/
 │   │   │   ├── Waveform.tsx
+│   │   │   ├── Bloom.tsx                    # Watercolour stains (asymmetric, three SVG radial gradients)
 │   │   │   └── StateMorph.tsx               # idle/recording/translating/speaking
 │   │   ├── theme.ts                         # Diplomatic design tokens
 │   │   ├── haptics.ts                       # tap/pulse/tick/done/error
@@ -259,6 +260,18 @@ parly/
 
 ---
 
+## Recent Shipped Changes
+
+**Language Picker Overlay (`3ef41cd`, `c11602e`):** Replaced native `<Modal animationType="slide">` with an in-screen Reanimated overlay anchored to either edge. Android's Dialog window was producing a visible upward jump on touch no matter the fix; an overlay that only translates (never unmounts) sidesteps the entire native layer. New `side` prop: `'top'` docks to screen-top with 180° rotation for the partner's view, `'bottom'` is the conventional behavior. `ConversationScreen` now renders two pickers (one per slot), each with its own frozen `excludeCode` snapshotted via a render-time ref so the list size never changes mid-animation.
+
+**Bloom redesign (`f7dfd68`):** The HTML mockup uses `filter: blur(30px)` + `mix-blend-mode: screen` — RN can't do either, so a 280 px tight-falloff bloom rendered as a small dim ring on the disc instead of the wide painted wash of the mockup. Three changes: `BLOOM_SIZE` 280 → 480 pt to span the full half of the screen edge-to-edge; stops `0/.18/.42/.72/1` → `0/.22/.50/.80/1` with alpha factors `1/.66/.32/.11/0` → `1/.78/.50/.22/0` so visible alpha carries to ~80 % of radius (the "blur substitute"); peak alphas bumped (warm 0.42/0.38/0.34 → 0.55/0.50/0.45, cool 0.48/0.44/0.40 → 0.62/0.56/0.50) to compensate for missing screen-blend. Stain offsets scaled ~1.7× to keep the painterly asymmetric silhouette in the bigger bloom.
+
+**PTTButton polish (`65a17ce`, `3ef41cd`):** Language code text inside the disc removed; without it the disc was near-invisible, so the idle shell is now tinted with the speaker accent — `bg = ${accent}1A` (10 %) idle / `${accent}26` (15 %) active; `border = ${accent}66` (~40 %) idle / `accentRing` active. Accessibility label still exposes the language code for screen readers.
+
+**Settings keyboard handling (`65a17ce`):** Replaced the brittle `scrollToEnd-on-focus` with a `Keyboard.didShow` listener that measures the API-key input's position, computes overlap with the keyboard, and scrolls it ~48 px above the keyboard edge so long-press → Paste is comfortable. Dropped `KeyboardAvoidingView` (Android `adjustResize` handles the heavy lifting). Bumped bottom padding to give the ScrollView room to scroll the input that high. Light Dusk pass on the header (`DuskBackdrop`, peach/periwinkle dot eyebrow, `serifHero` "Welcome." / "Settings.").
+
+**LanguagePair copy + sizing (`79f9a83`):** Headline changed from "Two suns meeting at the edge of the day." to "A live translator for two voices." `LanguageCard` endonym dropped from `displayHuge` (48 px) to `displayLarge` (36 px) — subtle scale-down so the card breathes more.
+
 ## Roadmap
 
 | Phase | Status | Highlights |
@@ -266,7 +279,8 @@ parly/
 | **0** — Spike: on-device STT + voice cloning | Discarded | whisper.rn (no Voxtral support) and ZipVoice/sherpa-onnx voice-cloning evaluated; abandoned in favor of cloud STT for quality + footprint. |
 | **1–4** — Earlier on-device pipeline | Superseded | See `PLAN.md` for the historical phase log. |
 | **v4 pivot** — Voxtral + Mistral + native TTS | ✅ | New orchestrator, streaming end-to-end, half-duplex lock, Mistral key validation. |
-| **v5 — UI redesign** | ✅ commit `a43525e` | Vertical PTT axis, halo'd disc, editorial restraint, Diplomatic theme. |
+| **v5 — UI redesign** | ✅ commit `a43525e` | Vertical PTT axis, bloom disc, editorial restraint, Diplomatic theme. |
+| **v5.1 — Picker overhaul + bloom + settings** | ✅ commits `65a17ce` → `f7dfd68` | Reanimated dual-side picker, BLOOM_SIZE 280→480 with softer falloff, accent-tinted PTT, settings keyboard scroll-to-input. |
 | **v6 — Final polish** | ✅ commit `a34e6e7` | Haptic choreography, tap-to-replay, status microcopy, settling reveal, first-run hint, mom-tier onboarding. |
 
 ---

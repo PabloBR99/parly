@@ -70,19 +70,20 @@ La WS se abre fresca por turno. WSs idle sufren timeouts opacos del servidor (30
 1. Source line — texto capturado MIENTRAS habla, o fuente del partner post-turn (pequeño, near center)
 2. Big translated text — `displayHero` (34 pt, weight 300, -0.6 tracking) — QUÉ LEE ESTA PERSONA
 3. Identity chip — language endonym + state morph + microcopy (ESCUCHANDO / PENSANDO / HABLANDO)
-4. PTT button — object metaphor con halos concéntricos translúcidos
+4. PTT button — object metaphor con bloom acuarela
 5. Edge chrome — online/offline pill (partner) o `ajustes` link (user)
 
 **PTTButton object metaphor:**
-- Disc 96 pt con tres halos concéntricos que respiran en idle (3.2 s sine), se iluminan en press
-- Activo: outer ring respira cada 1.6 s; waveform 30 pt alto, 5 barras
-- Label: clean horizontal mic-affordance tick (14 × 1.5 pt) sobre language code
+- Disc 96 pt con bloom acuarela asimétrica (no halos concéntricos)
+- Idle: bloom respira sutilmente (±1 px, opacidad 0.92–1.00), tempos 7.4 / 8.0 / 8.6 s para ritmo meditativo
+- Activo: outer ring respira cada 1.6 s; waveform 30 pt alto, 5 barras; bloom se acopla al RMS del audio
+- Label: clean horizontal mic-affordance tick (14 × 1.5 pt) — SIN texto de idioma en el disco
 - Acentos: platinum amber `#F2B473` ("you") / ice blue `#86BFFF` ("them")
-- Halos por acento: `accentGlow` (~0.10 opacity), `accentWhisper` (~0.045), `accentRing` (0.55)
+- Bloom de acento: tinta de tres gradientes radiales con falloff largo (5 stops) que simula blur CSS en RN. Cálido (apricot/peach/terracotta) vs. frío (periwinkle/seafoam/iris).
 
-**Theme tokens nuevos:**
-- `color.accentAGlow`, `color.accentBGlow`, `color.accentAWhisper`, `color.accentBWhisper`
-- `color.fgWhisper` (0.07 opacity) — nueva tier de foreground
+**Theme tokens:**
+- `color.accentAGlow`, `color.accentBGlow`, `color.accentAWhisper`, `color.accentBWhisper` — obsoleto, reemplazado por bloom
+- `color.fgWhisper` (0.07 opacity) — tier de foreground para microcopy
 - `font.displayHero` (34 pt, weight 300, -0.6 tracking) — main translated text
 - `motion.glacial` (800 ms) — slow breath animation
 
@@ -203,15 +204,22 @@ parly/
 - [x] `NetworkMonitor` + `mistralProbe` con chip-pill `en línea` / `conectando` / `sin conexión`.
 - [x] Voxtral language hint, key validator inline, key prefix sanitization (commits `95d0eb0`, `e9b5b51`, `e907da0`).
 
+**Shipped after v5 — Picker overhaul, bloom redesign, settings polish:**
+- [x] **LanguagePickerSheet: Native Modal → Reanimated overlay** (commits `3ef41cd`, `c11602e`). La Android Dialog nativa causaba un visual jump hacia arriba en cada touch dentro del Modal. Reemplazo: overlay in-screen siempre montado, animado por Reanimated `translateY`. Dual-side support: `side='top'` (docks a screen-top con contenido rotado 180°) vs. `side='bottom'` (convencional). ConversationScreen ahora renderiza DOS pickers (uno por slot); cada uno lleva su propio `excludeCode` constante, evitando la necesidad de recomputo de exclusión en el padre. El frozen-exclude se snapshotea via ref **en render** (no en useEffect) para evitar el flicker de dos frames que el sheet bottom-anchored convertía en salto.
+- [x] **Bloom: gradiente más ancho y suave** (commit `f7dfd68`). El mockup HTML usa `filter: blur(30px)` + `mix-blend-mode: screen` que RN no soporta. Sin ellos, nuestro bloom de 280 px con falloff tight quedaba como un anillo pequeño y mate. Tres cambios: BLOOM_SIZE 280 → 480, stops `0/.18/.42/.72/1` → `0/.22/.50/.80/1` con factores de alpha `1/.66/.32/.11/0` → `1/.78/.50/.22/0`, y peak alphas (warm 0.42/0.38/0.34 → 0.55/0.50/0.45; cool 0.48/0.44/0.40 → 0.62/0.56/0.50). Stain offsets escalados ~1.7× para mantener la silueta asimétrica.
+- [x] **PTTButton: disc sin texto, tintado por acento** (commits `65a17ce`, `3ef41cd`). El código de idioma (es/en) dentro del disco fuera. `accessibilityLabel` persiste. El disco ocioso ahora tintado con el acento: `bg = ${accent}1A` (10% idle) / `${accent}26` (15% active); `border = ${accent}66` (~40% idle) / `accentRing` (active) — sin label se quedaba casi invisible.
+- [x] **SettingsScreen: scroll-to-input al abrir teclado** (commit `65a17ce`). Reemplazado el frágil `scrollToEnd-on-focus` con un `Keyboard.didShow` listener que mide la posición del input, calcula el overlap con el teclado, y hace `scrollTo` ~48 px por encima del borde del teclado para un long-press → Paste cómodo. `paddingBottom` subido a `insets.bottom + space.xxl + 280`. Fuera el `KeyboardAvoidingView` (en Android `adjustResize` + listener combination hace el trabajo). Toque ligero de Dusk en el header (DuskBackdrop, eyebrow con dots peach/periwinkle, `serifHero` "Welcome." / "Settings.").
+- [x] **LanguagePairScreen: copy + tipografía** (commit `79f9a83`). Headline cambiado de "Two suns meeting at the edge of the day." a "A live translator for two voices." LanguageCard endonym de `displayHuge` (48 px) a `displayLarge` (36 px) — drop sutil para que la card respire.
+
 ### Fase 5 — UI Redesign ✅ (Commit a43525e)
 - [x] **Vertical PTT axis:** Botón PTT en cada EXTREMO FÍSICO del teléfono (partner arriba, user abajo)
   - [x] Sin divisor central de hairline — el silencio entre dos líneas fuente ES el divisor
   - [x] Layout de lectura en `SpeakerHalf`: fuente → texto grande → chip identidad → PTT → edge chrome
   - [x] Rotación 180° en mitad superior para que partner lea al derecho
-- [x] **PTTButton object metaphor:** disc 96 pt con tres halos concéntricos translúcidos (whisper / glow / kiss)
-  - [x] Halos respiran en idle (3.2 s sine), se iluminan en press, florecen en active
-  - [x] Outer ring respira cada 1.6 s cuando activo; waveform 30 pt alto, 5 barras
-  - [x] Sustitución: puck-dot label → clean horizontal mic-affordance tick (14×1.5 pt) sobre language code
+- [x] **PTTButton object metaphor:** disc 96 pt con bloom acuarela asimétrica (no halos concéntricos)
+  - [x] Bloom respira sutilmente en idle (±1 px, opacidad 0.92–1.00), tempos meditativas 7.4 / 8.0 / 8.6 s
+  - [x] Activo: outer ring respira cada 1.6 s; waveform 30 pt alto, 5 barras; bloom se acopla al RMS
+  - [x] Sustitución: label con language code → clean horizontal mic-affordance tick (14×1.5 pt), SIN texto en disco
 - [x] **Tema — palette de acentos + nuevos tokens:**
   - [x] Desaturación ligera: amber #F4B26A → #F2B473 (platinum amber), azure #7AB8FF → #86BFFF (ice blue)
   - [x] Nuevos tokens por acento: `accentAGlow`/`accentBGlow` (~0.10 opacity), `accentAWhisper`/`accentBWhisper` (~0.045)
@@ -219,9 +227,10 @@ parly/
   - [x] Nuevos tokens: `color.fgWhisper` (0.07), `motion.glacial` (800 ms)
   - [x] Tighter `letterSpacing` en display sizes
 - [x] **Polish auxiliar:**
-  - [x] LanguagePairScreen: headline editorial "Dos idiomas. Una conversación." + subhead, breathing room
-  - [x] SettingsScreen: header reescrito con subhead; eyebrow tracking 2.4, section labels tracking 1.8
-  - [x] LanguageCard: borders ligeros (hairline), transparent empty state
+  - [x] LanguagePairScreen: headline editorial "A live translator for two voices" + subhead, breathing room
+  - [x] SettingsScreen: header reescrito con subhead; eyebrow tracking 2.4, section labels tracking 1.8; scroll-to-input en keyboard show
+  - [x] LanguageCard: endonym tamaño bajado de displayHuge (48px) a displayLarge (36px)
+  - [x] LanguagePickerSheet: reemplazado Native Modal por overlay animado con Reanimated (sin Dialog jump en Android)
   - [x] SwapButton: floating glyph, drop flanking hairlines
 
 ### Fase 6 — Polish final ✅ (Commit a34e6e7)
