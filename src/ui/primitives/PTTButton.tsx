@@ -43,12 +43,14 @@ const SIZE = 96;
 // surrounding chrome — which matches the mockup's "atmosphere of the
 // disc" rather than "atmosphere of the slot".
 //
-// Bumped from 280 → 480 to compensate for two CSS effects RN can't do
-// (`filter: blur(30px)` and `mix-blend-mode: screen`). Without them, a
-// 280px bloom reads as a small ring around the disc instead of the wide
-// warm wash of the HTML mockup. 480px ≈ phone width, so the wash spans
-// the full half of the screen edge-to-edge with soft falloff.
-const BLOOM_SIZE = 480;
+// The mockup's bloom is 320px on a 380px phone — ~84% width, leaving a
+// visible margin of dark dusk on either side. A previous pass bumped this
+// to 480px (edge-to-edge) to compensate for RN missing `filter: blur(30px)`
+// and `mix-blend-mode: screen`, but the result was wider than the mockup
+// and lost the painted-island feel of the original. 340px keeps a small
+// bump over the literal mockup spec to soften the falloff without making
+// the bloom span the full width.
+const BLOOM_SIZE = 340;
 const FOOTPRINT = 200;
 
 // Inner halo — a soft off-centre highlight inside the disc, equivalent to
