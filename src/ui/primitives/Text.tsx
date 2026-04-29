@@ -70,6 +70,16 @@ function variantTrailingPad(
 ): { readonly paddingEnd: number } | undefined {
   const ls = variantStyle.letterSpacing;
   if (typeof ls !== 'number' || ls <= 0) return undefined;
-  // Round up to whole pixel; sub-pixel paddings are flaky on Android.
-  return { paddingEnd: Math.ceil(ls) };
+  // Two distinct cuts to compensate for on Android RN:
+  //   1. trailing letter-spacing tail not included in the glyph clip
+  //      → ceil(letterSpacing) px
+  //   2. italic / serif glyphs that overhang their advance width (the
+  //      top of an italic "h", curled "g" tails, etc.) — the canvas
+  //      clip cuts the leaning bit unless we reserve room. Empirically
+  //      ~15% of fontSize is enough at the sizes we use (10–30 pt).
+  // Sum both, then add a 1 px cushion to absorb sub-pixel rounding on
+  // Android's hardware-accelerated text path.
+  const fs = typeof variantStyle.fontSize === 'number' ? variantStyle.fontSize : 14;
+  const overhang = Math.ceil(fs * 0.15);
+  return { paddingEnd: Math.ceil(ls) + overhang + 1 };
 }

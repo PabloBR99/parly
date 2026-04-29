@@ -145,12 +145,13 @@ export function PTTButton({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    // Idle uses the speaker's accent for both fill and rim (low alpha) so the
-    // disc reads as that speaker's territory even without a label inside.
-    // Active is the same hue at higher intensity, with the canonical ring
-    // colour for the rim.
-    borderColor: active ? accentRing : `${accent}66`,    // ~40% accent
-    backgroundColor: active ? `${accent}26` : `${accent}1A`, // 15% / 10% accent
+    // Idle: white-on-white hairline border (mockup spec
+    // `border: 1px solid rgba(255,255,255,0.10)`) and a transparent
+    // background — the disc reads as a polished neutral object whose
+    // colour comes from the bloom passing through it. Active: tinted
+    // with the accent so it's visibly "lit" while recording.
+    borderColor: active ? accentRing : 'rgba(255,255,255,0.10)',
+    backgroundColor: active ? `${accent}26` : 'transparent',
     overflow: 'hidden',
   };
 
@@ -274,10 +275,16 @@ export function PTTButton({
             </Svg>
           </View>
 
-          {active && <Waveform active color={accent} bars={5} height={30} />}
-          {/* Idle state intentionally has no glyph or text inside the disc —
-              the bloom + halo carry the affordance. The disc is only a
-              polished surface to press, not a label-bearing widget. */}
+          {/* Idle: a small horizontal mic-affordance tick (14 × 1.5 pt at
+              40 % white) — mockup spec, gives the polished disc a quiet
+              hint of "this is where the microphone lives". On press the
+              tick is replaced by the waveform animation that responds to
+              audio level. */}
+          {active ? (
+            <Waveform active color={accent} bars={5} height={30} />
+          ) : (
+            <View style={styles.tick} pointerEvents="none" />
+          )}
         </Animated.View>
       </View>
     </Pressable>
@@ -318,6 +325,12 @@ const styles = StyleSheet.create({
     left: HALO_INSET,
     width: HALO_SIZE,
     height: HALO_SIZE,
+  },
+  tick: {
+    width: 14,
+    height: 1.5,
+    borderRadius: 1,
+    backgroundColor: 'rgba(255,255,255,0.40)',
   },
   disabled: {
     opacity: 0.32,
