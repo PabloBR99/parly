@@ -49,7 +49,7 @@ const SIZE = 96;
 // smoothed wash. 400 px lets the stains blend into a softer cluster
 // without quite reaching edge-to-edge — visible dark margin survives
 // on either side, matching the mockup's painted-island feel.
-const BLOOM_SIZE = 460;
+const BLOOM_SIZE = 380;
 const FOOTPRINT = 200;
 
 // Inner halo — match the mockup's `radial-gradient(circle at 35% 30%,

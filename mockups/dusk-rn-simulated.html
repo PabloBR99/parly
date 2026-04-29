@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Parly — Dusk · RN simulated render</title>
+<style>
+  /* Simulates what RN actually renders — uses the SAME radial-gradient
+     curves the SVG <Bloom> draws, with the SAME stain offsets, no
+     filter:blur and no mix-blend-mode (RN doesn't support either).
+     The "target" preview lives in dusk-after-97d17ee.html and uses
+     CSS-faithful mockup; this one is the apples-to-apples representation
+     of how the build actually renders. */
+
+  html, body { margin: 0; padding: 0; background: #050507; min-height: 100%;
+    color: #fff; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+  body { display: grid; place-items: center; padding: 40px; box-sizing: border-box; }
+
+  .phone {
+    position: relative;
+    width: 380px; height: 800px;
+    border-radius: 52px;
+    overflow: hidden;
+    background: linear-gradient(180deg,
+      #1B1F38 0%, #131525 22%, #060609 42%, #030305 50%,
+      #060406 58%, #1A130D 78%, #341B10 100%);
+    box-shadow: 0 0 0 1.5px rgba(255,255,255,0.06), 0 80px 140px -40px rgba(0,0,0,0.85);
+  }
+
+  .half {
+    position: absolute; left: 0; right: 0;
+    height: 50%;
+    padding: 36px 24px 24px 24px;
+    display: flex; flex-direction: column;
+    z-index: 2;
+    box-sizing: border-box;
+  }
+  .half.top { top: 0; transform: rotate(180deg); }
+  .half.bot { bottom: 0; }
+
+  .source { min-height: 38px; }
+  .big {
+    flex: 1; padding: 8px 0;
+    display: flex; flex-direction: column;
+    justify-content: flex-start;
+  }
+  .welcome-headline {
+    font-family: Georgia, serif; font-style: italic;
+    font-size: 30px; line-height: 38px; letter-spacing: -0.4px;
+    color: rgba(255,255,255,0.36);
+    margin: 0 0 16px 0;
+  }
+  .welcome-flow { display: flex; align-items: center; }
+  .welcome-flow span {
+    font-family: Georgia, serif; font-style: italic;
+    font-size: 10px; letter-spacing: 1.4px;
+    color: rgba(255,255,255,0.16);
+  }
+  .welcome-flow .arrow { margin: 0 12px; letter-spacing: 1px; }
+
+  .identity { display: flex; align-items: center; margin-bottom: 16px; }
+  .chip {
+    display: flex; align-items: center;
+    padding: 5px 10px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  .chip .dot { width: 6px; height: 6px; border-radius: 50%; margin-right: 8px; }
+  .chip .endonym { font-size: 11px; letter-spacing: 0.8px;
+    color: rgba(255,255,255,0.62); text-transform: uppercase; font-weight: 500; }
+  .chip .code { margin-left: 8px; font-family: Georgia, serif; font-style: italic;
+    font-size: 11px; color: rgba(255,255,255,0.36); }
+
+  .ptt-slot {
+    position: relative;
+    height: 200px;
+    display: grid; place-items: center;
+    margin: -20px 0;
+  }
+
+  /* Bloom — three stains, each in a 380×380 box, with TIGHT offsets so
+     they cluster as a single concentrated round halo instead of three
+     visibly distinct centres. NO filter:blur — what RN actually paints. */
+  .bloom {
+    position: absolute;
+    width: 380px; height: 380px;
+    pointer-events: none;
+  }
+  .bloom .stain {
+    position: absolute;
+    width: 380px; height: 380px;
+    border-radius: 50%;
+  }
+
+  /* Warm peaks 0.68 / 0.62 / 0.55. */
+  .warm .top {
+    transform: translate(-22px, -28px);
+    background: radial-gradient(circle at 50% 50%,
+      rgba(255,179,122,0.68) 0%,
+      rgba(255,179,122,0.530) 22%,
+      rgba(255,179,122,0.34)  50%,
+      rgba(255,179,122,0.150) 80%,
+      transparent 100%);
+  }
+  .warm .mid {
+    transform: translate(26px, 18px);
+    background: radial-gradient(circle at 50% 50%,
+      rgba(255,142,118,0.62) 0%,
+      rgba(255,142,118,0.484) 22%,
+      rgba(255,142,118,0.31)  50%,
+      rgba(255,142,118,0.136) 80%,
+      transparent 100%);
+  }
+  .warm .deep {
+    transform: translate(-4px, 32px);
+    background: radial-gradient(circle at 50% 50%,
+      rgba(226,111,92,0.55)  0%,
+      rgba(226,111,92,0.429) 22%,
+      rgba(226,111,92,0.275) 50%,
+      rgba(226,111,92,0.121) 80%,
+      transparent 100%);
+  }
+
+  /* Cool peaks 0.72 / 0.66 / 0.58. */
+  .cool .top {
+    transform: translate(-22px, -28px);
+    background: radial-gradient(circle at 50% 50%,
+      rgba(168,178,255,0.72) 0%,
+      rgba(168,178,255,0.562) 22%,
+      rgba(168,178,255,0.36)  50%,
+      rgba(168,178,255,0.158) 80%,
+      transparent 100%);
+  }
+  .cool .mid {
+    transform: translate(26px, 18px);
+    background: radial-gradient(circle at 50% 50%,
+      rgba(127,216,201,0.66) 0%,
+      rgba(127,216,201,0.515) 22%,
+      rgba(127,216,201,0.33)  50%,
+      rgba(127,216,201,0.145) 80%,
+      transparent 100%);
+  }
+  .cool .deep {
+    transform: translate(-4px, 32px);
+    background: radial-gradient(circle at 50% 50%,
+      rgba(156,138,230,0.58)  0%,
+      rgba(156,138,230,0.452) 22%,
+      rgba(156,138,230,0.29)  50%,
+      rgba(156,138,230,0.128) 80%,
+      transparent 100%);
+  }
+
+  /* Disc — exact mockup CSS, with masked drop shadow simulated via a
+     positioned ::before/::after stack. */
+  .disc-wrap { position: relative; width: 96px; height: 96px; }
+  .disc-shadow {
+    position: absolute; left: -36px; top: -28px;
+    width: 168px; height: 168px;
+    background: radial-gradient(circle at 50% 60%,
+      rgba(0,0,0,0) 24%,    /* inside disc area — masked */
+      rgba(0,0,0,0.40) 32%,
+      rgba(0,0,0,0.18) 60%,
+      rgba(0,0,0,0) 100%);
+    pointer-events: none;
+  }
+  .disc {
+    position: relative;
+    width: 96px; height: 96px;
+    border-radius: 50%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+    border: 1px solid rgba(255,255,255,0.10);
+    display: grid; place-items: center;
+  }
+  .disc::after {
+    content:''; position: absolute; inset: 6px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, rgba(255,255,255,0.06), transparent 60%);
+    pointer-events: none;
+  }
+  .disc .tick {
+    position: absolute; top: 32px;
+    width: 14px; height: 1.5px; border-radius: 1px;
+    background: rgba(255,255,255,0.40);
+  }
+  .disc .lang {
+    font-family: Georgia, serif; font-style: italic;
+    font-size: 14px; letter-spacing: 1.2px;
+    color: rgba(255,255,255,0.62);
+    margin-top: 14px;
+  }
+
+  .edge {
+    display: flex; align-items: center; justify-content: center;
+    gap: 10px;
+    color: rgba(255,255,255,0.36);
+    font-family: Georgia, serif; font-style: italic;
+    font-size: 13px; padding-top: 8px;
+  }
+  .edge .net { width: 6px; height: 6px; border-radius: 50%; background: #7FD8C9; }
+</style>
+</head>
+<body>
+  <div class="phone">
+    <div class="half top">
+      <div class="source"></div>
+      <div class="big">
+        <p class="welcome-headline">Press and hold to speak.</p>
+        <div class="welcome-flow">
+          <span>ESPAÑOL</span><span class="arrow">→</span><span>ENGLISH</span>
+        </div>
+      </div>
+      <div class="identity">
+        <div class="chip">
+          <span class="dot" style="background:#A8B2FF;"></span>
+          <span class="endonym">Español</span>
+          <span class="code">es</span>
+        </div>
+      </div>
+      <div class="ptt-slot">
+        <div class="bloom cool"><div class="stain top"></div><div class="stain mid"></div><div class="stain deep"></div></div>
+        <div class="disc-wrap">
+          <div class="disc-shadow"></div>
+          <div class="disc"><span class="tick"></span><span class="lang">es</span></div>
+        </div>
+      </div>
+      <div class="edge"><span class="net"></span><span>online</span></div>
+    </div>
+
+    <div class="half bot">
+      <div class="source"></div>
+      <div class="big">
+        <p class="welcome-headline">Press and hold to speak.</p>
+        <div class="welcome-flow">
+          <span>ENGLISH</span><span class="arrow">→</span><span>ESPAÑOL</span>
+        </div>
+      </div>
+      <div class="identity">
+        <div class="chip">
+          <span class="dot" style="background:#FF8E76;"></span>
+          <span class="endonym">English</span>
+          <span class="code">en</span>
+        </div>
+      </div>
+      <div class="ptt-slot">
+        <div class="bloom warm"><div class="stain top"></div><div class="stain mid"></div><div class="stain deep"></div></div>
+        <div class="disc-wrap">
+          <div class="disc-shadow"></div>
+          <div class="disc"><span class="tick"></span><span class="lang">en</span></div>
+        </div>
+      </div>
+      <div class="edge"><span>settings</span></div>
+    </div>
+  </div>
+</body>
+</html>

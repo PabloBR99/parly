@@ -51,13 +51,16 @@ interface BloomProps {
   readonly disabled: boolean;
 }
 
-// Stain offsets — asymmetric so the three blobs cluster around the disc but
-// never share a centre. The cluster's overlapping edges form a watercolour
-// shape, not concentric rings. Scaled ~1.7× to keep the asymmetric feel
-// when the bloom container grew from 280 → 480.
-const TOP_OFFSET  = { x: -64, y: -78 };
-const MID_OFFSET  = { x:  72, y:  48 };
-const DEEP_OFFSET = { x: -10, y:  88 };
+// Stain offsets — kept small so the three blobs cluster *tightly* around
+// the disc rather than spreading into a wider blobby cloud. The mockup's
+// `filter: blur(30px)` dissolves three distinct gradients into one round
+// luminous halo; in RN we don't have blur, so we approximate the same
+// look by overlapping the stains close to the centre. Asymmetry is still
+// preserved (top-left up, mid-right down, deep-centre below) — without
+// it the bloom reads as a single mechanical circle, not a watercolour.
+const TOP_OFFSET  = { x: -22, y: -28 };
+const MID_OFFSET  = { x:  26, y:  18 };
+const DEEP_OFFSET = { x:  -4, y:  32 };
 
 // Coprime-ish breath periods so the three stains never lock phase.
 // Slowed from the previous pass — the bloom should feel meditative.
