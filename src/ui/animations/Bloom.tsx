@@ -77,29 +77,16 @@ const COOL = ['#A8B2FF', '#7FD8C9', '#9C8AE6'] as const;  // periwinkle / seafoa
 // Cool side gets +~0.04 across the board (perceptual compensation —
 // warm advances, cool retreats).
 //
-// Reduced ~25 % from the screen-blend-compensating values
-// (warm 0.68 / 0.62 / 0.55, cool 0.72 / 0.66 / 0.58). On AMOLED phones
-// the deep blacks made those numbers read as full-saturation paint; the
-// mockup's softer feel comes mostly from `filter: blur(30px)` which RN
-// can't reproduce, but lowering the peaks gets us closer to the
-// translucent watercolour look without the blur.
+// The organic, irregular silhouette comes from the three asymmetric
+// translate offsets (TOP/MID/DEEP_OFFSET) and the coprime breath
+// periods — not from ellipticity or rotation on the SVG container.
+// Rotating a rectangular SVG reveals its corners, producing a polygonal
+// stepped artefact. rx/ry asymmetry on react-native-svg RadialGradient
+// also renders with visible banding. Stains stay circular; the cluster
+// reads as a watercolour wash through overlap and drift alone.
 const ALPHAS = {
-  warm: { top: 0.51, mid: 0.46, deep: 0.41 },
-  cool: { top: 0.54, mid: 0.49, deep: 0.43 },
-} as const;
-
-// Per-stain shape — slight ellipticity + static rotation so each stain
-// reads as an ink drop pulled by capillary action rather than a
-// mechanical perfect circle. Subtle (rx/ry within ±6 % of round, tilt
-// within ±12°), combined with the asymmetric translate offsets and the
-// breath drift to produce an irregular watercolour silhouette. The
-// rotation is a string literal so it can be passed straight into
-// Reanimated's transform array; the rx/ry strings flow through to the
-// SVG <RadialGradient>.
-const SHAPES = {
-  top:  { rx: '54%', ry: '46%', rotate: '8deg'  },
-  mid:  { rx: '46%', ry: '54%', rotate: '-6deg' },
-  deep: { rx: '52%', ry: '48%', rotate: '12deg' },
+  warm: { top: 0.44, mid: 0.39, deep: 0.35 },
+  cool: { top: 0.47, mid: 0.42, deep: 0.37 },
 } as const;
 
 export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.Element {
@@ -161,7 +148,6 @@ export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.E
       transform: [
         { translateX: dx },
         { translateY: dy },
-        { rotate: SHAPES.top.rotate },
         { scale },
       ],
     };
@@ -180,7 +166,6 @@ export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.E
       transform: [
         { translateX: dx },
         { translateY: dy },
-        { rotate: SHAPES.mid.rotate },
         { scale },
       ],
     };
@@ -199,7 +184,6 @@ export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.E
       transform: [
         { translateX: dx },
         { translateY: dy },
-        { rotate: SHAPES.deep.rotate },
         { scale },
       ],
     };
@@ -211,13 +195,13 @@ export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.E
   return (
     <View pointerEvents="none" style={[styles.container, { width: size, height: size }]}>
       <Animated.View style={[styles.stain, topStainStyle]}>
-        <StainCircle size={size} fill={palette[0]} peak={alphas.top}  rx={SHAPES.top.rx}  ry={SHAPES.top.ry}  idSuffix={`${side}-top`} />
+        <StainCircle size={size} fill={palette[0]} peak={alphas.top}  idSuffix={`${side}-top`} />
       </Animated.View>
       <Animated.View style={[styles.stain, midStainStyle]}>
-        <StainCircle size={size} fill={palette[1]} peak={alphas.mid}  rx={SHAPES.mid.rx}  ry={SHAPES.mid.ry}  idSuffix={`${side}-mid`} />
+        <StainCircle size={size} fill={palette[1]} peak={alphas.mid}  idSuffix={`${side}-mid`} />
       </Animated.View>
       <Animated.View style={[styles.stain, deepStainStyle]}>
-        <StainCircle size={size} fill={palette[2]} peak={alphas.deep} rx={SHAPES.deep.rx} ry={SHAPES.deep.ry} idSuffix={`${side}-deep`} />
+        <StainCircle size={size} fill={palette[2]} peak={alphas.deep} idSuffix={`${side}-deep`} />
       </Animated.View>
     </View>
   );
@@ -228,14 +212,10 @@ interface StainCircleProps {
   readonly fill: string;
   /** Peak alpha at the centre. Tail stops are computed as fixed ratios. */
   readonly peak: number;
-  /** Horizontal radius of the radial gradient as a percentage string. */
-  readonly rx: string;
-  /** Vertical radius of the radial gradient as a percentage string. */
-  readonly ry: string;
   readonly idSuffix: string;
 }
 
-function StainCircle({ size, fill, peak, rx, ry, idSuffix }: StainCircleProps): React.JSX.Element {
+function StainCircle({ size, fill, peak, idSuffix }: StainCircleProps): React.JSX.Element {
   // 5-stop falloff. Stops shifted further OUTWARD and alpha factors made
   // softer so the gradient diffuses across more of its radius — the
   // "blur substitute" for the mockup's `filter: blur(30px)`. The new
@@ -254,7 +234,7 @@ function StainCircle({ size, fill, peak, rx, ry, idSuffix }: StainCircleProps): 
   return (
     <Svg width={size} height={size}>
       <Defs>
-        <RadialGradient id={id} cx="50%" cy="50%" rx={rx} ry={ry} fx="50%" fy="50%">
+        <RadialGradient id={id} cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
           <Stop offset="0"    stopColor={fill} stopOpacity={a0.toString()} />
           <Stop offset="0.22" stopColor={fill} stopOpacity={a1.toString()} />
           <Stop offset="0.50" stopColor={fill} stopOpacity={a2.toString()} />
