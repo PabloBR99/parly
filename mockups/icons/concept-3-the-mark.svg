@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    Concept 3 — The Mark.
+    Most refined / minimal: a single concentrated bloom where warm and
+    cool stains co-mingle around an implied centre. The icon IS the
+    moment of translation — two voices fused into one luminous round.
+    Strongest at small sizes; risks reading as "meditation app" without
+    the surrounding context (we lean on the warm/cool duality to keep
+    the translation reading in).
+  -->
+  <defs>
+    <linearGradient id="bg3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#0E1220"/>
+      <stop offset="50%"  stop-color="#050507"/>
+      <stop offset="100%" stop-color="#1A0E0A"/>
+    </linearGradient>
+
+    <radialGradient id="m-cool-1" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#A8B2FF" stop-opacity="0.92"/>
+      <stop offset="0.30" stop-color="#A8B2FF" stop-opacity="0.62"/>
+      <stop offset="0.65" stop-color="#A8B2FF" stop-opacity="0.22"/>
+      <stop offset="1"    stop-color="#A8B2FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="m-cool-2" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#7FD8C9" stop-opacity="0.78"/>
+      <stop offset="0.30" stop-color="#7FD8C9" stop-opacity="0.52"/>
+      <stop offset="0.65" stop-color="#7FD8C9" stop-opacity="0.18"/>
+      <stop offset="1"    stop-color="#7FD8C9" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="m-warm-1" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#FFB37A" stop-opacity="0.92"/>
+      <stop offset="0.30" stop-color="#FFB37A" stop-opacity="0.62"/>
+      <stop offset="0.65" stop-color="#FFB37A" stop-opacity="0.22"/>
+      <stop offset="1"    stop-color="#FFB37A" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="m-warm-2" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#E26F5C" stop-opacity="0.78"/>
+      <stop offset="0.30" stop-color="#E26F5C" stop-opacity="0.52"/>
+      <stop offset="0.65" stop-color="#E26F5C" stop-opacity="0.18"/>
+      <stop offset="1"    stop-color="#E26F5C" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="bb3" x="-15%" y="-15%" width="130%" height="130%">
+      <feGaussianBlur stdDeviation="38"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg3)"/>
+
+  <!-- Single bloom cluster, centred. Stains tightly grouped — same offset
+       discipline as the in-app PTT bloom but tighter still, so warm and
+       cool genuinely overlap and the centre reads as a fused round halo. -->
+  <g filter="url(#bb3)">
+    <circle cx="450" cy="430" r="290" fill="url(#m-cool-1)"/>
+    <circle cx="580" cy="500" r="290" fill="url(#m-cool-2)"/>
+    <circle cx="500" cy="610" r="290" fill="url(#m-warm-2)"/>
+    <circle cx="560" cy="460" r="290" fill="url(#m-warm-1)"/>
+  </g>
+</svg>

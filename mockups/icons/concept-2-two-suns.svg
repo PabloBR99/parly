@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    Concept 2 — Two Suns.
+    Most iconic of the three: two glowing watercolour discs overlapping
+    in a vesica piscis. Reads instantly as "two-ness" + "encounter" at
+    every size, including 48 px. Drops the literal phone gradient in
+    favour of a solid dusk backdrop so the silhouette pops harder.
+    Tradeoff: less of the brand's atmospheric horizon, more of a generic
+    duo mark — the encounter happens at a point, not across a horizon.
+  -->
+  <defs>
+    <radialGradient id="cool" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#A8B2FF" stop-opacity="0.95"/>
+      <stop offset="0.20" stop-color="#A8B2FF" stop-opacity="0.78"/>
+      <stop offset="0.45" stop-color="#7FD8C9" stop-opacity="0.55"/>
+      <stop offset="0.75" stop-color="#9C8AE6" stop-opacity="0.22"/>
+      <stop offset="1"    stop-color="#9C8AE6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="warm" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#FFB37A" stop-opacity="0.95"/>
+      <stop offset="0.20" stop-color="#FFB37A" stop-opacity="0.78"/>
+      <stop offset="0.45" stop-color="#FF8E76" stop-opacity="0.55"/>
+      <stop offset="0.75" stop-color="#E26F5C" stop-opacity="0.22"/>
+      <stop offset="1"    stop-color="#E26F5C" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bg2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#0A0E14"/>
+      <stop offset="50%"  stop-color="#050507"/>
+      <stop offset="100%" stop-color="#0E0A10"/>
+    </linearGradient>
+    <filter id="bb2" x="-15%" y="-15%" width="130%" height="130%">
+      <feGaussianBlur stdDeviation="34"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg2)"/>
+
+  <g filter="url(#bb2)">
+    <!-- Cool sun, upper-left -->
+    <circle cx="380" cy="380" r="320" fill="url(#cool)"/>
+    <!-- Warm sun, lower-right; vesica meeting point at the icon centre -->
+    <circle cx="644" cy="644" r="320" fill="url(#warm)"/>
+  </g>
+</svg>

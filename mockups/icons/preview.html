@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Parly — App Icon Concepts</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #1a1a1d; color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+  body { padding: 56px 40px 80px 40px; box-sizing: border-box; }
+
+  h1 { font-family: Georgia, serif; font-style: italic; font-weight: 400;
+       letter-spacing: -0.4px; font-size: 28px; margin: 0 0 6px 0; }
+  .sub { color: rgba(255,255,255,0.55); font-size: 14px; margin-bottom: 48px; }
+
+  .row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 36px;
+         max-width: 1240px; margin: 0 auto; }
+  .card { background: #0e0e10; border-radius: 18px; padding: 28px;
+          box-shadow: 0 0 0 1px rgba(255,255,255,0.05); }
+  .name { font-family: Georgia, serif; font-style: italic;
+          font-size: 18px; margin-bottom: 4px; }
+  .tag  { color: rgba(255,255,255,0.45); font-size: 12px;
+          letter-spacing: 1px; text-transform: uppercase; margin-bottom: 18px; }
+
+  /* Big preview — system corner radius shown so we can judge the silhouette
+     under iOS / Material You masking. iOS uses ~22.5 % squircle. */
+  .big {
+    width: 320px; height: 320px;
+    border-radius: 72px;
+    overflow: hidden;
+    margin: 0 auto 22px auto;
+    background: #050507;
+    box-shadow: 0 20px 50px -20px rgba(0,0,0,0.7);
+  }
+  .big img { width: 100%; height: 100%; display: block; }
+
+  /* Sizes-row — three additional sizes Pablo will see in real use. */
+  .sizes { display: flex; gap: 14px; align-items: center; justify-content: center;
+           padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.05); }
+  .sz {
+    border-radius: 14px; overflow: hidden; background: #050507;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.04);
+  }
+  .sz-192 { width: 96px; height: 96px; border-radius: 22px; }
+  .sz-96  { width: 56px; height: 56px; border-radius: 13px; }
+  .sz-48  { width: 36px; height: 36px; border-radius: 8px; }
+  .sz img { width: 100%; height: 100%; display: block; }
+  .sz-label { color: rgba(255,255,255,0.32); font-size: 10px; text-align: center;
+              margin-top: 4px; letter-spacing: 0.6px; }
+  .sz-wrap { text-align: center; }
+
+  .desc { color: rgba(255,255,255,0.62); font-size: 13px; line-height: 1.5;
+          margin-top: 18px; min-height: 76px; }
+
+  /* Wallpaper pair — show on light + dark to check edge readability. */
+  .wallpapers { margin-top: 80px; max-width: 1240px; margin-left: auto; margin-right: auto; }
+  .wallpapers h2 { font-family: Georgia, serif; font-style: italic;
+                   font-size: 20px; font-weight: 400; margin-bottom: 18px; }
+  .wp-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 28px; }
+  .wp { padding: 28px; border-radius: 18px; }
+  .wp.light { background: linear-gradient(140deg, #d8d2c5, #b9a98e); }
+  .wp.dark  { background: #08080c; }
+  .wp h3 { font-size: 12px; letter-spacing: 1.4px; text-transform: uppercase;
+           margin: 0 0 16px 0; opacity: 0.55; }
+  .wp.light h3 { color: #2a1f12; }
+  .wp.dark  h3 { color: #fff; }
+  .wp-icons { display: flex; gap: 18px; }
+  .wp-icon { width: 88px; height: 88px; border-radius: 20px; overflow: hidden;
+             box-shadow: 0 8px 22px rgba(0,0,0,0.35); }
+  .wp-icon img { width: 100%; height: 100%; display: block; }
+</style>
+</head>
+<body>
+  <h1>Parly — app icon concepts</h1>
+  <div class="sub">Three options grounded in the Dusk visual identity. Compared at icon-mask + 192/96/48 px sizes, and on light/dark home-screen backgrounds.</div>
+
+  <div class="row">
+
+    <div class="card">
+      <div class="name">The Encounter</div>
+      <div class="tag">concept 1 · most brand-tied</div>
+      <div class="big"><img src="concept-1-encounter.svg" alt=""></div>
+      <div class="sizes">
+        <div class="sz-wrap"><div class="sz sz-192"><img src="concept-1-encounter.svg"></div><div class="sz-label">192</div></div>
+        <div class="sz-wrap"><div class="sz sz-96"><img src="concept-1-encounter.svg"></div><div class="sz-label">96</div></div>
+        <div class="sz-wrap"><div class="sz sz-48"><img src="concept-1-encounter.svg"></div><div class="sz-label">48</div></div>
+      </div>
+      <div class="desc">The phone-laid-flat metaphor in a square. Cool bloom rises from the top edge, warm bloom from the bottom, the dusk gradient owns the seam. Anyone who has used Parly will recognise this immediately.</div>
+    </div>
+
+    <div class="card">
+      <div class="name">Two Suns</div>
+      <div class="tag">concept 2 · most iconic</div>
+      <div class="big"><img src="concept-2-two-suns.svg" alt=""></div>
+      <div class="sizes">
+        <div class="sz-wrap"><div class="sz sz-192"><img src="concept-2-two-suns.svg"></div><div class="sz-label">192</div></div>
+        <div class="sz-wrap"><div class="sz sz-96"><img src="concept-2-two-suns.svg"></div><div class="sz-label">96</div></div>
+        <div class="sz-wrap"><div class="sz sz-48"><img src="concept-2-two-suns.svg"></div><div class="sz-label">48</div></div>
+      </div>
+      <div class="desc">Two glowing watercolour discs overlapping in a vesica piscis. Reads as "two-ness + encounter" instantly at every size. Drops the literal phone gradient so the silhouette pops harder.</div>
+    </div>
+
+    <div class="card">
+      <div class="name">The Mark</div>
+      <div class="tag">concept 3 · most refined</div>
+      <div class="big"><img src="concept-3-the-mark.svg" alt=""></div>
+      <div class="sizes">
+        <div class="sz-wrap"><div class="sz sz-192"><img src="concept-3-the-mark.svg"></div><div class="sz-label">192</div></div>
+        <div class="sz-wrap"><div class="sz sz-96"><img src="concept-3-the-mark.svg"></div><div class="sz-label">96</div></div>
+        <div class="sz-wrap"><div class="sz sz-48"><img src="concept-3-the-mark.svg"></div><div class="sz-label">48</div></div>
+      </div>
+      <div class="desc">A single concentrated bloom — warm and cool stains co-mingled. The icon IS the moment of translation, two voices fused into one luminous round. Most minimal; carries the brand's atmosphere into a tiny mark.</div>
+    </div>
+  </div>
+
+  <div class="wallpapers">
+    <h2>Edge readability — light vs dark home screens</h2>
+    <div class="wp-row">
+      <div class="wp light">
+        <h3>light wallpaper</h3>
+        <div class="wp-icons">
+          <div class="wp-icon"><img src="concept-1-encounter.svg"></div>
+          <div class="wp-icon"><img src="concept-2-two-suns.svg"></div>
+          <div class="wp-icon"><img src="concept-3-the-mark.svg"></div>
+        </div>
+      </div>
+      <div class="wp dark">
+        <h3>dark wallpaper</h3>
+        <div class="wp-icons">
+          <div class="wp-icon"><img src="concept-1-encounter.svg"></div>
+          <div class="wp-icon"><img src="concept-2-two-suns.svg"></div>
+          <div class="wp-icon"><img src="concept-3-the-mark.svg"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

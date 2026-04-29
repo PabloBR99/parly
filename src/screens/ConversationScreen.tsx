@@ -510,12 +510,20 @@ function SpeakerHalf({
 }
 
 function SourceLine({ label, text }: { readonly label: string; readonly text: string }): React.JSX.Element {
+  // Source lines sit closest to the dusk seam — the darkest band of the
+  // backdrop — so they need a bit more contrast than other secondary
+  // chrome. Bumping label fgGhost (16 %) → fgFaint (36 %) and the text
+  // itself fgFaint (36 %) → fgMuted (62 %) keeps the design hierarchy
+  // (label dimmer than text, text dimmer than the white translation)
+  // while making both legible against the near-black centre of the
+  // gradient. On AMOLED phones the previous values were almost
+  // invisible at the seam.
   return (
     <View>
-      <Text variant="serifTiny" tone="fgGhost" style={halfStyles.sourceLabel}>
+      <Text variant="serifTiny" tone="fgFaint" style={halfStyles.sourceLabel}>
         {label.toLowerCase()}
       </Text>
-      <Text variant="serif" tone="fgFaint" numberOfLines={3}>
+      <Text variant="serif" tone="fgMuted" numberOfLines={3}>
         {text}
       </Text>
     </View>

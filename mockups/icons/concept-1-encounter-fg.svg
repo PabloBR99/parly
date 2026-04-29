@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    Concept 1 — foreground only (transparent background) for Android
+    adaptive-icon use. The dusk gradient backdrop lives in the
+    `ic_launcher_background` colour resource so the system can mask
+    around the foreground without trapping the gradient inside the
+    mask shape.
+  -->
+  <defs>
+    <radialGradient id="cool-top" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#A8B2FF" stop-opacity="0.85"/>
+      <stop offset="0.22" stop-color="#A8B2FF" stop-opacity="0.66"/>
+      <stop offset="0.50" stop-color="#A8B2FF" stop-opacity="0.42"/>
+      <stop offset="0.80" stop-color="#A8B2FF" stop-opacity="0.18"/>
+      <stop offset="1"    stop-color="#A8B2FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="cool-mid" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#7FD8C9" stop-opacity="0.78"/>
+      <stop offset="0.22" stop-color="#7FD8C9" stop-opacity="0.61"/>
+      <stop offset="0.50" stop-color="#7FD8C9" stop-opacity="0.39"/>
+      <stop offset="0.80" stop-color="#7FD8C9" stop-opacity="0.17"/>
+      <stop offset="1"    stop-color="#7FD8C9" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="cool-deep" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#9C8AE6" stop-opacity="0.70"/>
+      <stop offset="0.22" stop-color="#9C8AE6" stop-opacity="0.55"/>
+      <stop offset="0.50" stop-color="#9C8AE6" stop-opacity="0.35"/>
+      <stop offset="0.80" stop-color="#9C8AE6" stop-opacity="0.15"/>
+      <stop offset="1"    stop-color="#9C8AE6" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="warm-top" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#FFB37A" stop-opacity="0.82"/>
+      <stop offset="0.22" stop-color="#FFB37A" stop-opacity="0.64"/>
+      <stop offset="0.50" stop-color="#FFB37A" stop-opacity="0.41"/>
+      <stop offset="0.80" stop-color="#FFB37A" stop-opacity="0.18"/>
+      <stop offset="1"    stop-color="#FFB37A" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="warm-mid" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#FF8E76" stop-opacity="0.75"/>
+      <stop offset="0.22" stop-color="#FF8E76" stop-opacity="0.58"/>
+      <stop offset="0.50" stop-color="#FF8E76" stop-opacity="0.37"/>
+      <stop offset="0.80" stop-color="#FF8E76" stop-opacity="0.16"/>
+      <stop offset="1"    stop-color="#FF8E76" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="warm-deep" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#E26F5C" stop-opacity="0.68"/>
+      <stop offset="0.22" stop-color="#E26F5C" stop-opacity="0.53"/>
+      <stop offset="0.50" stop-color="#E26F5C" stop-opacity="0.34"/>
+      <stop offset="0.80" stop-color="#E26F5C" stop-opacity="0.15"/>
+      <stop offset="1"    stop-color="#E26F5C" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="bb" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="42"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#bb)">
+    <circle cx="430" cy="220" r="340" fill="url(#cool-top)"/>
+    <circle cx="600" cy="280" r="340" fill="url(#cool-mid)"/>
+    <circle cx="500" cy="340" r="340" fill="url(#cool-deep)"/>
+  </g>
+  <g filter="url(#bb)">
+    <circle cx="430" cy="804" r="340" fill="url(#warm-top)"/>
+    <circle cx="600" cy="744" r="340" fill="url(#warm-mid)"/>
+    <circle cx="500" cy="684" r="340" fill="url(#warm-deep)"/>
+  </g>
+</svg>

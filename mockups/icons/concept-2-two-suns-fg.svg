@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    Concept 2 (Two Suns) — foreground only (transparent background) for
+    Android adaptive-icon use. The dark backdrop lives in the
+    `ic_launcher_background` colour resource so the system can apply its
+    mask shape around the suns without trapping the backdrop inside the
+    mask.
+  -->
+  <defs>
+    <radialGradient id="cool" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#A8B2FF" stop-opacity="0.95"/>
+      <stop offset="0.20" stop-color="#A8B2FF" stop-opacity="0.78"/>
+      <stop offset="0.45" stop-color="#7FD8C9" stop-opacity="0.55"/>
+      <stop offset="0.75" stop-color="#9C8AE6" stop-opacity="0.22"/>
+      <stop offset="1"    stop-color="#9C8AE6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="warm" cx="50%" cy="50%" r="50%">
+      <stop offset="0"    stop-color="#FFB37A" stop-opacity="0.95"/>
+      <stop offset="0.20" stop-color="#FFB37A" stop-opacity="0.78"/>
+      <stop offset="0.45" stop-color="#FF8E76" stop-opacity="0.55"/>
+      <stop offset="0.75" stop-color="#E26F5C" stop-opacity="0.22"/>
+      <stop offset="1"    stop-color="#E26F5C" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="bb2" x="-15%" y="-15%" width="130%" height="130%">
+      <feGaussianBlur stdDeviation="34"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#bb2)">
+    <circle cx="380" cy="380" r="320" fill="url(#cool)"/>
+    <circle cx="644" cy="644" r="320" fill="url(#warm)"/>
+  </g>
+</svg>
