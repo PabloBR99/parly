@@ -2,10 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Parly — Dusk · live preview (iteration 1)</title>
+<title>Parly — Dusk · target preview (literal mockup copy)</title>
 <style>
-  /* The page chrome is just a stage; the phone itself paints its own
-     atmosphere with a real vertical gradient (DuskBackdrop). */
+  /* Literal copy of the mockup CSS in dusk-concept.html. Only the
+     content changes — first-run welcome state instead of an in-progress
+     translation. The bloom uses `filter: blur(30px)` and
+     `mix-blend-mode: screen` exactly as the original; this is the
+     visual TARGET we want RN to approximate. RN can't do blur or
+     blend-mode — the SVG bloom in code uses a long-tail alpha curve
+     and saturated peaks to compensate. */
+
   html, body {
     margin: 0; padding: 0;
     background: #050507;
@@ -21,25 +27,32 @@
     height: 800px;
     border-radius: 52px;
     overflow: hidden;
-    /* DuskBackdrop's 7-stop vertical gradient — periwinkle (top) →
-       near-black (centre) → peach-terracotta (bottom). */
-    background: linear-gradient(180deg,
-      #1B1F38   0%,
-      #131525  22%,
-      #060609  42%,
-      #030305  50%,
-      #060406  58%,
-      #1A130D  78%,
-      #341B10 100%);
+    background:
+      linear-gradient(180deg,
+        #0A0E14 0%,
+        #0B0C13 38%,
+        #0C0B12 50%,
+        #0D0B11 62%,
+        #0E0A10 100%);
     box-shadow:
       0 0 0 1.5px rgba(255,255,255,0.06),
       0 80px 140px -40px rgba(0,0,0,0.85);
   }
+  .phone::before {
+    content:''; position: absolute; inset: 0;
+    border-radius: inherit;
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.07),
+      inset 0 -1px 0 rgba(255,179,122,0.04);
+    pointer-events: none;
+    z-index: 6;
+  }
 
+  /* halves */
   .half {
     position: absolute; left: 0; right: 0;
     height: 50%;
-    padding: 36px 24px 24px 24px;
+    padding: 28px 30px;
     display: flex; flex-direction: column;
     z-index: 2;
     box-sizing: border-box;
@@ -47,16 +60,18 @@
   .half.top { top: 0; transform: rotate(180deg); }
   .half.bot { bottom: 0; }
 
-  /* Welcome placeholder — the new empty-state in the big translation slot. */
+  /* source line — kept empty in first-run */
   .source { min-height: 38px; }
+
+  /* big slot — first-run welcome text */
   .big {
     flex: 1;
-    padding: 8px 0;
-    display: flex; flex-direction: column;
+    padding: 12px 0 4px 0;
+    display: flex; flex-direction: column; align-items: flex-start;
     justify-content: flex-start;
   }
   .welcome-headline {
-    font-family: Georgia, serif;
+    font-family: Georgia, 'Times New Roman', serif;
     font-style: italic;
     font-size: 30px;
     line-height: 38px;
@@ -75,171 +90,129 @@
   }
   .welcome-flow .arrow { margin: 0 12px; letter-spacing: 1px; }
 
-  /* Identity chip — white-outline pill. */
-  .identity { display: flex; align-items: center; margin-bottom: 16px; }
-  .chip {
-    display: flex; align-items: center;
-    padding: 5px 10px;
-    border-radius: 999px;
-    border: 1px solid rgba(255,255,255,0.06);
+  /* identity */
+  .identity {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
   }
-  .chip .dot { width: 6px; height: 6px; border-radius: 50%; margin-right: 8px; }
+  .chip {
+    display: flex;
+    align-items: center;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.09);
+    background: rgba(255,255,255,0.015);
+  }
+  .chip .dot { width: 6px; height: 6px; border-radius: 50%; margin-right: 9px; }
   .chip .endonym {
-    font-size: 11px; letter-spacing: 0.8px;
+    font-size: 10.5px; letter-spacing: 1.5px;
     color: rgba(255,255,255,0.62);
     text-transform: uppercase;
-    font-weight: 500;
   }
   .chip .code {
-    margin-left: 8px;
+    margin-left: 10px;
     font-family: Georgia, serif; font-style: italic;
-    font-size: 11px;
-    color: rgba(255,255,255,0.36);
-  }
-  .chip .chev {
-    margin-left: 8px;
-    font-family: Georgia, serif; font-style: italic;
-    font-size: 11px;
-    color: rgba(255,255,255,0.16);
+    font-size: 13px;
+    color: rgba(255,255,255,0.42);
   }
 
-  /* PTT slot. */
+  /* PTT slot */
   .ptt-slot {
     position: relative;
     height: 200px;
-    display: grid; place-items: center;
-    margin: -20px 0;
+    display: grid;
+    place-items: center;
+    margin: -8px 0;
   }
 
-  /* Bloom — three offset stains, each a CSS radial-gradient with the same
-     5-stop alpha curve RN's Bloom.tsx uses (0/.22/.50/.80/1 with factors
-     1/.78/.50/.22/0). NO filter:blur — RN can't do that, so the preview
-     shouldn't either; the long alpha tail on the gradient itself is the
-     blur substitute. Container is 340 px (BLOOM_SIZE in RN). */
+  /* bloom — exact mockup CSS */
   .bloom {
     position: absolute;
-    width: 460px; height: 460px;
-    pointer-events: none;
-    /* RN's <Svg><RadialGradient> renders smoother than CSS multi-stop
-       radial-gradients on raster — a modest blur here approximates that
-       smoothing so the preview tracks what the build actually shows. */
-    filter: blur(10px);
-  }
-  .bloom .stain {
-    position: absolute;
-    width: 460px; height: 460px;
+    width: 320px; height: 320px;
     border-radius: 50%;
-    opacity: 0.96;
+    filter: blur(30px);
+    mix-blend-mode: screen;
+    pointer-events: none;
+    opacity: 0.85;
   }
-  /* Warm — peaks 0.55 / 0.50 / 0.45 (Bloom.tsx ALPHAS.warm). Stain
-     offsets match the RN constants (TOP_OFFSET / MID / DEEP). */
-  /* Warm — peaks 0.68 / 0.62 / 0.55. */
-  .warm .top {
-    transform: translate(-64px, -78px);
-    background: radial-gradient(circle at 50% 50%,
-      rgba(255,179,122,0.68) 0%,
-      rgba(255,179,122,0.530) 22%,
-      rgba(255,179,122,0.34)  50%,
-      rgba(255,179,122,0.150) 80%,
-      transparent 100%);
+  .bloom.warm {
+    background:
+      radial-gradient(circle at 32% 38%, #FFB37A 0%, transparent 42%),
+      radial-gradient(circle at 68% 62%, #FF8E76 0%, transparent 48%),
+      radial-gradient(circle at 50% 80%, #E26F5C 0%, transparent 52%);
   }
-  .warm .mid {
-    transform: translate(72px, 48px);
-    background: radial-gradient(circle at 50% 50%,
-      rgba(255,142,118,0.62) 0%,
-      rgba(255,142,118,0.484) 22%,
-      rgba(255,142,118,0.31)  50%,
-      rgba(255,142,118,0.136) 80%,
-      transparent 100%);
-  }
-  .warm .deep {
-    transform: translate(-10px, 88px);
-    background: radial-gradient(circle at 50% 50%,
-      rgba(226,111,92,0.55) 0%,
-      rgba(226,111,92,0.429) 22%,
-      rgba(226,111,92,0.275) 50%,
-      rgba(226,111,92,0.121) 80%,
-      transparent 100%);
-  }
-  /* Cool — peaks 0.72 / 0.66 / 0.58 (cool retreats; needs extra alpha
-     to read at the same luminosity as warm on a near-black surface). */
-  .cool .top {
-    transform: translate(-64px, -78px);
-    background: radial-gradient(circle at 50% 50%,
-      rgba(168,178,255,0.72) 0%,
-      rgba(168,178,255,0.562) 22%,
-      rgba(168,178,255,0.36)  50%,
-      rgba(168,178,255,0.158) 80%,
-      transparent 100%);
-  }
-  .cool .mid {
-    transform: translate(72px, 48px);
-    background: radial-gradient(circle at 50% 50%,
-      rgba(127,216,201,0.66) 0%,
-      rgba(127,216,201,0.515) 22%,
-      rgba(127,216,201,0.33)  50%,
-      rgba(127,216,201,0.145) 80%,
-      transparent 100%);
-  }
-  .cool .deep {
-    transform: translate(-10px, 88px);
-    background: radial-gradient(circle at 50% 50%,
-      rgba(156,138,230,0.58) 0%,
-      rgba(156,138,230,0.452) 22%,
-      rgba(156,138,230,0.29)  50%,
-      rgba(156,138,230,0.128) 80%,
-      transparent 100%);
+  .bloom.cool {
+    background:
+      radial-gradient(circle at 62% 32%, #A8B2FF 0%, transparent 42%),
+      radial-gradient(circle at 32% 68%, #7FD8C9 0%, transparent 48%),
+      radial-gradient(circle at 72% 78%, #9C8AE6 0%, transparent 52%);
   }
 
-  /* Shadow halo — the SVG radial-gradient version we now render. Stops
-     identical to PTTButton.tsx (0.55 / 0.42 / 0.18 / 0). 144 × 144 px,
-     translateY(8). */
-  .halo {
-    position: absolute;
-    width: 144px; height: 144px;
-    border-radius: 50%;
-    transform: translateY(8px);
-    background: radial-gradient(circle at 50% 50%,
-      rgba(0,0,0,0)     0%,
-      rgba(0,0,0,0)    55%,
-      rgba(0,0,0,0.05) 66%,
-      rgba(0,0,0,0.30) 72%,
-      rgba(0,0,0,0.14) 85%,
-      rgba(0,0,0,0)   100%);
-    pointer-events: none;
-  }
-
-  /* The disc — transparent body, white hairline border, mockup spec. */
+  /* the disc — exact mockup CSS */
   .disc {
     position: relative;
     width: 96px; height: 96px;
     border-radius: 50%;
-    background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.01));
+    background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
     border: 1px solid rgba(255,255,255,0.10);
-    display: grid; place-items: center;
+    display: grid;
+    place-items: center;
+    box-shadow:
+      inset 0 1px 1px rgba(255,255,255,0.07),
+      0 8px 24px rgba(0,0,0,0.55);
   }
   .disc::after {
     content:''; position: absolute; inset: 6px;
     border-radius: 50%;
-    background: radial-gradient(circle at 35% 30%, rgba(255,255,255,0.14), transparent 60%);
+    background: radial-gradient(circle at 35% 30%, rgba(255,255,255,0.06), transparent 60%);
     pointer-events: none;
   }
   .disc .tick {
-    width: 14px; height: 1.5px;
-    border-radius: 1px;
+    position: absolute; top: 32px;
+    width: 14px; height: 1.5px; border-radius: 1px;
     background: rgba(255,255,255,0.40);
   }
+  .disc .lang {
+    font-family: Georgia, serif; font-style: italic;
+    font-size: 14px;
+    color: rgba(255,255,255,0.62);
+    letter-spacing: 1.2px;
+    margin-top: 14px;
+  }
 
-  /* Edge chrome — "online" / "settings". */
+  /* edge chrome */
   .edge {
     display: flex; align-items: center; justify-content: center;
     gap: 10px;
-    color: rgba(255,255,255,0.36);
+    color: rgba(255,255,255,0.35);
     font-family: Georgia, serif; font-style: italic;
-    font-size: 13px;
-    padding-top: 8px;
+    font-size: 11px; letter-spacing: 1.5px;
+    padding-top: 12px;
   }
-  .edge .net { width: 6px; height: 6px; border-radius: 50%; background: #7FD8C9; }
+  .edge .net {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #7FD8C9;
+    box-shadow: 0 0 10px rgba(127,216,201,0.7);
+  }
+
+  /* gentle inner vignette — keeps focus on the seam */
+  .vignette {
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.55) 100%);
+    pointer-events: none;
+    mix-blend-mode: multiply;
+    z-index: 4;
+  }
+
+  .versiontag {
+    position: absolute; left: 0; right: 0; bottom: 18px;
+    text-align: center;
+    font-family: Georgia, serif; font-style: italic;
+    font-size: 10.5px; letter-spacing: 1.8px;
+    color: rgba(255,255,255,0.20);
+    z-index: 5;
+  }
 </style>
 </head>
 <body>
@@ -261,19 +234,19 @@
           <span class="dot" style="background:#A8B2FF;"></span>
           <span class="endonym">Español</span>
           <span class="code">es</span>
-          <span class="chev">▾</span>
         </div>
       </div>
       <div class="ptt-slot">
-        <div class="bloom cool">
-          <div class="stain top"></div>
-          <div class="stain mid"></div>
-          <div class="stain deep"></div>
+        <div class="bloom cool"></div>
+        <div class="disc">
+          <span class="tick"></span>
+          <span class="lang">es</span>
         </div>
-        <div class="halo"></div>
-        <div class="disc"><span class="tick"></span></div>
       </div>
-      <div class="edge"><span class="net"></span><span>online</span></div>
+      <div class="edge">
+        <span class="net"></span>
+        <span>online</span>
+      </div>
     </div>
 
     <!-- BOTTOM HALF — user (warm, upright) -->
@@ -292,21 +265,20 @@
           <span class="dot" style="background:#FF8E76;"></span>
           <span class="endonym">English</span>
           <span class="code">en</span>
-          <span class="chev">▾</span>
         </div>
       </div>
       <div class="ptt-slot">
-        <div class="bloom warm">
-          <div class="stain top"></div>
-          <div class="stain mid"></div>
-          <div class="stain deep"></div>
+        <div class="bloom warm"></div>
+        <div class="disc">
+          <span class="tick"></span>
+          <span class="lang">en</span>
         </div>
-        <div class="halo"></div>
-        <div class="disc"><span class="tick"></span></div>
       </div>
       <div class="edge"><span>settings</span></div>
     </div>
 
+    <div class="vignette"></div>
+    <div class="versiontag">PARLY — <em>DUSK</em></div>
   </div>
 </body>
 </html>

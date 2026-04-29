@@ -7,7 +7,7 @@
 // halo, and wires press handling.
 
 import React, { useEffect } from 'react';
-import { Pressable, StyleSheet, View, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import Animated, {
   cancelAnimation,
   Easing,
@@ -18,8 +18,8 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import LinearGradient from 'react-native-linear-gradient';
-import Svg, { Defs, RadialGradient, Stop, Circle } from 'react-native-svg';
-import { color, motion, radius } from '../theme';
+import Svg, { Circle, Defs, Mask, RadialGradient, Rect, Stop } from 'react-native-svg';
+import { color, font, motion, radius } from '../theme';
 import { Waveform } from '../animations/Waveform';
 import { Bloom } from '../animations/Bloom';
 import { haptics } from '../haptics';
@@ -52,22 +52,32 @@ const SIZE = 96;
 const BLOOM_SIZE = 460;
 const FOOTPRINT = 200;
 
-// Inner halo — a soft off-centre highlight inside the disc, equivalent to
-// the mockup's `radial-gradient(circle at 35% 30%, white-6%, transparent
-// 60%)`. Gives the disc the weight of a polished button rather than a
-// drawn circle. Inset 6px on each side, so the highlight sits just inside
-// the disc's hairline border.
+// Inner halo — match the mockup's `radial-gradient(circle at 35% 30%,
+// rgba(255,255,255,0.06), transparent 60%)`. Earlier passes used 14 % at
+// peak which lit the disc up far brighter than the mockup intended;
+// dropping to 6 % restores the "soft polished glass" feel rather than a
+// glow. Inset 6 px on each side so the highlight sits just inside the
+// hairline border.
 const HALO_INSET = 6;
 const HALO_SIZE = SIZE - HALO_INSET * 2;
 const HALO_RADIUS = HALO_SIZE / 2;
 const HALO_CX = 0.35;
 const HALO_CY = 0.30;
 
-// Drop-shadow halo — SVG circle behind the disc that simulates the CSS
-// `box-shadow: 0 8px 24px rgba(0,0,0,0.55)`. SIZE × 1.5 leaves room for
-// the 24 px blur tail past the disc edge with margin to spare.
-const SHADOW_SIZE = Math.round(SIZE * 1.5);
+// Drop shadow — replicates `box-shadow: 0 8px 24px rgba(0,0,0,0.55)` from
+// the mockup. We render an SVG <Circle> filled with a radial gradient,
+// centred 8 px below the disc, then mask out the disc area itself so the
+// shadow only paints OUTSIDE the disc (densest at the bottom edge, softer
+// up the sides, almost invisible at the top — same falloff CSS produces).
+// The previous "ring" attempts couldn't manage this because a single
+// radial gradient centred on the disc can't be both opaque outside and
+// transparent inside; the mask makes it possible.
+const SHADOW_CANVAS = 192;
+const SHADOW_DISC_CX = SHADOW_CANVAS / 2;
+const SHADOW_DISC_CY = SHADOW_CANVAS / 2;
 const SHADOW_OFFSET_Y = 8;
+const SHADOW_CIRCLE_CY = SHADOW_DISC_CY + SHADOW_OFFSET_Y;
+const SHADOW_REACH = SIZE / 2 + 32;
 
 export function PTTButton({
   label,
@@ -119,16 +129,14 @@ export function PTTButton({
     transform: [{ scale: 1 + 0.05 * press.value }],
   }));
 
-  // Shadow halo follows the press scale AND keeps its constant 8 px
-  // downward offset. Combined into one animated style because RN does
-  // not merge `transform` across style arrays — the last one wins, so
-  // a static translateY in the StyleSheet would be clobbered by
-  // diskStyle's scale.
+  // Shadow halo follows the press scale only — the 8 px downward offset
+  // is now baked into the SVG geometry (the shadow circle is drawn 8 px
+  // below the masked disc within the canvas), so we don't need to
+  // translate the canvas itself. Animated style stays separate from
+  // `diskStyle` because RN does not merge `transform` across style
+  // arrays: applying both to the same Animated.View would clobber one.
   const shadowStyle = useAnimatedStyle(() => ({
-    transform: [
-      { translateY: SHADOW_OFFSET_Y },
-      { scale: 1 + 0.05 * press.value },
-    ],
+    transform: [{ scale: 1 + 0.05 * press.value }],
   }));
 
   // Outer breathing ring on active.
@@ -193,46 +201,45 @@ export function PTTButton({
           />
         )}
 
-        {/* Drop shadow — the disc rests on the surface like a polished
-            puck. PLAN.md (§ Dusk) specifies `0 8px 24px rgba(0,0,0,0.55)`.
-            We render the shadow as an SVG radial gradient (a soft dark
-            halo around the disc) instead of using `elevation`. Reason:
-            Android elevation needs an opaque backgroundColor to cast a
-            shadow, and an opaque underlay would block the warm bloom
-            from passing through the disc — turning it black instead of
-            keeping the bloom-tinted peach look the mockup wants. The
-            SVG halo sits behind the disc, offset 8 px down to mimic
-            the CSS `0 8px` offset, and scales with the press transform. */}
+        {/* Drop shadow — SVG circle centred 8 px below the disc, masked
+            to exclude the disc area so the cloud only paints outside the
+            disc shape. Densest at the bottom edge, fading up the sides,
+            almost invisible at the top — the same falloff a CSS
+            `0 8px 24px rgba(0,0,0,0.55)` produces. */}
         <Animated.View
           pointerEvents="none"
           style={[styles.shadowLayer, shadowStyle, disabled && styles.disabled]}>
-          <Svg width={SHADOW_SIZE} height={SHADOW_SIZE}>
+          <Svg width={SHADOW_CANVAS} height={SHADOW_CANVAS}>
             <Defs>
               <RadialGradient
-                id="ptt-shadow"
-                cx="50%" cy="50%"
-                r="50%"
-                fx="50%" fy="50%">
-                {/* Disc-radius / shadow-radius = SIZE/2 / SHADOW_SIZE/2 ≈
-                    0.667. We keep the halo fully transparent INSIDE that
-                    boundary so the bloom passes cleanly through the disc
-                    and the disc never darkens itself. Past the edge the
-                    halo ramps quickly to its peak then tails to 0 by
-                    offset 1.0 — a soft dark ring that hugs the disc
-                    rather than a wash beneath it. */}
-                <Stop offset="0"     stopColor="#000" stopOpacity="0" />
-                <Stop offset="0.55"  stopColor="#000" stopOpacity="0" />
-                <Stop offset="0.66"  stopColor="#000" stopOpacity="0.05" />
-                <Stop offset="0.72"  stopColor="#000" stopOpacity="0.30" />
-                <Stop offset="0.85"  stopColor="#000" stopOpacity="0.14" />
-                <Stop offset="1"     stopColor="#000" stopOpacity="0" />
+                id="ptt-shadow-fall"
+                cx={SHADOW_DISC_CX}
+                cy={SHADOW_CIRCLE_CY}
+                r={SHADOW_REACH}
+                fx={SHADOW_DISC_CX}
+                fy={SHADOW_CIRCLE_CY}
+                gradientUnits="userSpaceOnUse">
+                <Stop offset="0"   stopColor="#000" stopOpacity="0.55" />
+                <Stop offset="0.5" stopColor="#000" stopOpacity="0.32" />
+                <Stop offset="0.8" stopColor="#000" stopOpacity="0.10" />
+                <Stop offset="1"   stopColor="#000" stopOpacity="0" />
               </RadialGradient>
+              <Mask id="ptt-shadow-mask">
+                <Rect width={SHADOW_CANVAS} height={SHADOW_CANVAS} fill="white" />
+                <Circle
+                  cx={SHADOW_DISC_CX}
+                  cy={SHADOW_DISC_CY}
+                  r={SIZE / 2}
+                  fill="black"
+                />
+              </Mask>
             </Defs>
             <Circle
-              cx={SHADOW_SIZE / 2}
-              cy={SHADOW_SIZE / 2}
-              r={SHADOW_SIZE / 2}
-              fill="url(#ptt-shadow)"
+              cx={SHADOW_DISC_CX}
+              cy={SHADOW_CIRCLE_CY}
+              r={SHADOW_REACH}
+              fill="url(#ptt-shadow-fall)"
+              mask="url(#ptt-shadow-mask)"
             />
           </Svg>
         </Animated.View>
@@ -242,17 +249,17 @@ export function PTTButton({
             gradient gives the disc weight; without it the disc reads as
             a flat hairline circle. */}
         <Animated.View style={[disk, diskStyle, disabled && styles.disabled]}>
-          {/* Body gradient — top edge slightly brighter than bottom so
-              the disc looks lit from above, like a real polished surface. */}
+          {/* Body gradient — mockup spec is 4 % → 1 % white. Earlier
+              passes used 6 % which lit the disc up too much. */}
           <LinearGradient
             pointerEvents="none"
-            colors={['rgba(255,255,255,0.06)', 'rgba(255,255,255,0.01)']}
+            colors={['rgba(255,255,255,0.04)', 'rgba(255,255,255,0.01)']}
             start={{ x: 0.5, y: 0 }}
             end={{ x: 0.5, y: 1 }}
             style={StyleSheet.absoluteFill}
           />
-          {/* Inner halo — SVG radial highlight at (35%, 30%), brighter than
-              before so it reads as gloss without breaking the dark vibe. */}
+          {/* Inner halo — mockup spec `radial-gradient(circle at 35% 30%,
+              rgba(255,255,255,0.06), transparent 60%)`. */}
           <View style={styles.haloLayer} pointerEvents="none">
             <Svg width={HALO_SIZE} height={HALO_SIZE}>
               <Defs>
@@ -264,9 +271,8 @@ export function PTTButton({
                   ry="65%"
                   fx={`${HALO_CX * 100}%`}
                   fy={`${HALO_CY * 100}%`}>
-                  <Stop offset="0"    stopColor="#FFFFFF" stopOpacity="0.14" />
-                  <Stop offset="0.35" stopColor="#FFFFFF" stopOpacity="0.04" />
-                  <Stop offset="1"    stopColor="#FFFFFF" stopOpacity="0" />
+                  <Stop offset="0"    stopColor="#FFFFFF" stopOpacity="0.06" />
+                  <Stop offset="0.6"  stopColor="#FFFFFF" stopOpacity="0" />
                 </RadialGradient>
               </Defs>
               <Circle
@@ -278,15 +284,18 @@ export function PTTButton({
             </Svg>
           </View>
 
-          {/* Idle: a small horizontal mic-affordance tick (14 × 1.5 pt at
-              40 % white) — mockup spec, gives the polished disc a quiet
-              hint of "this is where the microphone lives". On press the
-              tick is replaced by the waveform animation that responds to
-              audio level. */}
+          {/* Idle content — tick (14 × 1.5 pt mic-affordance at 40 % white)
+              positioned 32 px from the disc top, then the language code
+              in serif italic 14 pt at 62 % white, 14 px below the tick.
+              Mockup spec exactly. While recording the Waveform animation
+              replaces both. */}
           {active ? (
             <Waveform active color={accent} bars={5} height={30} />
           ) : (
-            <View style={styles.tick} pointerEvents="none" />
+            <View style={styles.discIdleContent} pointerEvents="none">
+              <View style={styles.tick} />
+              <Text style={styles.lang}>{label}</Text>
+            </View>
           )}
         </Animated.View>
       </View>
@@ -313,14 +322,14 @@ const styles = StyleSheet.create({
   },
   shadowLayer: {
     position: 'absolute',
-    width: SHADOW_SIZE,
-    height: SHADOW_SIZE,
+    width: SHADOW_CANVAS,
+    height: SHADOW_CANVAS,
     alignItems: 'center',
     justifyContent: 'center',
-    // The 8 px downward offset that gives the disc its `0 8px 24px ...`
-    // drop direction is applied via `shadowStyle` (animated), not here —
-    // see PTTButton's `useAnimatedStyle` block. Putting a static
-    // translateY here would conflict with the press-scale transform.
+    // Both the disc's downward shadow offset AND the press-scale
+    // transform are applied via `shadowStyle` (animated). RN doesn't
+    // merge `transform` across style arrays, so a static translateY
+    // here would clobber the scale.
   },
   haloLayer: {
     position: 'absolute',
@@ -329,11 +338,26 @@ const styles = StyleSheet.create({
     width: HALO_SIZE,
     height: HALO_SIZE,
   },
+  discIdleContent: {
+    position: 'absolute',
+    top: 32,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
   tick: {
     width: 14,
     height: 1.5,
     borderRadius: 1,
     backgroundColor: 'rgba(255,255,255,0.40)',
+  },
+  lang: {
+    marginTop: 14,
+    fontFamily: font.serifFamily,
+    fontStyle: 'italic',
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.62)',
+    letterSpacing: 1.2,
   },
   disabled: {
     opacity: 0.32,
