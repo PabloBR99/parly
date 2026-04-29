@@ -409,14 +409,35 @@ function SpeakerHalf({
       {/* 1. Source line — closest to the center divider. */}
       <View style={halfStyles.sourceSlot}>{sourceNode}</View>
 
-      {/* 2. Big translated text — the hero when there's content; left empty
-              in idle so the bloom + chip + disc carry visual identity. The
-              previous big-endonym placeholder was visual noise on idle. */}
+      {/* 2. Big translated text — the hero when there's content. On the very
+              first run (no turns from either side yet) we paint a quiet
+              welcome here: serif italic gesture line plus the concrete
+              language flow in endonyms, so the speaker can read at a glance
+              what the disc does and which way the words travel. The block
+              disappears the moment the first turn lands. */}
       <View style={halfStyles.big}>
         {hasIncomingText && (
           <Animated.Text style={[halfStyles.bigText, bigStyle]}>
             {incomingText}
           </Animated.Text>
+        )}
+        {!hasIncomingText && firstRun && !activeTurn && (
+          <View style={halfStyles.welcome}>
+            <Text variant="serifHero" tone="fgFaint" style={halfStyles.welcomeHeadline}>
+              Press and hold to speak.
+            </Text>
+            <View style={halfStyles.welcomeFlow}>
+              <Text variant="serifTiny" tone="fgGhost">
+                {speakerLang.endonym.toUpperCase()}
+              </Text>
+              <Text variant="serifTiny" tone="fgGhost" style={halfStyles.welcomeFlowArrow}>
+                →
+              </Text>
+              <Text variant="serifTiny" tone="fgGhost">
+                {partnerLang.endonym.toUpperCase()}
+              </Text>
+            </View>
+          </View>
         )}
         {incomingTurn?.stage === 'error' && (
           <Text variant="bodySmall" tone="error" style={halfStyles.errorText}>
@@ -469,15 +490,6 @@ function SpeakerHalf({
           onPressOut={onPressOut}
         />
       </View>
-
-      {/* First-run discoverability hint — disappears for good after the
-          first turn from either side completes. Quiet enough that it
-          doesn't shout, present enough to teach the gesture. */}
-      {firstRun && !activeTurn && (
-        <Text variant="serifSmall" tone="fgGhost" style={halfStyles.firstRunHint}>
-          press and hold to speak
-        </Text>
-      )}
 
       {/* 5. Edge chrome — at the speaker's near-edge of the phone. */}
       <View style={[halfStyles.edgeRow, { paddingBottom: edgePadding }]}>
@@ -638,9 +650,24 @@ const halfStyles = StyleSheet.create({
   microcopy: {
     marginRight: 10,
   },
-  firstRunHint: {
-    textAlign: 'center',
-    paddingTop: space.sm,
+
+  // First-run welcome — fills the empty translation slot with a quiet
+  // painted-light placeholder. Serif italic on top reads as the app's voice
+  // (not a translation), then a tracked-uppercase endonym flow underneath
+  // teaches the language direction without a banner or modal.
+  welcome: {
+    paddingTop: space.xs,
+  },
+  welcomeHeadline: {
+    marginBottom: space.md,
+  },
+  welcomeFlow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  welcomeFlowArrow: {
+    marginHorizontal: space.sm,
+    letterSpacing: 1,
   },
 
   // 4. PTT button slot.
