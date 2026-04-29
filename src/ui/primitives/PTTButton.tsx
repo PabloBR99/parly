@@ -173,6 +173,18 @@ export function PTTButton({
           />
         )}
 
+        {/* Drop shadow — the disc rests on the surface like a polished
+            puck. PLAN.md (§ Dusk) specifies `0 8px 24px rgba(0,0,0,0.55)`.
+            We render a separate opaque underlay so Android `elevation`
+            has a solid outline to cast the shadow from; the actual disc
+            above keeps its semi-transparent accent tint and bloom
+            interaction. Scales with the press transform so the shadow
+            stays glued to the disc as it depresses. */}
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.shadowUnderlay, diskStyle, disabled && styles.disabled]}
+        />
+
         {/* The disc itself — polished button with a body gradient
             (lit-from-above) and an off-centre inner halo. The body
             gradient gives the disc weight; without it the disc reads as
@@ -240,6 +252,23 @@ const styles = StyleSheet.create({
   ring: {
     position: 'absolute',
     borderWidth: 1.5,
+  },
+  shadowUnderlay: {
+    position: 'absolute',
+    width: SIZE,
+    height: SIZE,
+    borderRadius: SIZE / 2,
+    // Solid black backing — mockup spec `0 8px 24px rgba(0,0,0,0.55)`.
+    // Android elevation requires a non-transparent backgroundColor for
+    // the outline provider to cast a shadow; the disc above re-tints
+    // with the accent so this near-black underlay is invisible behind
+    // it but still throws the drop shadow.
+    backgroundColor: '#000',
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.55,
+    shadowRadius: 24,
   },
   haloLayer: {
     position: 'absolute',

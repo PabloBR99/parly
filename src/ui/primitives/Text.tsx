@@ -49,11 +49,27 @@ export function Text({
   ...rest
 }: TextProps): React.JSX.Element {
   const variantStyle = font[variant];
+  // Android RN under-measures Text whose font has positive `letterSpacing`:
+  // the trailing letter's spacing is added to the layout box but not to the
+  // glyph clip, so the last character is cut off (`english` → `englis`,
+  // `listening` → `listenin`). Compensate with a tiny paddingEnd that
+  // matches the variant's letterSpacing so the clip rect always has room
+  // for the final glyph.
+  const trailingPad = variantTrailingPad(variantStyle);
   return (
     <RNText
       {...rest}
-      style={[variantStyle, { color: toneToColor[tone] }, style]}>
+      style={[variantStyle, trailingPad, { color: toneToColor[tone] }, style]}>
       {children}
     </RNText>
   );
+}
+
+function variantTrailingPad(
+  variantStyle: Record<string, unknown>,
+): { readonly paddingEnd: number } | undefined {
+  const ls = variantStyle.letterSpacing;
+  if (typeof ls !== 'number' || ls <= 0) return undefined;
+  // Round up to whole pixel; sub-pixel paddings are flaky on Android.
+  return { paddingEnd: Math.ceil(ls) };
 }

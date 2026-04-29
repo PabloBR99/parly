@@ -81,7 +81,10 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
         const screenHeight = Dimensions.get('window').height;
         const inputBottom = py + h;
         const visibleBottom = screenHeight - kbHeight;
-        const breathing = 48; // input sits this far above the keyboard
+        // Generous gap so the input lifts well clear of the keyboard —
+        // makes the long-press → Paste menu fall in the open space above
+        // it instead of being chopped at the keyboard edge.
+        const breathing = 120;
         if (inputBottom > visibleBottom - breathing) {
           const delta = inputBottom - (visibleBottom - breathing);
           scrollRef.current?.scrollTo({
