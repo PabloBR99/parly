@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Parly — Dusk · after 97d17ee (preview)</title>
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    background: #07070A;
+    min-height: 100%;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+  body {
+    display: grid;
+    place-items: center;
+    padding: 40px;
+    box-sizing: border-box;
+  }
+
+  /* phone */
+  .phone {
+    position: relative;
+    width: 380px;
+    height: 800px;
+    border-radius: 52px;
+    overflow: hidden;
+    background:
+      linear-gradient(180deg,
+        #0A0E14 0%,
+        #0B0C13 38%,
+        #0C0B12 50%,
+        #0D0B11 62%,
+        #0E0A10 100%);
+    box-shadow:
+      0 0 0 1.5px rgba(255,255,255,0.06),
+      0 80px 140px -40px rgba(0,0,0,0.85);
+  }
+
+  /* halves */
+  .half {
+    position: absolute; left: 0; right: 0;
+    height: 50%;
+    padding: 28px 24px;
+    display: flex; flex-direction: column;
+    z-index: 2;
+    box-sizing: border-box;
+  }
+  .half.top { top: 0; transform: rotate(180deg); }
+  .half.bot { bottom: 0; }
+
+  /* welcome placeholder (replaces big translation slot in first-run) */
+  .source { min-height: 38px; }
+  .big {
+    flex: 1;
+    padding: 8px 0;
+    display: flex; flex-direction: column;
+    justify-content: flex-start;
+  }
+  .welcome-headline {
+    font-family: Georgia, serif;
+    font-style: italic;
+    font-size: 30px;
+    line-height: 38px;
+    font-weight: 400;
+    letter-spacing: -0.4px;
+    color: rgba(255,255,255,0.36);
+    margin: 0 0 16px 0;
+  }
+  .welcome-flow {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+  }
+  .welcome-flow span {
+    font-family: Georgia, serif;
+    font-style: italic;
+    font-size: 10px;
+    letter-spacing: 1.4px;
+    color: rgba(255,255,255,0.16);
+  }
+  .welcome-flow .arrow { margin: 0 12px; letter-spacing: 1px; }
+
+  /* identity chip */
+  .identity {
+    display: flex;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+  .chip {
+    display: flex;
+    align-items: center;
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  .chip .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    margin-right: 8px;
+  }
+  .chip .endonym {
+    font-size: 11px; letter-spacing: 0.8px;
+    color: rgba(255,255,255,0.62);
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+  .chip .code {
+    margin-left: 8px;
+    font-family: Georgia, serif; font-style: italic;
+    font-size: 11px;
+    color: rgba(255,255,255,0.36);
+  }
+  .chip .chev {
+    margin-left: 8px;
+    font-family: Georgia, serif; font-style: italic;
+    font-size: 11px;
+    color: rgba(255,255,255,0.16);
+  }
+
+  /* PTT slot */
+  .ptt-slot {
+    position: relative;
+    height: 200px;
+    display: grid;
+    place-items: center;
+    margin: -20px 0;
+  }
+
+  /* bloom — narrowed to ~340px (match BLOOM_SIZE 340) */
+  .bloom {
+    position: absolute;
+    width: 340px; height: 340px;
+    border-radius: 50%;
+    filter: blur(34px);
+    pointer-events: none;
+    opacity: 0.92;
+  }
+  .bloom.warm {
+    background:
+      radial-gradient(circle at 32% 38%, #FFB37A 0%, transparent 42%),
+      radial-gradient(circle at 68% 62%, #FF8E76 0%, transparent 48%),
+      radial-gradient(circle at 50% 80%, #E26F5C 0%, transparent 52%);
+  }
+  .bloom.cool {
+    background:
+      radial-gradient(circle at 62% 32%, #A8B2FF 0%, transparent 42%),
+      radial-gradient(circle at 32% 68%, #7FD8C9 0%, transparent 48%),
+      radial-gradient(circle at 72% 78%, #9C8AE6 0%, transparent 52%);
+  }
+
+  /* shadow halo (the SVG radial-gradient one we now render) */
+  .halo {
+    position: absolute;
+    width: 144px; height: 144px;
+    border-radius: 50%;
+    transform: translateY(8px);
+    background: radial-gradient(circle at 50% 50%,
+      rgba(0,0,0,0.55) 0%,
+      rgba(0,0,0,0.42) 55%,
+      rgba(0,0,0,0.18) 78%,
+      rgba(0,0,0,0)    100%);
+    pointer-events: none;
+  }
+
+  /* the disc — transparent body, white hairline border, mockup look */
+  .disc {
+    position: relative;
+    width: 96px; height: 96px;
+    border-radius: 50%;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.01));
+    border: 1px solid rgba(255,255,255,0.10);
+    display: grid;
+    place-items: center;
+  }
+  .disc::after {
+    content:''; position: absolute; inset: 6px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, rgba(255,255,255,0.14), transparent 60%);
+    pointer-events: none;
+  }
+  .disc .tick {
+    width: 14px; height: 1.5px;
+    border-radius: 1px;
+    background: rgba(255,255,255,0.40);
+  }
+
+  /* edge chrome */
+  .edge {
+    display: flex; align-items: center; justify-content: center;
+    gap: 10px;
+    color: rgba(255,255,255,0.36);
+    font-family: Georgia, serif; font-style: italic;
+    font-size: 13px;
+    padding-top: 12px;
+  }
+  .edge .net {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #7FD8C9;
+  }
+
+  .vignette {
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.55) 100%);
+    pointer-events: none;
+    mix-blend-mode: multiply;
+    z-index: 4;
+  }
+
+  .versiontag {
+    position: absolute; left: 0; right: 0; bottom: 18px;
+    text-align: center;
+    font-family: Georgia, serif; font-style: italic;
+    font-size: 10.5px; letter-spacing: 1.8px;
+    color: rgba(255,255,255,0.20);
+    z-index: 5;
+  }
+</style>
+</head>
+<body>
+  <div class="phone">
+
+    <!-- TOP HALF — partner (cool, rotated) -->
+    <div class="half top">
+      <div class="source"></div>
+      <div class="big">
+        <p class="welcome-headline">Press and hold to speak.</p>
+        <div class="welcome-flow">
+          <span>ESPAÑOL</span>
+          <span class="arrow">→</span>
+          <span>ENGLISH</span>
+        </div>
+      </div>
+      <div class="identity">
+        <div class="chip">
+          <span class="dot" style="background:#A8B2FF;"></span>
+          <span class="endonym">Español</span>
+          <span class="code">es</span>
+          <span class="chev">▾</span>
+        </div>
+      </div>
+      <div class="ptt-slot">
+        <div class="bloom cool"></div>
+        <div class="halo"></div>
+        <div class="disc"><span class="tick"></span></div>
+      </div>
+      <div class="edge">
+        <span class="net"></span>
+        <span>online</span>
+      </div>
+    </div>
+
+    <!-- BOTTOM HALF — user (warm, upright) -->
+    <div class="half bot">
+      <div class="source"></div>
+      <div class="big">
+        <p class="welcome-headline">Press and hold to speak.</p>
+        <div class="welcome-flow">
+          <span>ENGLISH</span>
+          <span class="arrow">→</span>
+          <span>ESPAÑOL</span>
+        </div>
+      </div>
+      <div class="identity">
+        <div class="chip">
+          <span class="dot" style="background:#FF8E76;"></span>
+          <span class="endonym">English</span>
+          <span class="code">en</span>
+          <span class="chev">▾</span>
+        </div>
+      </div>
+      <div class="ptt-slot">
+        <div class="bloom warm"></div>
+        <div class="halo"></div>
+        <div class="disc"><span class="tick"></span></div>
+      </div>
+      <div class="edge"><span>settings</span></div>
+    </div>
+
+    <div class="vignette"></div>
+    <div class="versiontag">PARLY — DUSK</div>
+  </div>
+</body>
+</html>
