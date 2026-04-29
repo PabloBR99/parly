@@ -64,6 +64,12 @@ const HALO_RADIUS = HALO_SIZE / 2;
 const HALO_CX = 0.35;
 const HALO_CY = 0.30;
 
+// Drop-shadow halo — SVG circle behind the disc that simulates the CSS
+// `box-shadow: 0 8px 24px rgba(0,0,0,0.55)`. SIZE × 1.5 leaves room for
+// the 24 px blur tail past the disc edge with margin to spare.
+const SHADOW_SIZE = Math.round(SIZE * 1.5);
+const SHADOW_OFFSET_Y = 8;
+
 export function PTTButton({
   label,
   accent,
@@ -112,6 +118,18 @@ export function PTTButton({
   // Disc grows on press; barely, like a real button being pressed in.
   const diskStyle = useAnimatedStyle(() => ({
     transform: [{ scale: 1 + 0.05 * press.value }],
+  }));
+
+  // Shadow halo follows the press scale AND keeps its constant 8 px
+  // downward offset. Combined into one animated style because RN does
+  // not merge `transform` across style arrays — the last one wins, so
+  // a static translateY in the StyleSheet would be clobbered by
+  // diskStyle's scale.
+  const shadowStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateY: SHADOW_OFFSET_Y },
+      { scale: 1 + 0.05 * press.value },
+    ],
   }));
 
   // Outer breathing ring on active.
@@ -177,15 +195,43 @@ export function PTTButton({
 
         {/* Drop shadow — the disc rests on the surface like a polished
             puck. PLAN.md (§ Dusk) specifies `0 8px 24px rgba(0,0,0,0.55)`.
-            We render a separate opaque underlay so Android `elevation`
-            has a solid outline to cast the shadow from; the actual disc
-            above keeps its semi-transparent accent tint and bloom
-            interaction. Scales with the press transform so the shadow
-            stays glued to the disc as it depresses. */}
+            We render the shadow as an SVG radial gradient (a soft dark
+            halo around the disc) instead of using `elevation`. Reason:
+            Android elevation needs an opaque backgroundColor to cast a
+            shadow, and an opaque underlay would block the warm bloom
+            from passing through the disc — turning it black instead of
+            keeping the bloom-tinted peach look the mockup wants. The
+            SVG halo sits behind the disc, offset 8 px down to mimic
+            the CSS `0 8px` offset, and scales with the press transform. */}
         <Animated.View
           pointerEvents="none"
-          style={[styles.shadowUnderlay, diskStyle, disabled && styles.disabled]}
-        />
+          style={[styles.shadowLayer, shadowStyle, disabled && styles.disabled]}>
+          <Svg width={SHADOW_SIZE} height={SHADOW_SIZE}>
+            <Defs>
+              <RadialGradient
+                id="ptt-shadow"
+                cx="50%" cy="50%"
+                r="50%"
+                fx="50%" fy="50%">
+                {/* Inside the disc area (≤ disc-radius / shadow-radius =
+                    SIZE/2 / SHADOW_SIZE/2 ≈ 0.667) the disc covers, so
+                    the gradient there is moot. The visible part is the
+                    soft fringe past 0.667 fading out by 1.0 — i.e. the
+                    24 px CSS blur tail. */}
+                <Stop offset="0"     stopColor="#000" stopOpacity="0.55" />
+                <Stop offset="0.55"  stopColor="#000" stopOpacity="0.42" />
+                <Stop offset="0.78"  stopColor="#000" stopOpacity="0.18" />
+                <Stop offset="1"     stopColor="#000" stopOpacity="0" />
+              </RadialGradient>
+            </Defs>
+            <Circle
+              cx={SHADOW_SIZE / 2}
+              cy={SHADOW_SIZE / 2}
+              r={SHADOW_SIZE / 2}
+              fill="url(#ptt-shadow)"
+            />
+          </Svg>
+        </Animated.View>
 
         {/* The disc itself — polished button with a body gradient
             (lit-from-above) and an off-centre inner halo. The body
@@ -255,22 +301,16 @@ const styles = StyleSheet.create({
     position: 'absolute',
     borderWidth: 1.5,
   },
-  shadowUnderlay: {
+  shadowLayer: {
     position: 'absolute',
-    width: SIZE,
-    height: SIZE,
-    borderRadius: SIZE / 2,
-    // Solid black backing — mockup spec `0 8px 24px rgba(0,0,0,0.55)`.
-    // Android elevation requires a non-transparent backgroundColor for
-    // the outline provider to cast a shadow; the disc above re-tints
-    // with the accent so this near-black underlay is invisible behind
-    // it but still throws the drop shadow.
-    backgroundColor: '#000',
-    elevation: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.55,
-    shadowRadius: 24,
+    width: SHADOW_SIZE,
+    height: SHADOW_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    // The 8 px downward offset that gives the disc its `0 8px 24px ...`
+    // drop direction is applied via `shadowStyle` (animated), not here —
+    // see PTTButton's `useAnimatedStyle` block. Putting a static
+    // translateY here would conflict with the press-scale transform.
   },
   haloLayer: {
     position: 'absolute',
