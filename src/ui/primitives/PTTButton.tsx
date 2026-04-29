@@ -36,7 +36,12 @@ interface PTTButtonProps {
   readonly inverted?: boolean;
 }
 
-const SIZE = 96;
+// SIZE 108 — the mockup uses 96 dp on a 380 dp design canvas (25 %
+// width). On a CMF Phone 1 (412 dp wide) 96 dp reads visibly small;
+// 108 dp restores the same proportional weight. Interior content (tick
+// top offset, lang fontSize, lang marginTop) is scaled by 1.125 to keep
+// the same internal balance.
+const SIZE = 108;
 // BLOOM_SIZE is the visual reach of the watercolour. FOOTPRINT is the
 // layout box the parent reserves for the PTT slot. Keeping FOOTPRINT
 // smaller than BLOOM_SIZE lets the bloom paint OUTSIDE the slot — into
@@ -340,22 +345,22 @@ const styles = StyleSheet.create({
   },
   discIdleContent: {
     position: 'absolute',
-    top: 32,
+    top: 36,
     left: 0,
     right: 0,
     alignItems: 'center',
   },
   tick: {
-    width: 14,
+    width: 16,
     height: 1.5,
     borderRadius: 1,
     backgroundColor: 'rgba(255,255,255,0.40)',
   },
   lang: {
-    marginTop: 14,
+    marginTop: 16,
     fontFamily: font.serifFamily,
     fontStyle: 'italic',
-    fontSize: 14,
+    fontSize: 16,
     color: 'rgba(255,255,255,0.62)',
     letterSpacing: 1.2,
   },

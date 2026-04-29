@@ -446,7 +446,11 @@ function SpeakerHalf({
         )}
       </View>
 
-      {/* 3. Identity strip — language chip on the left, live status on the right. */}
+      {/* 3. Identity strip — language chip on the left, live status on the right.
+              Sits directly under the big text (intrinsic height) so on tall
+              phones the chip stays close to the words instead of floating
+              down near the disc — matches the mockup proportions where
+              big is just a hair taller than the welcome content. */}
       <View style={halfStyles.identityRow}>
         <Pressable
           onPress={onChangeLanguage}
@@ -477,6 +481,12 @@ function SpeakerHalf({
           </View>
         )}
       </View>
+
+      {/* Spacer — absorbs extra vertical room on tall phones so the disc
+          stays anchored near the edge while the chip stays close to the
+          big text. Without this, big's flex would expand and float the
+          chip down near the bloom. */}
+      <View style={halfStyles.spacer} />
 
       {/* 4. PTT button — the object. */}
       <View style={halfStyles.buttonSlot}>
@@ -586,12 +596,16 @@ const halfStyles = StyleSheet.create({
     marginBottom: 4,
   },
 
-  // 2. Big text — fills the middle of the half.
+  // 2. Big text — intrinsic height (just the welcome/translation content).
+  // Spacer below identityRow absorbs the extra vertical space on tall
+  // phones; if `big` were flex:1 the chip would float down near the disc.
   big: {
-    flex: 1,
     justifyContent: 'flex-start',
     paddingTop: space.xs,
     paddingBottom: space.sm,
+  },
+  spacer: {
+    flex: 1,
   },
   bigText: {
     color: color.fg,

@@ -74,17 +74,18 @@ const COOL = ['#A8B2FF', '#7FD8C9', '#9C8AE6'] as const;  // periwinkle / seafoa
 
 // Per-stain peak alphas. Top stain is brightest, deep is most saturated
 // but lowest alpha so its hue tints the cluster without dominating.
-// Cool side gets +0.08 across the board (perceptual compensation —
+// Cool side gets +~0.04 across the board (perceptual compensation —
 // warm advances, cool retreats).
 //
-// Bumped from (0.42 / 0.38 / 0.34) for warm to compensate for the
-// missing `mix-blend-mode: screen` from the HTML mockup. Screen blend
-// effectively LIGHTENS the dark background where the bloom sits; without
-// it our normal alpha-over-dark needs higher alpha to reach a similar
-// painted-on-dark luminosity.
+// Reduced ~25 % from the screen-blend-compensating values
+// (warm 0.68 / 0.62 / 0.55, cool 0.72 / 0.66 / 0.58). On AMOLED phones
+// the deep blacks made those numbers read as full-saturation paint; the
+// mockup's softer feel comes mostly from `filter: blur(30px)` which RN
+// can't reproduce, but lowering the peaks gets us closer to the
+// translucent watercolour look without the blur.
 const ALPHAS = {
-  warm: { top: 0.68, mid: 0.62, deep: 0.55 },
-  cool: { top: 0.72, mid: 0.66, deep: 0.58 },
+  warm: { top: 0.51, mid: 0.46, deep: 0.41 },
+  cool: { top: 0.54, mid: 0.49, deep: 0.43 },
 } as const;
 
 export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.Element {
