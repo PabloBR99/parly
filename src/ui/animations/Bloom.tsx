@@ -74,8 +74,13 @@ const COOL = ['#A8B2FF', '#7FD8C9', '#9C8AE6'] as const;  // periwinkle / seafoa
 
 // Per-stain peak alphas. Top stain is brightest, deep is most saturated
 // but lowest alpha so its hue tints the cluster without dominating.
-// Cool side gets +~0.04 across the board (perceptual compensation —
+// Cool side gets +0.04 across the board (perceptual compensation —
 // warm advances, cool retreats).
+//
+// Alphas raised from the previous pass (0.44/0.39/0.35 warm) to
+// (0.52/0.46/0.40). Combined compositing at centre: 1-(0.48×0.54×0.60)
+// ≈ 0.84 opacity — luminous but not spotlight-hard, because the 6-stop
+// gaussian curve feathers quickly past the inner radius.
 //
 // The organic, irregular silhouette comes from the three asymmetric
 // translate offsets (TOP/MID/DEEP_OFFSET) and the coprime breath
@@ -85,8 +90,8 @@ const COOL = ['#A8B2FF', '#7FD8C9', '#9C8AE6'] as const;  // periwinkle / seafoa
 // also renders with visible banding. Stains stay circular; the cluster
 // reads as a watercolour wash through overlap and drift alone.
 const ALPHAS = {
-  warm: { top: 0.44, mid: 0.39, deep: 0.35 },
-  cool: { top: 0.47, mid: 0.42, deep: 0.37 },
+  warm: { top: 0.52, mid: 0.46, deep: 0.40 },
+  cool: { top: 0.56, mid: 0.50, deep: 0.44 },
 } as const;
 
 export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.Element {
@@ -216,29 +221,29 @@ interface StainCircleProps {
 }
 
 function StainCircle({ size, fill, peak, idSuffix }: StainCircleProps): React.JSX.Element {
-  // 5-stop falloff. Stops shifted further OUTWARD and alpha factors made
-  // softer so the gradient diffuses across more of its radius — the
-  // "blur substitute" for the mockup's `filter: blur(30px)`. The new
-  // curve has visible alpha out to 80% of the radius, so on a 480px
-  // bloom the warm wash carries to within ~50px of the bloom edge
-  // instead of fading inside the inner third.
-  //
-  // Old curve (kept for reference): stops 0/.18/.42/.72/1, factors
-  // 1/.66/.32/.11/0 — very tight, plus a hard step from .72 to 1.
-  // New curve: stops 0/.22/.50/.80/1, factors 1/.78/.50/.22/0.
+  // 6-stop gaussian-like falloff. The centre stays bright longer (a1 at
+  // 12% retains 90% of peak), rolls off through the shoulder (62% at
+  // 35%), drops steeply through the mid-range (30% at 60%), then feathers
+  // to near-zero at the boundary (8% at 82%). Compared to the previous
+  // 5-stop curve (factors 1/.78/.50/.22/0 at stops 0/.22/.50/.80/1),
+  // this curve is more luminous near centre and softer at the edge —
+  // a closer approximation of the gaussian kernel the HTML mockup's
+  // `filter: blur(30px)` produces.
   const a0 = peak;
-  const a1 = peak * 0.78;
-  const a2 = peak * 0.50;
-  const a3 = peak * 0.22;
+  const a1 = peak * 0.90;
+  const a2 = peak * 0.62;
+  const a3 = peak * 0.30;
+  const a4 = peak * 0.08;
   const id = `bloom-${idSuffix}`;
   return (
     <Svg width={size} height={size}>
       <Defs>
         <RadialGradient id={id} cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
           <Stop offset="0"    stopColor={fill} stopOpacity={a0.toString()} />
-          <Stop offset="0.22" stopColor={fill} stopOpacity={a1.toString()} />
-          <Stop offset="0.50" stopColor={fill} stopOpacity={a2.toString()} />
-          <Stop offset="0.80" stopColor={fill} stopOpacity={a3.toString()} />
+          <Stop offset="0.12" stopColor={fill} stopOpacity={a1.toString()} />
+          <Stop offset="0.35" stopColor={fill} stopOpacity={a2.toString()} />
+          <Stop offset="0.60" stopColor={fill} stopOpacity={a3.toString()} />
+          <Stop offset="0.82" stopColor={fill} stopOpacity={a4.toString()} />
           <Stop offset="1"    stopColor={fill} stopOpacity="0" />
         </RadialGradient>
       </Defs>

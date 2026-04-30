@@ -254,17 +254,20 @@ export function PTTButton({
             gradient gives the disc weight; without it the disc reads as
             a flat hairline circle. */}
         <Animated.View style={[disk, diskStyle, disabled && styles.disabled]}>
-          {/* Body gradient — mockup spec is 4 % → 1 % white. Earlier
-              passes used 6 % which lit the disc up too much. */}
+          {/* Body gradient — 6 % → 0 % white. Slightly more depth than the
+              original 4 % → 1 %; the additional 2 % at the top edge reads
+              as lit-from-above without brightening the lower half. */}
           <LinearGradient
             pointerEvents="none"
-            colors={['rgba(255,255,255,0.04)', 'rgba(255,255,255,0.01)']}
+            colors={['rgba(255,255,255,0.06)', 'rgba(255,255,255,0.00)']}
             start={{ x: 0.5, y: 0 }}
             end={{ x: 0.5, y: 1 }}
             style={StyleSheet.absoluteFill}
           />
-          {/* Inner halo — mockup spec `radial-gradient(circle at 35% 30%,
-              rgba(255,255,255,0.06), transparent 60%)`. */}
+          {/* Inner halo — off-centre gloss at (35%, 30%). Raised from 6% to
+              10% at centre for a more pronounced glass-jewel catch-light;
+              the mid-stop at 45% eases the falloff so it reads as polish,
+              not a visible gradient ring. */}
           <View style={styles.haloLayer} pointerEvents="none">
             <Svg width={HALO_SIZE} height={HALO_SIZE}>
               <Defs>
@@ -276,8 +279,9 @@ export function PTTButton({
                   ry="65%"
                   fx={`${HALO_CX * 100}%`}
                   fy={`${HALO_CY * 100}%`}>
-                  <Stop offset="0"    stopColor="#FFFFFF" stopOpacity="0.06" />
-                  <Stop offset="0.6"  stopColor="#FFFFFF" stopOpacity="0" />
+                  <Stop offset="0"    stopColor="#FFFFFF" stopOpacity="0.10" />
+                  <Stop offset="0.45" stopColor="#FFFFFF" stopOpacity="0.02" />
+                  <Stop offset="0.7"  stopColor="#FFFFFF" stopOpacity="0" />
                 </RadialGradient>
               </Defs>
               <Circle

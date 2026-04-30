@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Parly — Dusk · current code mirror</title>
+<title>Parly — Dusk · current code mirror (gradient-quality pass)</title>
 <style>
   /* ---------------------------------------------------------------
      dusk-current.html
@@ -60,22 +60,23 @@
      DuskBackdrop — exactly the LinearGradient stops in
      src/ui/animations/DuskBackdrop.tsx
      --------------------------------------------------------------- */
-  /* DuskBackdrop — 7-stop dusk where the centre is near-black.
-     The horizon is no longer a separate component (no haze, no hairline);
-     it's the natural dark zone of the gradient itself. Reading top→bottom:
-     cool periwinkle, fades to dark, true black band at centre, fades back
-     out to warm peach. The cool and warm sides never touch. */
+  /* DuskBackdrop — 9-stop dusk. Two extra intermediate stops (10%, 90%)
+     hold the saturated edge hues longer before transitioning to the dark
+     horizon. Edge colours pushed to richer indigo-periwinkle at top and
+     richer terracotta at bottom. Dark centre band is unchanged. */
   .dusk-backdrop {
     position: absolute;
     inset: 0;
     background: linear-gradient(180deg,
-      #1B1F38 0%,
-      #131525 22%,
+      #1C2244  0%,
+      #191E3D 10%,
+      #0D0F1E 25%,
       #060609 42%,
       #030305 50%,
       #060406 58%,
-      #1A130D 78%,
-      #341B10 100%);
+      #1A130D 75%,
+      #2E1509 90%,
+      #3C1C0C 100%);
   }
 
   /* ---------------------------------------------------------------
@@ -228,64 +229,69 @@
   }
 
   /* WARM palette — apricot / peach / terracotta.
-     5-stop falloff with mid-stops at 18/42/72 (asymmetric, painterly).
-     Peak alpha 0.40 on top stain, slightly less on mid/deep so the
-     deepest hue sinks rather than dominates. Long tail past 70% gives
-     the soft halo the blur substitute is supposed to produce. */
+     6-stop gaussian-like curve: stays bright near centre (90% of peak at
+     12%), rolls off through the shoulder (62% at 35%), then feathers to
+     near-zero (8% at 82%). Peaks raised from 0.42/0.38/0.34 to
+     0.52/0.46/0.40 for a more luminous bloom. */
   .bloom.warm .stain.top {
     background: radial-gradient(circle at 50% 50%,
-      rgba(255,179,122,0.42) 0%,
-      rgba(255,179,122,0.28) 18%,
-      rgba(255,179,122,0.14) 42%,
-      rgba(255,179,122,0.05) 72%,
+      rgba(255,179,122,0.52)  0%,
+      rgba(255,179,122,0.47) 12%,
+      rgba(255,179,122,0.32) 35%,
+      rgba(255,179,122,0.16) 60%,
+      rgba(255,179,122,0.04) 82%,
       rgba(255,179,122,0)    100%);
     animation: breath-top 7.4s ease-in-out infinite alternate;
   }
   .bloom.warm .stain.mid {
     background: radial-gradient(circle at 50% 50%,
-      rgba(255,142,118,0.38) 0%,
-      rgba(255,142,118,0.25) 18%,
-      rgba(255,142,118,0.12) 42%,
-      rgba(255,142,118,0.04) 72%,
+      rgba(255,142,118,0.46)  0%,
+      rgba(255,142,118,0.41) 12%,
+      rgba(255,142,118,0.29) 35%,
+      rgba(255,142,118,0.14) 60%,
+      rgba(255,142,118,0.04) 82%,
       rgba(255,142,118,0)    100%);
     animation: breath-mid 8.0s ease-in-out infinite alternate;
   }
   .bloom.warm .stain.deep {
     background: radial-gradient(circle at 50% 50%,
-      rgba(226,111,92,0.34) 0%,
-      rgba(226,111,92,0.22) 18%,
-      rgba(226,111,92,0.10) 42%,
-      rgba(226,111,92,0.03) 72%,
+      rgba(226,111,92,0.40)  0%,
+      rgba(226,111,92,0.36) 12%,
+      rgba(226,111,92,0.25) 35%,
+      rgba(226,111,92,0.12) 60%,
+      rgba(226,111,92,0.03) 82%,
       rgba(226,111,92,0)    100%);
     animation: breath-deep 8.6s ease-in-out infinite alternate;
   }
-  /* COOL palette — periwinkle / seafoam / iris. Each stop +0.05 over
-     the warm equivalents because cool tones perceptually retreat
-     against a cool-tinted bg (Loóna's compensation trick). */
+  /* COOL palette — periwinkle / seafoam / iris. +0.04 over warm
+     equivalents (perceptual retreat compensation, Loóna's trick). */
   .bloom.cool .stain.top {
     background: radial-gradient(circle at 50% 50%,
-      rgba(168,178,255,0.48) 0%,
-      rgba(168,178,255,0.32) 18%,
-      rgba(168,178,255,0.16) 42%,
-      rgba(168,178,255,0.06) 72%,
+      rgba(168,178,255,0.56)  0%,
+      rgba(168,178,255,0.50) 12%,
+      rgba(168,178,255,0.35) 35%,
+      rgba(168,178,255,0.17) 60%,
+      rgba(168,178,255,0.04) 82%,
       rgba(168,178,255,0)    100%);
     animation: breath-top 7.4s ease-in-out infinite alternate;
   }
   .bloom.cool .stain.mid {
     background: radial-gradient(circle at 50% 50%,
-      rgba(127,216,201,0.44) 0%,
-      rgba(127,216,201,0.30) 18%,
-      rgba(127,216,201,0.14) 42%,
-      rgba(127,216,201,0.05) 72%,
+      rgba(127,216,201,0.50)  0%,
+      rgba(127,216,201,0.45) 12%,
+      rgba(127,216,201,0.31) 35%,
+      rgba(127,216,201,0.15) 60%,
+      rgba(127,216,201,0.04) 82%,
       rgba(127,216,201,0)    100%);
     animation: breath-mid 8.0s ease-in-out infinite alternate;
   }
   .bloom.cool .stain.deep {
     background: radial-gradient(circle at 50% 50%,
-      rgba(156,138,230,0.40) 0%,
-      rgba(156,138,230,0.26) 18%,
-      rgba(156,138,230,0.12) 42%,
-      rgba(156,138,230,0.04) 72%,
+      rgba(156,138,230,0.44)  0%,
+      rgba(156,138,230,0.40) 12%,
+      rgba(156,138,230,0.27) 35%,
+      rgba(156,138,230,0.13) 60%,
+      rgba(156,138,230,0.04) 82%,
       rgba(156,138,230,0)    100%);
     animation: breath-deep 8.6s ease-in-out infinite alternate;
   }
@@ -313,11 +319,9 @@
   /* ---------------------------------------------------------------
      Disc — 96px polished button, with inner SVG halo. Hairline border.
      --------------------------------------------------------------- */
-  /* Disc — polished button. Subtle vertical gradient on the body gives
-     it weight (top edge slightly brighter than bottom = lit-from-above),
-     plus a brighter inset border ring catching ambient light. The inner
-     halo is the moving highlight off-centre. Without these the disc
-     just reads as a hairline circle. */
+  /* Disc — polished button. Body gradient 6% → 0% (slightly more depth
+     than the previous 4% → 1%). Inner halo at 10% centre with a
+     mid-stop at 45% for a smoother glass catch-light. */
   .disc {
     position: relative;
     width: 96px;
@@ -326,7 +330,7 @@
     background:
       linear-gradient(180deg,
         rgba(255,255,255,0.06) 0%,
-        rgba(255,255,255,0.02) 100%),
+        rgba(255,255,255,0.00) 100%),
       rgba(255,255,255,0.025);
     border: 1px solid rgba(255,255,255,0.18);
     display: grid;
@@ -337,18 +341,17 @@
       inset 0 1px 1px rgba(255,255,255,0.10),
       inset 0 -1px 0 rgba(0,0,0,0.30);
   }
-  /* Inner halo — radial at (35%, 30%) brighter-and-bigger than before.
-     The mockup's halo was easy to miss at 0.06 alpha; pushing it to
-     0.14 reads as gloss without breaking the dark vibe. */
+  /* Inner halo — raised to 10% at centre, mid-stop at 45% eases the
+     falloff so it reads as polish, not a visible gradient ring. */
   .disc::before {
     content: '';
     position: absolute;
     inset: 6px;
     border-radius: 50%;
     background: radial-gradient(circle at 35% 30%,
-      rgba(255,255,255,0.14) 0%,
-      rgba(255,255,255,0.04) 35%,
-      rgba(255,255,255,0)    65%);
+      rgba(255,255,255,0.10)  0%,
+      rgba(255,255,255,0.02) 45%,
+      rgba(255,255,255,0)    70%);
     pointer-events: none;
   }
   .disc .label-stack {
