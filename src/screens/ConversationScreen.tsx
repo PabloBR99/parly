@@ -34,7 +34,7 @@
 //   └─────────────────────────────┘
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, StatusBar, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StatusBar, StyleSheet, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -414,36 +414,48 @@ function SpeakerHalf({
               welcome here: serif italic gesture line plus the concrete
               language flow in endonyms, so the speaker can read at a glance
               what the disc does and which way the words travel. The block
-              disappears the moment the first turn lands. */}
+              disappears the moment the first turn lands.
+
+              flexShrink:1 + minHeight:0 lets `big` give up height to the
+              fixed-height chrome below (chip + disc + edge) when an
+              incoming message is long; the ScrollView absorbs the
+              overflow so the disc stays anchored at the speaker's edge
+              instead of being pushed off-screen. */}
       <View style={halfStyles.big}>
-        {hasIncomingText && (
-          <Animated.Text style={[halfStyles.bigText, bigStyle]}>
-            {incomingText}
-          </Animated.Text>
-        )}
-        {!hasIncomingText && firstRun && !activeTurn && (
-          <View style={halfStyles.welcome}>
-            <Text variant="serifHero" tone="fgFaint" style={halfStyles.welcomeHeadline}>
-              Press and hold to speak.
-            </Text>
-            <View style={halfStyles.welcomeFlow}>
-              <Text variant="serifTiny" tone="fgGhost">
-                {speakerLang.endonym.toUpperCase()}
+        <ScrollView
+          style={halfStyles.bigScroll}
+          contentContainerStyle={halfStyles.bigScrollContent}
+          showsVerticalScrollIndicator={false}
+          bounces={false}>
+          {hasIncomingText && (
+            <Animated.Text style={[halfStyles.bigText, bigStyle]}>
+              {incomingText}
+            </Animated.Text>
+          )}
+          {!hasIncomingText && firstRun && !activeTurn && (
+            <View style={halfStyles.welcome}>
+              <Text variant="serifHero" tone="fgFaint" style={halfStyles.welcomeHeadline}>
+                Press and hold to speak.
               </Text>
-              <Text variant="serifTiny" tone="fgGhost" style={halfStyles.welcomeFlowArrow}>
-                →
-              </Text>
-              <Text variant="serifTiny" tone="fgGhost">
-                {partnerLang.endonym.toUpperCase()}
-              </Text>
+              <View style={halfStyles.welcomeFlow}>
+                <Text variant="serifTiny" tone="fgGhost">
+                  {speakerLang.endonym.toUpperCase()}
+                </Text>
+                <Text variant="serifTiny" tone="fgGhost" style={halfStyles.welcomeFlowArrow}>
+                  →
+                </Text>
+                <Text variant="serifTiny" tone="fgGhost">
+                  {partnerLang.endonym.toUpperCase()}
+                </Text>
+              </View>
             </View>
-          </View>
-        )}
-        {incomingTurn?.stage === 'error' && (
-          <Text variant="bodySmall" tone="error" style={halfStyles.errorText}>
-            ⚠  {incomingTurn.errorMessage ?? 'Translation error'}
-          </Text>
-        )}
+          )}
+          {incomingTurn?.stage === 'error' && (
+            <Text variant="bodySmall" tone="error" style={halfStyles.errorText}>
+              ⚠  {incomingTurn.errorMessage ?? 'Translation error'}
+            </Text>
+          )}
+        </ScrollView>
       </View>
 
       {/* 3. Identity strip — language chip on the left, live status on the right.
@@ -604,13 +616,25 @@ const halfStyles = StyleSheet.create({
     marginBottom: 4,
   },
 
-  // 2. Big text — intrinsic height (just the welcome/translation content).
-  // Spacer below identityRow absorbs the extra vertical space on tall
-  // phones; if `big` were flex:1 the chip would float down near the disc.
+  // 2. Big text — intrinsic height for short content (welcome / a couple
+  // of translated lines), but flexShrink:1 + minHeight:0 lets it give up
+  // height when the message is long, so the chrome below (chip, disc,
+  // edge) keeps its fixed footprint instead of being pushed off-screen.
+  // Spacer below identityRow still absorbs slack on tall phones with
+  // short content so the chip stays close to the words.
   big: {
     justifyContent: 'flex-start',
+    flexShrink: 1,
+    minHeight: 0,
     paddingTop: space.xs,
     paddingBottom: space.sm,
+  },
+  bigScroll: {
+    flexGrow: 0,
+  },
+  bigScrollContent: {
+    flexGrow: 1,
+    justifyContent: 'flex-start',
   },
   spacer: {
     flex: 1,
