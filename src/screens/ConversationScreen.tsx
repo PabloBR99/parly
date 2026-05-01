@@ -34,13 +34,16 @@
 //   └─────────────────────────────┘
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, StatusBar, StyleSheet, View } from 'react-native';
+import type { LayoutChangeEvent } from 'react-native';
+import { Pressable, StatusBar, StyleSheet, View } from 'react-native';
 import Animated, {
+  useAnimatedScrollHandler,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
   Easing,
 } from 'react-native-reanimated';
+import LinearGradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useSettingsStore } from '../store/settingsStore';
@@ -392,6 +395,41 @@ function SpeakerHalf({
     transform: [{ translateY: (1 - reveal.value) * 6 }],
   }));
 
+  // Scroll affordance — dark fades at the unrotated top/bottom of `big`
+  // that fade in proportionally to how far the content extends past the
+  // viewport. Driven on the UI thread via shared values so the gesture
+  // tracks without per-frame React re-renders. In the partner's rotated
+  // half the fades appear at flipped visual positions (top↔bottom in
+  // their POV); the meaning ("there is more content beyond this edge")
+  // is preserved either way.
+  const scrollY = useSharedValue(0);
+  const contentH = useSharedValue(0);
+  const viewH = useSharedValue(0);
+
+  const scrollHandler = useAnimatedScrollHandler({
+    onScroll: (e) => {
+      scrollY.value = e.contentOffset.y;
+    },
+  });
+  const onContentSizeChange = (_w: number, h: number) => {
+    contentH.value = h;
+  };
+  const onScrollViewLayout = (e: LayoutChangeEvent) => {
+    viewH.value = e.nativeEvent.layout.height;
+  };
+
+  // Fade in over the first 16 px of available scroll on each side, so the
+  // hint settles smoothly with the gesture rather than snapping on/off.
+  const topFadeStyle = useAnimatedStyle(() => {
+    if (contentH.value <= viewH.value + 1) return { opacity: 0 };
+    return { opacity: Math.min(1, scrollY.value / 16) };
+  });
+  const bottomFadeStyle = useAnimatedStyle(() => {
+    if (contentH.value <= viewH.value + 1) return { opacity: 0 };
+    const slack = contentH.value - (scrollY.value + viewH.value);
+    return { opacity: Math.min(1, Math.max(0, slack / 16)) };
+  });
+
   const stageForMorph: TurnStage | null = activeTurn?.stage ?? incomingStage ?? null;
   const showMorph = stageForMorph !== null && stageForMorph !== 'done';
 
@@ -421,8 +459,12 @@ function SpeakerHalf({
               incoming message is long; the ScrollView absorbs the
               overflow so the disc stays anchored at the speaker's edge
               instead of being pushed off-screen. */}
-      <View style={halfStyles.big}>
-        <ScrollView
+      <View style={[halfStyles.big, hasIncomingText && halfStyles.bigWithText]}>
+        <Animated.ScrollView
+          onScroll={scrollHandler}
+          onContentSizeChange={onContentSizeChange}
+          onLayout={onScrollViewLayout}
+          scrollEventThrottle={16}
           style={halfStyles.bigScroll}
           contentContainerStyle={halfStyles.bigScrollContent}
           showsVerticalScrollIndicator={false}
@@ -455,7 +497,23 @@ function SpeakerHalf({
               ⚠  {incomingTurn.errorMessage ?? 'Translation error'}
             </Text>
           )}
-        </ScrollView>
+        </Animated.ScrollView>
+        <Animated.View
+          style={[halfStyles.fadeTop, topFadeStyle]}
+          pointerEvents="none">
+          <LinearGradient
+            colors={['rgba(0,0,0,0.55)', 'transparent']}
+            style={halfStyles.fadeGradient}
+          />
+        </Animated.View>
+        <Animated.View
+          style={[halfStyles.fadeBottom, bottomFadeStyle]}
+          pointerEvents="none">
+          <LinearGradient
+            colors={['transparent', 'rgba(0,0,0,0.55)']}
+            style={halfStyles.fadeGradient}
+          />
+        </Animated.View>
       </View>
 
       {/* 3. Identity strip — language chip on the left, live status on the right.
@@ -535,7 +593,7 @@ function SourceLine({ label, text }: { readonly label: string; readonly text: st
       <Text variant="serifTiny" tone="fgFaint" style={halfStyles.sourceLabel}>
         {label.toLowerCase()}
       </Text>
-      <Text variant="serif" tone="fgMuted" numberOfLines={3}>
+      <Text variant="serif" tone="fgMuted" numberOfLines={2} ellipsizeMode="tail">
         {text}
       </Text>
     </View>
@@ -616,12 +674,12 @@ const halfStyles = StyleSheet.create({
     marginBottom: 4,
   },
 
-  // 2. Big text — intrinsic height for short content (welcome / a couple
-  // of translated lines), but flexShrink:1 + minHeight:0 lets it give up
-  // height when the message is long, so the chrome below (chip, disc,
-  // edge) keeps its fixed footprint instead of being pushed off-screen.
-  // Spacer below identityRow still absorbs slack on tall phones with
-  // short content so the chip stays close to the words.
+  // 2. Big text — intrinsic height for the welcome state (chip stays close
+  // to the gesture line), but as soon as a translation lands `bigWithText`
+  // reserves 3 lines of viewport height (flexShrink:1 lets it give that
+  // back to the disc/edge if the half is unusually short, and the inner
+  // ScrollView absorbs anything beyond 3 lines). Spacer below identityRow
+  // still absorbs the rest on tall phones.
   big: {
     justifyContent: 'flex-start',
     flexShrink: 1,
@@ -629,12 +687,37 @@ const halfStyles = StyleSheet.create({
     paddingTop: space.xs,
     paddingBottom: space.sm,
   },
+  // 3 lines × bigText.lineHeight (42) + paddingTop space.xs (6) +
+  // paddingBottom space.sm (10) = 142.
+  bigWithText: {
+    minHeight: 142,
+  },
   bigScroll: {
     flexGrow: 0,
   },
   bigScrollContent: {
     flexGrow: 1,
     justifyContent: 'flex-start',
+  },
+  // Scroll affordance overlays — dark fades at top and bottom of the big
+  // slot, opacity driven by scroll position so they only appear when
+  // there's actually content beyond the visible viewport.
+  fadeTop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 22,
+  },
+  fadeBottom: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 22,
+  },
+  fadeGradient: {
+    flex: 1,
   },
   spacer: {
     flex: 1,

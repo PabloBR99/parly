@@ -9,14 +9,26 @@
 //   chunk's finish — completely wrong. We resolve only when the matching
 //   utteranceId fires.
 //
-// Why a max timeout per chunk?
-//   Some Android devices stall on missing voices or audio routing changes.
-//   A 15s cap keeps the orchestrator unblocked.
+// Why two timeouts (playback + enqueue)?
+//   The naive single-timer-from-speak() approach fired prematurely on long
+//   messages: a 50-word sentence at slow rate plays >25 s, and chunks N+1,
+//   N+2 sit in the native queue while chunk N plays — their timer is
+//   already counting before they ever start. The fix is to arm the per-
+//   chunk cap on `tts-start` (so it measures actual playback) and keep a
+//   generous enqueue fallback for the case where `tts-start` never fires
+//   (engine stalled before producing any audio for this chunk).
 
 import Tts from 'react-native-tts';
 
 const SPEECH_RATE = 0.5;
-const MAX_CHUNK_TIMEOUT_MS = 15_000;
+// Cap measured from this chunk's `tts-start` event. Long enough that a
+// slow-rate full sentence never trips it; short enough to recover from a
+// hung engine mid-utterance.
+const PLAYBACK_TIMEOUT_MS = 120_000;
+// Cap measured from speak() acceptance. Catches the rare case where
+// `tts-start` never fires (engine stuck, chunk dropped). Generous enough
+// to tolerate a deep queue of preceding chunks playing first.
+const ENQUEUE_TIMEOUT_MS = 300_000;
 
 interface CachedVoice {
   readonly id: string;
@@ -122,33 +134,55 @@ class NativeTTSService {
 
     return new Promise<void>((resolve) => {
       let done = false;
+      let playbackTimer: ReturnType<typeof setTimeout> | null = null;
+      let startSub: { remove?(): void } | null = null;
+      let finishSub: { remove?(): void } | null = null;
+      let cancelSub: { remove?(): void } | null = null;
+      let errorSub: { remove?(): void } | null = null;
+
       const finish = () => {
         if (done) return;
         done = true;
+        startSub?.remove?.();
         finishSub?.remove?.();
         cancelSub?.remove?.();
         errorSub?.remove?.();
-        clearTimeout(timer);
+        if (playbackTimer) clearTimeout(playbackTimer);
+        clearTimeout(enqueueTimer);
         this.cancelAllPending.delete(forceCancel);
         resolve();
       };
       const forceCancel = () => finish();
       this.cancelAllPending.add(forceCancel);
-      const timer = setTimeout(finish, MAX_CHUNK_TIMEOUT_MS);
+
+      // Pre-playback fallback. Fires only if `tts-start` never arrives —
+      // the chunk got dropped or the engine is stuck before producing any
+      // audio for it. Generous enough to wait through a deep queue of
+      // preceding chunks playing first.
+      const enqueueTimer = setTimeout(finish, ENQUEUE_TIMEOUT_MS);
+
       const matches = (ev: unknown): boolean => {
         const id = (ev as { utteranceId?: unknown })?.utteranceId;
         return id === utteranceId || id === String(utteranceId);
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const finishSub = Tts.addEventListener('tts-finish', (ev: any) => {
+      startSub = Tts.addEventListener('tts-start', (ev: any) => {
+        if (!matches(ev)) return;
+        // Playback for THIS chunk just began. Arm the playback cap from
+        // here so the timer measures actual audio time, not queue wait.
+        if (playbackTimer) clearTimeout(playbackTimer);
+        playbackTimer = setTimeout(finish, PLAYBACK_TIMEOUT_MS);
+      }) as unknown as { remove?(): void };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      finishSub = Tts.addEventListener('tts-finish', (ev: any) => {
         if (matches(ev)) finish();
       }) as unknown as { remove?(): void };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const cancelSub = Tts.addEventListener('tts-cancel', (ev: any) => {
+      cancelSub = Tts.addEventListener('tts-cancel', (ev: any) => {
         if (matches(ev)) finish();
       }) as unknown as { remove?(): void };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const errorSub = Tts.addEventListener('tts-error', (ev: any) => {
+      errorSub = Tts.addEventListener('tts-error', (ev: any) => {
         if (matches(ev)) finish();
       }) as unknown as { remove?(): void };
     });
