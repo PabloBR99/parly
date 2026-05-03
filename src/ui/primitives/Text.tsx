@@ -68,18 +68,25 @@ export function Text({
 function variantTrailingPad(
   variantStyle: Record<string, unknown>,
 ): { readonly paddingEnd: number } | undefined {
-  const ls = variantStyle.letterSpacing;
-  if (typeof ls !== 'number' || ls <= 0) return undefined;
+  const ls = typeof variantStyle.letterSpacing === 'number' ? variantStyle.letterSpacing : 0;
+  const isItalic = variantStyle.fontStyle === 'italic';
+  // Skip only when there's no positive letter-spacing AND the text isn't
+  // italic — italic glyphs lean past their advance width even with
+  // neutral/negative tracking, so they always need room.
+  if (ls <= 0 && !isItalic) return undefined;
   // Two distinct cuts to compensate for on Android RN:
   //   1. trailing letter-spacing tail not included in the glyph clip
   //      → ceil(letterSpacing) px
-  //   2. italic / serif glyphs that overhang their advance width (the
-  //      top of an italic "h", curled "g" tails, etc.) — the canvas
-  //      clip cuts the leaning bit unless we reserve room. Empirically
-  //      ~15% of fontSize is enough at the sizes we use (10–30 pt).
-  // Sum both, then add a 1 px cushion to absorb sub-pixel rounding on
+  //   2. italic / serif glyphs overhang their advance width (italic
+  //      stems lean ~12°, capital serifs hang past the cap-line). The
+  //      canvas clip rect snaps to the advance, so we must pad to keep
+  //      the leaning bit visible. Italic needs more headroom than
+  //      upright — bumped to 25 % of fontSize after a regression where
+  //      "ENGLISH" rendered as "ENGLIS" on Noto Serif italic at 10 pt.
+  // Sum both, then add a 2 px cushion to absorb sub-pixel rounding on
   // Android's hardware-accelerated text path.
   const fs = typeof variantStyle.fontSize === 'number' ? variantStyle.fontSize : 14;
-  const overhang = Math.ceil(fs * 0.15);
-  return { paddingEnd: Math.ceil(ls) + overhang + 1 };
+  const overhang = Math.ceil(fs * (isItalic ? 0.25 : 0.15));
+  const lsTail = Math.ceil(Math.max(0, ls));
+  return { paddingEnd: lsTail + overhang + 2 };
 }
