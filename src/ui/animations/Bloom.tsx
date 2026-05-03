@@ -5,13 +5,17 @@
 // on paper. Warm palette (apricot / peach / terracotta) for the user's
 // side, cool palette (periwinkle / seafoam / iris) for the partner's.
 //
-// Why SVG radial gradients with a 5-stop falloff (0.42 → 0.28 → 0.14 →
-// 0.05 → 0) instead of CSS-style 3-stop tighter falloff: a 3-stop with
-// a high centre alpha (0.72 was our previous attempt) renders as a hard
-// circle with a halo — the "spotlight" failure mode. A 5-stop with a
-// long alpha tail past 70% radius simulates the blur the HTML mockup
-// gets from `filter: blur(30px)`. References (Loóna, Endel, Headspace)
-// all use this pattern.
+// Why SVG radial gradients with a 10-stop gaussian-like falloff
+// (factors 1.00 → 0.95 → 0.78 → 0.55 → 0.32 → 0.16 → 0.07 → 0.02 →
+// 0.005 → 0): the HTML mockup gets its butter-soft halo from
+// `filter: blur(30px)`, which renders as a true gaussian — alpha
+// asymptotes to zero rather than crossing it at a defined radius.
+// RN can't blur, so we approximate by spending a long stretch of the
+// outer radius (78%→100%) below 7% peak. Earlier 6-stop curves
+// (0.08 at 82% → 0 at 100%) produced a visible circular halo because
+// the outer band held ~3% combined alpha against a near-black bg —
+// just enough to read as an edge. The new curve drops combined alpha
+// below 1% past 90% radius, so the bloom dissolves rather than ends.
 //
 // Why cool stains carry a +0.06 alpha bonus on every stop: cool tones
 // perceptually retreat against the cool-tinted top half of the dusk
@@ -221,29 +225,37 @@ interface StainCircleProps {
 }
 
 function StainCircle({ size, fill, peak, idSuffix }: StainCircleProps): React.JSX.Element {
-  // 6-stop gaussian-like falloff. The centre stays bright longer (a1 at
-  // 12% retains 90% of peak), rolls off through the shoulder (62% at
-  // 35%), drops steeply through the mid-range (30% at 60%), then feathers
-  // to near-zero at the boundary (8% at 82%). Compared to the previous
-  // 5-stop curve (factors 1/.78/.50/.22/0 at stops 0/.22/.50/.80/1),
-  // this curve is more luminous near centre and softer at the edge —
-  // a closer approximation of the gaussian kernel the HTML mockup's
-  // `filter: blur(30px)` produces.
+  // 10-stop gaussian-like falloff (σ ≈ 0.32 in normalised radius). The
+  // outer 30% of the radius spends almost the entire alpha budget on
+  // dissolving — by 88% radius the stain is at 2% peak, by 95% at
+  // 0.5%, asymptoting to zero at the boundary. With three stains
+  // overlapping at peak ~0.50, combined alpha at 88% radius is
+  // ~3 × (0.02 × 0.50) ≈ 0.03 — invisible against the dusk
+  // background, eliminating the visible circular halo earlier passes
+  // produced.
   const a0 = peak;
-  const a1 = peak * 0.90;
-  const a2 = peak * 0.62;
-  const a3 = peak * 0.30;
-  const a4 = peak * 0.08;
+  const a1 = peak * 0.95;
+  const a2 = peak * 0.78;
+  const a3 = peak * 0.55;
+  const a4 = peak * 0.32;
+  const a5 = peak * 0.16;
+  const a6 = peak * 0.07;
+  const a7 = peak * 0.02;
+  const a8 = peak * 0.005;
   const id = `bloom-${idSuffix}`;
   return (
     <Svg width={size} height={size}>
       <Defs>
         <RadialGradient id={id} cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
           <Stop offset="0"    stopColor={fill} stopOpacity={a0.toString()} />
-          <Stop offset="0.12" stopColor={fill} stopOpacity={a1.toString()} />
-          <Stop offset="0.35" stopColor={fill} stopOpacity={a2.toString()} />
-          <Stop offset="0.60" stopColor={fill} stopOpacity={a3.toString()} />
-          <Stop offset="0.82" stopColor={fill} stopOpacity={a4.toString()} />
+          <Stop offset="0.08" stopColor={fill} stopOpacity={a1.toString()} />
+          <Stop offset="0.20" stopColor={fill} stopOpacity={a2.toString()} />
+          <Stop offset="0.35" stopColor={fill} stopOpacity={a3.toString()} />
+          <Stop offset="0.50" stopColor={fill} stopOpacity={a4.toString()} />
+          <Stop offset="0.65" stopColor={fill} stopOpacity={a5.toString()} />
+          <Stop offset="0.78" stopColor={fill} stopOpacity={a6.toString()} />
+          <Stop offset="0.88" stopColor={fill} stopOpacity={a7.toString()} />
+          <Stop offset="0.95" stopColor={fill} stopOpacity={a8.toString()} />
           <Stop offset="1"    stopColor={fill} stopOpacity="0" />
         </RadialGradient>
       </Defs>

@@ -50,11 +50,12 @@ const SIZE = 108;
 //
 // The mockup's bloom is 320px on a 380px phone — ~84% width. RN can't do
 // `filter: blur(30px)` or `mix-blend-mode: screen`, so a too-narrow
-// bloom (340 px) showed three distinct stain centres rather than a
-// smoothed wash. 400 px lets the stains blend into a softer cluster
-// without quite reaching edge-to-edge — visible dark margin survives
-// on either side, matching the mockup's painted-island feel.
-const BLOOM_SIZE = 380;
+// bloom (340–400 px) had to either show distinct stain centres or end
+// at a visible circular halo. 460 px gives the gaussian-like 10-stop
+// falloff in `Bloom.tsx` enough physical room to asymptote: the alpha
+// is already below 1% combined past 88% radius, so the gradient never
+// reaches a defined edge — it simply dissolves into the dusk.
+const BLOOM_SIZE = 460;
 const FOOTPRINT = 200;
 
 // Inner halo — match the mockup's `radial-gradient(circle at 35% 30%,
