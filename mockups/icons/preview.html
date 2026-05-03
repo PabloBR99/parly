@@ -2,136 +2,275 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Parly — App Icon Concepts</title>
+<title>Parly — App Icon · v2.0</title>
 <style>
-  html, body { margin: 0; padding: 0; background: #1a1a1d; color: #fff;
-    font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
-  body { padding: 56px 40px 80px 40px; box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #0b0b0e; color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  body { padding: 64px 40px 96px 40px; box-sizing: border-box; }
 
   h1 { font-family: Georgia, serif; font-style: italic; font-weight: 400;
-       letter-spacing: -0.4px; font-size: 28px; margin: 0 0 6px 0; }
-  .sub { color: rgba(255,255,255,0.55); font-size: 14px; margin-bottom: 48px; }
+       letter-spacing: -0.4px; font-size: 32px; margin: 0 0 6px 0; }
+  .sub { color: rgba(255,255,255,0.55); font-size: 14px; margin-bottom: 56px; }
 
-  .row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 36px;
-         max-width: 1240px; margin: 0 auto; }
-  .card { background: #0e0e10; border-radius: 18px; padding: 28px;
-          box-shadow: 0 0 0 1px rgba(255,255,255,0.05); }
-  .name { font-family: Georgia, serif; font-style: italic;
-          font-size: 18px; margin-bottom: 4px; }
-  .tag  { color: rgba(255,255,255,0.45); font-size: 12px;
-          letter-spacing: 1px; text-transform: uppercase; margin-bottom: 18px; }
+  .container { max-width: 1240px; margin: 0 auto; }
 
-  /* Big preview — system corner radius shown so we can judge the silhouette
-     under iOS / Material You masking. iOS uses ~22.5 % squircle. */
-  .big {
-    width: 320px; height: 320px;
-    border-radius: 72px;
-    overflow: hidden;
-    margin: 0 auto 22px auto;
-    background: #050507;
-    box-shadow: 0 20px 50px -20px rgba(0,0,0,0.7);
+  /* ---------- v2.0 hero ---------- */
+  .hero {
+    display: grid; grid-template-columns: 1.05fr 1fr; gap: 48px; align-items: center;
+    background: linear-gradient(160deg, #14141a, #0a0a0d);
+    border-radius: 24px; padding: 48px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.05),
+                0 30px 80px -30px rgba(0,0,0,0.7);
+    margin-bottom: 56px;
   }
-  .big img { width: 100%; height: 100%; display: block; }
+  .hero-icon {
+    width: 480px; height: 480px;
+    border-radius: 108px; /* iOS 22.5% squircle */
+    overflow: hidden;
+    background: #050507;
+    box-shadow: 0 30px 70px -25px rgba(0,0,0,0.85),
+                0 0 0 1px rgba(255,255,255,0.03);
+    margin: 0 auto;
+  }
+  .hero-icon img { width: 100%; height: 100%; display: block; }
 
-  /* Sizes-row — three additional sizes Pablo will see in real use. */
-  .sizes { display: flex; gap: 14px; align-items: center; justify-content: center;
-           padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.05); }
-  .sz {
-    border-radius: 14px; overflow: hidden; background: #050507;
+  .hero-meta .badge {
+    display: inline-block; font-size: 11px; letter-spacing: 1.6px;
+    text-transform: uppercase; color: rgba(255,255,255,0.5);
+    border: 1px solid rgba(255,255,255,0.12); padding: 6px 12px;
+    border-radius: 999px; margin-bottom: 18px;
+  }
+  .hero-meta h2 {
+    font-family: Georgia, serif; font-style: italic; font-weight: 400;
+    font-size: 44px; line-height: 1.05; letter-spacing: -0.6px;
+    margin: 0 0 18px 0;
+  }
+  .hero-meta p {
+    color: rgba(255,255,255,0.7); font-size: 15px; line-height: 1.65;
+    margin: 0 0 14px 0; max-width: 520px;
+  }
+  .hero-meta .principles {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px;
+  }
+  .hero-meta .principles span {
+    font-size: 11px; letter-spacing: 0.6px;
+    color: rgba(255,255,255,0.55);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px; padding: 5px 9px;
+  }
+
+  /* ---------- size ladder ---------- */
+  .ladder {
+    display: flex; gap: 24px; align-items: flex-end; justify-content: center;
+    margin: 0 0 56px 0; padding: 28px 32px; background: #0e0e12;
+    border-radius: 18px;
     box-shadow: 0 0 0 1px rgba(255,255,255,0.04);
   }
-  .sz-192 { width: 96px; height: 96px; border-radius: 22px; }
-  .sz-96  { width: 56px; height: 56px; border-radius: 13px; }
-  .sz-48  { width: 36px; height: 36px; border-radius: 8px; }
-  .sz img { width: 100%; height: 100%; display: block; }
-  .sz-label { color: rgba(255,255,255,0.32); font-size: 10px; text-align: center;
-              margin-top: 4px; letter-spacing: 0.6px; }
-  .sz-wrap { text-align: center; }
+  .ladder .step { text-align: center; }
+  .ladder .step .frame {
+    overflow: hidden; background: #050507; margin: 0 auto;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.04);
+  }
+  .ladder .step .frame img { width: 100%; height: 100%; display: block; }
+  .ladder .step .lab {
+    color: rgba(255,255,255,0.38); font-size: 10.5px; letter-spacing: 0.8px;
+    margin-top: 6px;
+  }
+  .s-256 { width: 192px; height: 192px; border-radius: 44px; }
+  .s-128 { width: 120px; height: 120px; border-radius: 28px; }
+  .s-72  { width: 72px;  height: 72px;  border-radius: 16px; }
+  .s-48  { width: 48px;  height: 48px;  border-radius: 11px; }
+  .s-24  { width: 24px;  height: 24px;  border-radius: 6px;  }
 
-  .desc { color: rgba(255,255,255,0.62); font-size: 13px; line-height: 1.5;
-          margin-top: 18px; min-height: 76px; }
-
-  /* Wallpaper pair — show on light + dark to check edge readability. */
-  .wallpapers { margin-top: 80px; max-width: 1240px; margin-left: auto; margin-right: auto; }
-  .wallpapers h2 { font-family: Georgia, serif; font-style: italic;
-                   font-size: 20px; font-weight: 400; margin-bottom: 18px; }
+  /* ---------- wallpaper pairs ---------- */
+  .wallpapers { margin: 0 0 64px 0; }
+  .wallpapers h3 {
+    font-family: Georgia, serif; font-style: italic; font-weight: 400;
+    font-size: 18px; margin: 0 0 16px 0; color: rgba(255,255,255,0.85);
+  }
   .wp-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 28px; }
   .wp { padding: 28px; border-radius: 18px; }
   .wp.light { background: linear-gradient(140deg, #d8d2c5, #b9a98e); }
-  .wp.dark  { background: #08080c; }
-  .wp h3 { font-size: 12px; letter-spacing: 1.4px; text-transform: uppercase;
+  .wp.dark  {
+    background:
+      radial-gradient(80% 60% at 30% 20%, rgba(120,140,255,0.06), transparent 60%),
+      radial-gradient(60% 50% at 80% 80%, rgba(255,140,100,0.05), transparent 60%),
+      #08080c;
+  }
+  .wp h4 { font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase;
            margin: 0 0 16px 0; opacity: 0.55; }
-  .wp.light h3 { color: #2a1f12; }
-  .wp.dark  h3 { color: #fff; }
-  .wp-icons { display: flex; gap: 18px; }
-  .wp-icon { width: 88px; height: 88px; border-radius: 20px; overflow: hidden;
-             box-shadow: 0 8px 22px rgba(0,0,0,0.35); }
+  .wp.light h4 { color: #2a1f12; }
+  .wp.dark  h4 { color: #fff; }
+  .wp-icons { display: flex; gap: 18px; align-items: center; }
+  .wp-icon { width: 96px; height: 96px; border-radius: 22px; overflow: hidden;
+             box-shadow: 0 8px 24px rgba(0,0,0,0.35); }
   .wp-icon img { width: 100%; height: 100%; display: block; }
+  .wp-label { color: inherit; opacity: 0.5; font-size: 11px;
+              letter-spacing: 0.8px; margin-left: 6px; }
+
+  /* ---------- Android adaptive demo ---------- */
+  .adaptive {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px;
+    margin-bottom: 64px;
+  }
+  .ad-card { background: #0e0e12; border-radius: 18px; padding: 22px;
+             box-shadow: 0 0 0 1px rgba(255,255,255,0.04); text-align: center; }
+  .ad-card .mask {
+    width: 168px; height: 168px; margin: 0 auto 14px auto;
+    overflow: hidden; position: relative; background: #000;
+    box-shadow: 0 12px 30px -12px rgba(0,0,0,0.7);
+  }
+  .ad-card .mask .layer { position: absolute; inset: 0; }
+  .ad-card .mask .layer img { width: 100%; height: 100%; display: block; }
+  .ad-card.circle  .mask { border-radius: 50%; }
+  .ad-card.squircle .mask { border-radius: 38px; }
+  .ad-card.round   .mask { border-radius: 24px; }
+  .ad-card.teardrop .mask { border-radius: 50% 50% 50% 12%; }
+  .ad-card .lab {
+    font-size: 10.5px; letter-spacing: 1.2px; text-transform: uppercase;
+    color: rgba(255,255,255,0.45);
+  }
+
+  /* ---------- v1 archive ---------- */
+  .archive { margin-top: 24px; }
+  .archive h3 {
+    font-family: Georgia, serif; font-style: italic; font-weight: 400;
+    font-size: 18px; margin: 0 0 6px 0; color: rgba(255,255,255,0.7);
+  }
+  .archive .sub2 { color: rgba(255,255,255,0.4); font-size: 13px; margin-bottom: 22px; }
+  .row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+  .card { background: #0c0c0f; border-radius: 16px; padding: 20px;
+          box-shadow: 0 0 0 1px rgba(255,255,255,0.04); }
+  .name { font-family: Georgia, serif; font-style: italic;
+          font-size: 15px; margin-bottom: 4px; opacity: 0.85; }
+  .tag  { color: rgba(255,255,255,0.35); font-size: 11px;
+          letter-spacing: 0.9px; text-transform: uppercase; margin-bottom: 14px; }
+  .archive .big {
+    width: 200px; height: 200px;
+    border-radius: 46px;
+    overflow: hidden;
+    margin: 0 auto;
+    background: #050507;
+    box-shadow: 0 12px 30px -14px rgba(0,0,0,0.7);
+  }
+  .archive .big img { width: 100%; height: 100%; display: block; }
 </style>
 </head>
 <body>
-  <h1>Parly — app icon concepts</h1>
-  <div class="sub">Three options grounded in the Dusk visual identity. Compared at icon-mask + 192/96/48 px sizes, and on light/dark home-screen backgrounds.</div>
+  <div class="container">
 
-  <div class="row">
+    <h1>Parly — app icon · v2.0</h1>
+    <div class="sub">One inevitable form. The Dusk identity, reduced to a single luminous body.</div>
 
-    <div class="card">
-      <div class="name">The Encounter</div>
-      <div class="tag">concept 1 · most brand-tied</div>
-      <div class="big"><img src="concept-1-encounter.svg" alt=""></div>
-      <div class="sizes">
-        <div class="sz-wrap"><div class="sz sz-192"><img src="concept-1-encounter.svg"></div><div class="sz-label">192</div></div>
-        <div class="sz-wrap"><div class="sz sz-96"><img src="concept-1-encounter.svg"></div><div class="sz-label">96</div></div>
-        <div class="sz-wrap"><div class="sz sz-48"><img src="concept-1-encounter.svg"></div><div class="sz-label">48</div></div>
-      </div>
-      <div class="desc">The phone-laid-flat metaphor in a square. Cool bloom rises from the top edge, warm bloom from the bottom, the dusk gradient owns the seam. Anyone who has used Parly will recognise this immediately.</div>
-    </div>
-
-    <div class="card">
-      <div class="name">Two Suns</div>
-      <div class="tag">concept 2 · most iconic</div>
-      <div class="big"><img src="concept-2-two-suns.svg" alt=""></div>
-      <div class="sizes">
-        <div class="sz-wrap"><div class="sz sz-192"><img src="concept-2-two-suns.svg"></div><div class="sz-label">192</div></div>
-        <div class="sz-wrap"><div class="sz sz-96"><img src="concept-2-two-suns.svg"></div><div class="sz-label">96</div></div>
-        <div class="sz-wrap"><div class="sz sz-48"><img src="concept-2-two-suns.svg"></div><div class="sz-label">48</div></div>
-      </div>
-      <div class="desc">Two glowing watercolour discs overlapping in a vesica piscis. Reads as "two-ness + encounter" instantly at every size. Drops the literal phone gradient so the silhouette pops harder.</div>
-    </div>
-
-    <div class="card">
-      <div class="name">The Mark</div>
-      <div class="tag">concept 3 · most refined</div>
-      <div class="big"><img src="concept-3-the-mark.svg" alt=""></div>
-      <div class="sizes">
-        <div class="sz-wrap"><div class="sz sz-192"><img src="concept-3-the-mark.svg"></div><div class="sz-label">192</div></div>
-        <div class="sz-wrap"><div class="sz sz-96"><img src="concept-3-the-mark.svg"></div><div class="sz-label">96</div></div>
-        <div class="sz-wrap"><div class="sz sz-48"><img src="concept-3-the-mark.svg"></div><div class="sz-label">48</div></div>
-      </div>
-      <div class="desc">A single concentrated bloom — warm and cool stains co-mingled. The icon IS the moment of translation, two voices fused into one luminous round. Most minimal; carries the brand's atmosphere into a tiny mark.</div>
-    </div>
-  </div>
-
-  <div class="wallpapers">
-    <h2>Edge readability — light vs dark home screens</h2>
-    <div class="wp-row">
-      <div class="wp light">
-        <h3>light wallpaper</h3>
-        <div class="wp-icons">
-          <div class="wp-icon"><img src="concept-1-encounter.svg"></div>
-          <div class="wp-icon"><img src="concept-2-two-suns.svg"></div>
-          <div class="wp-icon"><img src="concept-3-the-mark.svg"></div>
+    <!-- ============ HERO ============ -->
+    <section class="hero">
+      <div class="hero-icon"><img src="v2-sphere.svg" alt="Parly v2.0 — The Sphere"/></div>
+      <div class="hero-meta">
+        <div class="badge">v2.0 · The Sphere</div>
+        <h2>Two dusks,<br/>one body.</h2>
+        <p>Cool light pours from above. Warm light rises from below. They meet at a thin glowing equator — the moment a sentence crosses a language. One sphere, two natures, no decoration.</p>
+        <p>v1 scattered three blooms across the canvas. v2 binds them into a single, confident form with sphere-grade material — soft specular, a quiet rim, atmospheric scatter that you feel before you notice. The icon stops being a composition and starts being an object.</p>
+        <div class="principles">
+          <span>one form</span>
+          <span>warm/cool dusk</span>
+          <span>glass materiality</span>
+          <span>readable at 16 px</span>
+          <span>squircle-safe</span>
         </div>
       </div>
-      <div class="wp dark">
-        <h3>dark wallpaper</h3>
-        <div class="wp-icons">
-          <div class="wp-icon"><img src="concept-1-encounter.svg"></div>
-          <div class="wp-icon"><img src="concept-2-two-suns.svg"></div>
-          <div class="wp-icon"><img src="concept-3-the-mark.svg"></div>
+    </section>
+
+    <!-- ============ SIZE LADDER ============ -->
+    <section class="ladder">
+      <div class="step"><div class="frame s-256"><img src="v2-sphere.svg"/></div><div class="lab">256</div></div>
+      <div class="step"><div class="frame s-128"><img src="v2-sphere.svg"/></div><div class="lab">128</div></div>
+      <div class="step"><div class="frame s-72"><img src="v2-sphere.svg"/></div><div class="lab">72</div></div>
+      <div class="step"><div class="frame s-48"><img src="v2-sphere.svg"/></div><div class="lab">48</div></div>
+      <div class="step"><div class="frame s-24"><img src="v2-sphere.svg"/></div><div class="lab">24</div></div>
+    </section>
+
+    <!-- ============ WALLPAPER CHECK ============ -->
+    <section class="wallpapers">
+      <h3>Edge readability — light vs dark home screens</h3>
+      <div class="wp-row">
+        <div class="wp light">
+          <h4>light wallpaper</h4>
+          <div class="wp-icons">
+            <div class="wp-icon"><img src="v2-sphere.svg"/></div>
+            <span class="wp-label">v2.0 holds — the deep-dusk shell pulls the silhouette out of any background.</span>
+          </div>
+        </div>
+        <div class="wp dark">
+          <h4>dark wallpaper</h4>
+          <div class="wp-icons">
+            <div class="wp-icon"><img src="v2-sphere.svg"/></div>
+            <span class="wp-label">On dark, the orb's inner light becomes the icon — atmospheric, alive.</span>
+          </div>
         </div>
       </div>
-    </div>
+    </section>
+
+    <!-- ============ ADAPTIVE MASKS ============ -->
+    <section>
+      <h3 style="font-family:Georgia,serif;font-style:italic;font-weight:400;font-size:18px;margin:0 0 16px 0;color:rgba(255,255,255,0.85);">
+        Android adaptive — across launcher masks
+      </h3>
+      <div class="adaptive">
+        <div class="ad-card circle">
+          <div class="mask">
+            <div class="layer"><img src="v2-sphere-bg.svg"/></div>
+            <div class="layer"><img src="v2-sphere-fg.svg"/></div>
+          </div>
+          <div class="lab">Pixel · circle</div>
+        </div>
+        <div class="ad-card squircle">
+          <div class="mask">
+            <div class="layer"><img src="v2-sphere-bg.svg"/></div>
+            <div class="layer"><img src="v2-sphere-fg.svg"/></div>
+          </div>
+          <div class="lab">Material You · squircle</div>
+        </div>
+        <div class="ad-card round">
+          <div class="mask">
+            <div class="layer"><img src="v2-sphere-bg.svg"/></div>
+            <div class="layer"><img src="v2-sphere-fg.svg"/></div>
+          </div>
+          <div class="lab">Samsung · rounded</div>
+        </div>
+        <div class="ad-card teardrop">
+          <div class="mask">
+            <div class="layer"><img src="v2-sphere-bg.svg"/></div>
+            <div class="layer"><img src="v2-sphere-fg.svg"/></div>
+          </div>
+          <div class="lab">OEM · teardrop</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ V1 ARCHIVE ============ -->
+    <section class="archive">
+      <h3>For reference — v1 concepts</h3>
+      <div class="sub2">The three originals. Kept here as the conceptual ground v2.0 grew out of.</div>
+      <div class="row">
+        <div class="card">
+          <div class="name">The Encounter</div>
+          <div class="tag">v1 · most brand-tied</div>
+          <div class="big"><img src="concept-1-encounter.svg" alt=""></div>
+        </div>
+        <div class="card">
+          <div class="name">Two Suns</div>
+          <div class="tag">v1 · most iconic</div>
+          <div class="big"><img src="concept-2-two-suns.svg" alt=""></div>
+        </div>
+        <div class="card">
+          <div class="name">The Mark</div>
+          <div class="tag">v1 · most refined</div>
+          <div class="big"><img src="concept-3-the-mark.svg" alt=""></div>
+        </div>
+      </div>
+    </section>
+
   </div>
 </body>
 </html>

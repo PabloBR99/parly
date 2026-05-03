@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive-icon background — Parly Dusk gradient + asymmetric halos.
+  Replaces the legacy flat #050507 colour. Modern launchers (API 26+)
+  render this VectorDrawable behind the orb foreground. AARRGGBB hex
+  alphas: 29 ≈ 16%, 14 ≈ 8%, 08 ≈ 3%.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="1024"
+    android:viewportHeight="1024">
+
+    <path android:pathData="M0,0 L1024,0 L1024,1024 L0,1024 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="0" android:startY="0"
+                android:endX="0" android:endY="1024">
+                <item android:offset="0.0"  android:color="#FF161A30"/>
+                <item android:offset="0.36" android:color="#FF080A14"/>
+                <item android:offset="0.50" android:color="#FF040406"/>
+                <item android:offset="0.64" android:color="#FF080605"/>
+                <item android:offset="1.0"  android:color="#FF241208"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <path android:pathData="M0,0 L1024,0 L1024,1024 L0,1024 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="512" android:centerY="80"
+                android:gradientRadius="540">
+                <item android:offset="0.0"  android:color="#29A8B2FF"/>
+                <item android:offset="0.30" android:color="#147FD8C9"/>
+                <item android:offset="0.65" android:color="#089C8AE6"/>
+                <item android:offset="1.0"  android:color="#009C8AE6"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <path android:pathData="M0,0 L1024,0 L1024,1024 L0,1024 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="512" android:centerY="944"
+                android:gradientRadius="540">
+                <item android:offset="0.0"  android:color="#29FFB37A"/>
+                <item android:offset="0.30" android:color="#14FF8E76"/>
+                <item android:offset="0.65" android:color="#08E26F5C"/>
+                <item android:offset="1.0"  android:color="#00E26F5C"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

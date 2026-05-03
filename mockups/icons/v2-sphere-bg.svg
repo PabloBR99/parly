@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    Parly — App Icon v2.0 · "The Sphere" · background only.
+    Dusk gradient field + faint asymmetric halos (cool above, warm below)
+    for Android adaptive icon (ic_launcher_background).
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#161A30"/>
+      <stop offset="0.36" stop-color="#080A14"/>
+      <stop offset="0.50" stop-color="#040406"/>
+      <stop offset="0.64" stop-color="#080605"/>
+      <stop offset="1"    stop-color="#241208"/>
+    </linearGradient>
+    <radialGradient id="halo-cool" cx="512" cy="80" r="540" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#A8B2FF" stop-opacity="0.16"/>
+      <stop offset="0.30" stop-color="#7FD8C9" stop-opacity="0.08"/>
+      <stop offset="0.65" stop-color="#9C8AE6" stop-opacity="0.03"/>
+      <stop offset="1"    stop-color="#9C8AE6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="halo-warm" cx="512" cy="944" r="540" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#FFB37A" stop-opacity="0.16"/>
+      <stop offset="0.30" stop-color="#FF8E76" stop-opacity="0.08"/>
+      <stop offset="0.65" stop-color="#E26F5C" stop-opacity="0.03"/>
+      <stop offset="1"    stop-color="#E26F5C" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#halo-cool)"/>
+  <rect width="1024" height="1024" fill="url(#halo-warm)"/>
+</svg>

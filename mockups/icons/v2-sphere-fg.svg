@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    Parly — App Icon v2.0 · "The Sphere" · foreground only.
+
+    For Android adaptive icons (mipmap-anydpi-v26). Transparent background;
+    the dusk gradient lives in ic_launcher_background. Orb scaled down so
+    it sits inside the launcher's safe zone (~683 px square inside 1024).
+  -->
+  <defs>
+    <radialGradient id="shell" cx="512" cy="512" r="240" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#08080F"/>
+      <stop offset="0.92" stop-color="#020205"/>
+      <stop offset="1"    stop-color="#000000"/>
+    </radialGradient>
+
+    <radialGradient id="cool" cx="512" cy="284" r="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#D7DCFF" stop-opacity="0.92"/>
+      <stop offset="0.12" stop-color="#A8B2FF" stop-opacity="0.74"/>
+      <stop offset="0.30" stop-color="#7FD8C9" stop-opacity="0.46"/>
+      <stop offset="0.55" stop-color="#5A6BC8" stop-opacity="0.18"/>
+      <stop offset="1"    stop-color="#5A6BC8" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="warm" cx="512" cy="740" r="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#FFE2C2" stop-opacity="0.92"/>
+      <stop offset="0.12" stop-color="#FFB37A" stop-opacity="0.74"/>
+      <stop offset="0.30" stop-color="#FF8E76" stop-opacity="0.46"/>
+      <stop offset="0.55" stop-color="#B85138" stop-opacity="0.18"/>
+      <stop offset="1"    stop-color="#B85138" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="seam" x1="272" y1="0" x2="752" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#FFE7CC" stop-opacity="0"/>
+      <stop offset="0.20" stop-color="#FFE7CC" stop-opacity="0.55"/>
+      <stop offset="0.50" stop-color="#FFF1DC" stop-opacity="0.78"/>
+      <stop offset="0.80" stop-color="#FFE7CC" stop-opacity="0.55"/>
+      <stop offset="1"    stop-color="#FFE7CC" stop-opacity="0"/>
+    </linearGradient>
+
+    <radialGradient id="spec" cx="450" cy="406" r="108" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#FFFFFF" stop-opacity="0.40"/>
+      <stop offset="0.40" stop-color="#FFFFFF" stop-opacity="0.10"/>
+      <stop offset="1"    stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="rim" x1="0" y1="272" x2="0" y2="752" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#D7DCFF" stop-opacity="0.40"/>
+      <stop offset="0.50" stop-color="#FFFFFF" stop-opacity="0.08"/>
+      <stop offset="1"    stop-color="#FFE2C2" stop-opacity="0.40"/>
+    </linearGradient>
+
+    <clipPath id="orb">
+      <circle cx="512" cy="512" r="240"/>
+    </clipPath>
+
+    <filter id="seamBlur" x="-5%" y="-200%" width="110%" height="500%">
+      <feGaussianBlur stdDeviation="4"/>
+    </filter>
+  </defs>
+
+  <circle cx="512" cy="512" r="240" fill="url(#shell)"/>
+
+  <g clip-path="url(#orb)">
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#cool)"/>
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#warm)"/>
+    <ellipse cx="512" cy="512" rx="240" ry="10" fill="url(#seam)" filter="url(#seamBlur)"/>
+    <ellipse cx="450" cy="406" rx="106" ry="64" fill="url(#spec)"/>
+  </g>
+
+  <circle cx="512" cy="512" r="239" fill="none" stroke="url(#rim)" stroke-width="2.4"/>
+</svg>

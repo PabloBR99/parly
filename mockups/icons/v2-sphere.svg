@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    Parly — App Icon v2.0 · "The Sphere"
+
+    A single luminous orb. Cool dusk light pours from above, warm last-light
+    rises from below; they meet at a thin glowing equator — the Parly
+    moment. One body, two natures.
+
+    v2 condenses v1's three loose blooms into one inevitable form. Same
+    dusk palette and warm/cool DNA, now with sphere-grade materiality:
+    soft specular, cool/warm rim, asymmetric atmospheric halos that put
+    the orb in dusk air rather than on a flat backdrop. Reads as Parly
+    at 1024 px and survives down to a 16 px favicon.
+  -->
+  <defs>
+    <!-- Dusk backdrop: cool sky → warm earth, deeper than v1 so the orb sings -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#161A30"/>
+      <stop offset="0.36" stop-color="#080A14"/>
+      <stop offset="0.50" stop-color="#040406"/>
+      <stop offset="0.64" stop-color="#080605"/>
+      <stop offset="1"    stop-color="#241208"/>
+    </linearGradient>
+
+    <!-- Cool atmospheric halo above the orb -->
+    <radialGradient id="halo-cool" cx="512" cy="80" r="540" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#A8B2FF" stop-opacity="0.16"/>
+      <stop offset="0.30" stop-color="#7FD8C9" stop-opacity="0.08"/>
+      <stop offset="0.65" stop-color="#9C8AE6" stop-opacity="0.03"/>
+      <stop offset="1"    stop-color="#9C8AE6" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Warm atmospheric halo below the orb -->
+    <radialGradient id="halo-warm" cx="512" cy="944" r="540" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#FFB37A" stop-opacity="0.16"/>
+      <stop offset="0.30" stop-color="#FF8E76" stop-opacity="0.08"/>
+      <stop offset="0.65" stop-color="#E26F5C" stop-opacity="0.03"/>
+      <stop offset="1"    stop-color="#E26F5C" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Orb dark shell — gives the sphere mass and a defined silhouette -->
+    <radialGradient id="shell" cx="512" cy="512" r="332" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#08080F"/>
+      <stop offset="0.92" stop-color="#020205"/>
+      <stop offset="1"    stop-color="#000000"/>
+    </radialGradient>
+
+    <!-- Cool dome: light source above the orb, fades through the equator -->
+    <radialGradient id="cool" cx="512" cy="200" r="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#D7DCFF" stop-opacity="0.92"/>
+      <stop offset="0.12" stop-color="#A8B2FF" stop-opacity="0.74"/>
+      <stop offset="0.30" stop-color="#7FD8C9" stop-opacity="0.46"/>
+      <stop offset="0.55" stop-color="#5A6BC8" stop-opacity="0.18"/>
+      <stop offset="1"    stop-color="#5A6BC8" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Warm bowl: light source below the orb, fades through the equator -->
+    <radialGradient id="warm" cx="512" cy="824" r="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#FFE2C2" stop-opacity="0.92"/>
+      <stop offset="0.12" stop-color="#FFB37A" stop-opacity="0.74"/>
+      <stop offset="0.30" stop-color="#FF8E76" stop-opacity="0.46"/>
+      <stop offset="0.55" stop-color="#B85138" stop-opacity="0.18"/>
+      <stop offset="1"    stop-color="#B85138" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Equator seam: thin luminous band where the two dusks fuse -->
+    <linearGradient id="seam" x1="180" y1="0" x2="844" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#FFE7CC" stop-opacity="0"/>
+      <stop offset="0.20" stop-color="#FFE7CC" stop-opacity="0.55"/>
+      <stop offset="0.50" stop-color="#FFF1DC" stop-opacity="0.78"/>
+      <stop offset="0.80" stop-color="#FFE7CC" stop-opacity="0.55"/>
+      <stop offset="1"    stop-color="#FFE7CC" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- Specular highlight — small, upper-left, sells "this is glass" -->
+    <radialGradient id="spec" cx="425" cy="365" r="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#FFFFFF" stop-opacity="0.40"/>
+      <stop offset="0.40" stop-color="#FFFFFF" stop-opacity="0.10"/>
+      <stop offset="1"    stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Rim: cool at top of orb, warm at bottom — mirrors the inner light -->
+    <linearGradient id="rim" x1="0" y1="180" x2="0" y2="844" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#D7DCFF" stop-opacity="0.40"/>
+      <stop offset="0.50" stop-color="#FFFFFF" stop-opacity="0.08"/>
+      <stop offset="1"    stop-color="#FFE2C2" stop-opacity="0.40"/>
+    </linearGradient>
+
+    <clipPath id="orb">
+      <circle cx="512" cy="512" r="332"/>
+    </clipPath>
+
+    <filter id="seamBlur" x="-5%" y="-200%" width="110%" height="500%">
+      <feGaussianBlur stdDeviation="5"/>
+    </filter>
+  </defs>
+
+  <!-- Backdrop dusk -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Atmospheric dusk air around the orb -->
+  <rect width="1024" height="1024" fill="url(#halo-cool)"/>
+  <rect width="1024" height="1024" fill="url(#halo-warm)"/>
+
+  <!-- Orb mass -->
+  <circle cx="512" cy="512" r="332" fill="url(#shell)"/>
+
+  <!-- Inner light, clipped to the sphere -->
+  <g clip-path="url(#orb)">
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#cool)"/>
+    <rect x="0" y="0" width="1024" height="1024" fill="url(#warm)"/>
+    <!-- Equator seam — flat ellipse so it follows the sphere's curvature -->
+    <ellipse cx="512" cy="512" rx="332" ry="14" fill="url(#seam)" filter="url(#seamBlur)"/>
+    <!-- Specular -->
+    <ellipse cx="425" cy="365" rx="148" ry="88" fill="url(#spec)"/>
+  </g>
+
+  <!-- Cool/warm rim — replaces flat white edge ring -->
+  <circle cx="512" cy="512" r="331" fill="none" stroke="url(#rim)" stroke-width="3"/>
+</svg>
