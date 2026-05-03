@@ -3,7 +3,7 @@
 // are consistent across screens.
 
 import React from 'react';
-import { Text as RNText, type TextProps as RNTextProps, type StyleProp, type TextStyle } from 'react-native';
+import { Platform, Text as RNText, type TextProps as RNTextProps, type StyleProp, type TextStyle } from 'react-native';
 import { color, font } from '../theme';
 
 type Variant =
@@ -41,6 +41,10 @@ const toneToColor: Record<Tone, string> = {
   ok:      color.ok,
 };
 
+// Non-breaking space — appended to italic / letter-spaced text on Android.
+// See `trailingTailFor` for the rationale.
+const NBSP = '\u00A0';
+
 export function Text({
   variant = 'body',
   tone = 'fg',
@@ -49,44 +53,34 @@ export function Text({
   ...rest
 }: TextProps): React.JSX.Element {
   const variantStyle = font[variant];
-  // Android RN under-measures Text whose font has positive `letterSpacing`:
-  // the trailing letter's spacing is added to the layout box but not to the
-  // glyph clip, so the last character is cut off (`english` → `englis`,
-  // `listening` → `listenin`). Compensate with a tiny paddingEnd that
-  // matches the variant's letterSpacing so the clip rect always has room
-  // for the final glyph.
-  const trailingPad = variantTrailingPad(variantStyle);
+  // Android RN drops the trailing character of italic text and text with
+  // positive `letterSpacing` — Noto Serif italic at 10 pt renders
+  // "ENGLISH" as "ENGLIS", "listening" → "listenin". The canvas clip
+  // snaps to Paint's measured advance width, so the italic stem
+  // overhanging past the last advance (or the trailing letter-spacing
+  // tail) falls outside the draw rect. `paddingEnd` widens the layout
+  // box but not the inner draw rect, so it doesn't help. The reliable
+  // fix is to push the real last letter inward by appending an
+  // invisible non-breaking space — that character takes the cut spot
+  // instead of the visible glyph. Android-only because iOS computes
+  // glyph bounds correctly. NBSP (rather than a regular space) because
+  // Android's StaticLayout can elide trailing ASCII whitespace from
+  // `getLineMax`, which would defeat the fix.
+  const tail = trailingTailFor(variantStyle);
   return (
     <RNText
       {...rest}
-      style={[variantStyle, trailingPad, { color: toneToColor[tone] }, style]}>
+      style={[variantStyle, { color: toneToColor[tone] }, style]}>
       {children}
+      {tail}
     </RNText>
   );
 }
 
-function variantTrailingPad(
-  variantStyle: Record<string, unknown>,
-): { readonly paddingEnd: number } | undefined {
-  const ls = typeof variantStyle.letterSpacing === 'number' ? variantStyle.letterSpacing : 0;
+function trailingTailFor(variantStyle: Record<string, unknown>): string | null {
+  if (Platform.OS !== 'android') return null;
+  const ls = variantStyle.letterSpacing;
   const isItalic = variantStyle.fontStyle === 'italic';
-  // Skip only when there's no positive letter-spacing AND the text isn't
-  // italic — italic glyphs lean past their advance width even with
-  // neutral/negative tracking, so they always need room.
-  if (ls <= 0 && !isItalic) return undefined;
-  // Two distinct cuts to compensate for on Android RN:
-  //   1. trailing letter-spacing tail not included in the glyph clip
-  //      → ceil(letterSpacing) px
-  //   2. italic / serif glyphs overhang their advance width (italic
-  //      stems lean ~12°, capital serifs hang past the cap-line). The
-  //      canvas clip rect snaps to the advance, so we must pad to keep
-  //      the leaning bit visible. Italic needs more headroom than
-  //      upright — bumped to 25 % of fontSize after a regression where
-  //      "ENGLISH" rendered as "ENGLIS" on Noto Serif italic at 10 pt.
-  // Sum both, then add a 2 px cushion to absorb sub-pixel rounding on
-  // Android's hardware-accelerated text path.
-  const fs = typeof variantStyle.fontSize === 'number' ? variantStyle.fontSize : 14;
-  const overhang = Math.ceil(fs * (isItalic ? 0.25 : 0.15));
-  const lsTail = Math.ceil(Math.max(0, ls));
-  return { paddingEnd: lsTail + overhang + 2 };
+  const hasPositiveLs = typeof ls === 'number' && ls > 0;
+  return isItalic || hasPositiveLs ? NBSP : null;
 }
