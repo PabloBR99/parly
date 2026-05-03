@@ -25,11 +25,9 @@ interface SettingsState {
 
 interface SettingsActions {
   setPersonLanguage: (which: 'A' | 'B', language: string) => void;
-  setPersonDisplayName: (which: 'A' | 'B', displayName: string) => void;
   setMistralApiKey: (key: string) => void;
   setTranslationModel: (model: TranslationModelId) => void;
   setLanguagePairConfigured: (v: boolean) => void;
-  resetLanguagePair: () => void;
 }
 
 const initialState: SettingsState = {
@@ -51,25 +49,10 @@ export const useSettingsStore = create<SettingsState & SettingsActions>(set => (
       },
     })),
 
-  setPersonDisplayName: (which, displayName) =>
-    set(state => ({
-      [which === 'A' ? 'personA' : 'personB']: {
-        ...(which === 'A' ? state.personA : state.personB),
-        displayName,
-      },
-    })),
-
   setMistralApiKey: key => set({ mistralApiKey: key }),
 
   setTranslationModel: translationModel => set({ translationModel }),
 
   setLanguagePairConfigured: languagePairConfigured =>
     set({ languagePairConfigured }),
-
-  resetLanguagePair: () =>
-    set({
-      personA: { ...initialState.personA },
-      personB: { ...initialState.personB },
-      languagePairConfigured: false,
-    }),
 }));

@@ -188,15 +188,6 @@ class NativeTTSService {
     });
   }
 
-  /**
-   * Backward-compatible alias for the previous one-shot speak() callers.
-   * Same as speakChunk() — keeps the existing imports happy until they
-   * migrate.
-   */
-  async speak(text: string, language: string): Promise<void> {
-    return this.speakChunk(text, language);
-  }
-
   /** Stop the current utterance AND clear the native queue. */
   stop(): void {
     Tts.stop();

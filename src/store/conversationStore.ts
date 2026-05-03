@@ -30,7 +30,6 @@ interface ConversationActions {
   startTurn: (turn: Turn) => void;
   updateTurn: (id: string, patch: Partial<Turn>) => void;
   endTurn: (id: string, finalPatch?: Partial<Turn>) => void;
-  setActiveTurn: (id: string | null) => void;
   clear: () => void;
 }
 
@@ -53,8 +52,6 @@ export const useConversationStore = create<ConversationState & ConversationActio
       ),
       activeTurnId: state.activeTurnId === id ? null : state.activeTurnId,
     })),
-
-  setActiveTurn: activeTurnId => set({ activeTurnId }),
 
   clear: () => set({ turns: [], activeTurnId: null }),
 }));

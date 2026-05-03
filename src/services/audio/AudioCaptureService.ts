@@ -30,6 +30,7 @@ export class AudioCaptureService {
   private recording = false;
   private initialized = false;
   private streaming = false;
+  private dataSubscription: { remove(): void } | null = null;
 
   private init(): void {
     if (this.initialized) return;
@@ -89,7 +90,7 @@ export class AudioCaptureService {
   startStreaming(onData: (base64Pcm: string) => void): void {
     if (this.recording || this.streaming) return;
     this.init();
-    AudioRecord.on('data', onData);
+    this.dataSubscription = AudioRecord.on('data', onData) as unknown as { remove(): void };
     this.streaming = true;
     this.recording = true;
     AudioRecord.start();
@@ -101,6 +102,8 @@ export class AudioCaptureService {
     this.streaming = false;
     this.recording = false;
     await AudioRecord.stop();
+    this.dataSubscription?.remove();
+    this.dataSubscription = null;
   }
 
   get isRecording(): boolean {

@@ -26,6 +26,8 @@
 //   issues). The XHR path uses `responseText` slicing — every readyState=3 or
 //   progress event yields the new bytes since last invocation.
 
+import { getLanguage } from '../../app/languages';
+
 const ENDPOINT = 'https://api.mistral.ai/v1/chat/completions';
 const DEFAULT_MODEL = 'mistral-small-latest';
 const MIN_CHUNK_LEN = 15;
@@ -39,18 +41,8 @@ const MIN_CHUNK_LEN = 15;
 //   3) Any newline run — always a hard break.
 const SENTENCE_RE = /[。！？]+|[.!?…؟।]+\s+|\n+/g;
 
-const LANG_NAMES: Record<string, string> = {
-  en: 'English', es: 'Spanish', fr: 'French', de: 'German', it: 'Italian',
-  pt: 'Portuguese', nl: 'Dutch', ru: 'Russian', uk: 'Ukrainian', pl: 'Polish',
-  cs: 'Czech', el: 'Greek', tr: 'Turkish', ar: 'Arabic', he: 'Hebrew',
-  fa: 'Persian', hi: 'Hindi', bn: 'Bengali', ur: 'Urdu', zh: 'Chinese',
-  ja: 'Japanese', ko: 'Korean', vi: 'Vietnamese', th: 'Thai', id: 'Indonesian',
-  sv: 'Swedish', no: 'Norwegian', da: 'Danish', fi: 'Finnish', ro: 'Romanian',
-  hu: 'Hungarian', sw: 'Swahili',
-};
-
 function languageName(code: string): string {
-  return LANG_NAMES[code.toLowerCase()] ?? code.toUpperCase();
+  return getLanguage(code.toLowerCase()).name;
 }
 
 function buildSystemPrompt(srcCode: string, tgtCode: string): string {
@@ -206,7 +198,7 @@ const defaultFetcher: StreamingFetcher = {
         signal.addEventListener('abort', () => {
           xhr.abort();
           reject(new DOMException('aborted', 'AbortError'));
-        });
+        }, { once: true });
       }
       xhr.send(body);
     });

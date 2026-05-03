@@ -125,6 +125,7 @@ export class ConversationOrchestrator {
   private config: OrchestratorConfig | null = null;
   private translatedAccumulator = '';
   private ttsChunkPromises: Promise<void>[] = [];
+  private translationAbort: AbortController | null = null;
   /** Resolved by handleTranscriptionFinal once the turn fully completes. */
   private turnCompletionPromise: Promise<void> | null = null;
   private resolveTurnCompletion: (() => void) | null = null;
@@ -271,6 +272,7 @@ export class ConversationOrchestrator {
   async cancelTurn(): Promise<void> {
     if (this.state === 'idle') return;
     const turnId = this.activeTurnId;
+    try { this.translationAbort?.abort(); } catch { /* noop */ }
     try {
       await this.deps.audioCapture.stopStreaming().catch(() => {});
     } catch { /* noop */ }
@@ -317,9 +319,13 @@ export class ConversationOrchestrator {
     store.updateTurn(turnId, { sourceText: trimmed, stage: 'translating' });
     this.state = 'translating';
 
+    const abort = new AbortController();
+    this.translationAbort = abort;
+
     let translationFailed = false;
 
     await this.deps.translator.translateStream({
+      signal: abort.signal,
       apiKey: cfg.apiKey,
       sourceText: trimmed,
       sourceLang: args.sourceLang,
@@ -391,6 +397,7 @@ export class ConversationOrchestrator {
     const store = (this.deps.conversationStore ?? useConversationStore).getState();
     store.endTurn(turnId, { stage: 'error', errorMessage: message });
     // Tear down anything in-flight.
+    try { this.translationAbort?.abort(); } catch { /* noop */ }
     try { this.deps.tts.stop(); } catch { /* noop */ }
     this.completeTurn(turnId);
   }
@@ -402,6 +409,7 @@ export class ConversationOrchestrator {
     this.currentArgs = null;
     this.translatedAccumulator = '';
     this.ttsChunkPromises = [];
+    this.translationAbort = null;
     const resolve = this.resolveTurnCompletion;
     this.resolveTurnCompletion = null;
     this.turnCompletionPromise = null;

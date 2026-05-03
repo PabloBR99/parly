@@ -4,6 +4,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { LanguagePairScreen } from './screens/LanguagePairScreen';
 import { ConversationScreen } from './screens/ConversationScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
@@ -53,6 +54,7 @@ export default function App(): React.JSX.Element {
   }, []);
 
   return (
+    <ErrorBoundary>
     <GestureHandlerRootView style={gestureRootStyle}>
       <SafeAreaProvider>
         <StatusBar barStyle="light-content" backgroundColor={color.bg} />
@@ -99,6 +101,7 @@ export default function App(): React.JSX.Element {
         </NavigationContainer>
       </SafeAreaProvider>
     </GestureHandlerRootView>
+    </ErrorBoundary>
   );
 }
 
