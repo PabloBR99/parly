@@ -53,6 +53,9 @@ interface BloomProps {
   readonly active: boolean;
   /** Disabled fades stains to a near-invisible whisper. */
   readonly disabled: boolean;
+  /** Multiplier [0-1] applied to final opacity. Used in HF mode to dim the
+   *  bloom (0.30 for hf-idle, 0.60 for hf-target-speaking). Default 1.0. */
+  readonly intensity?: number;
 }
 
 // Stain offsets — kept small so the three blobs cluster *tightly* around
@@ -98,12 +101,13 @@ const ALPHAS = {
   cool: { top: 0.56, mid: 0.50, deep: 0.44 },
 } as const;
 
-export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.Element {
+export function Bloom({ side, size, active, disabled, intensity = 1 }: BloomProps): React.JSX.Element {
   const breathTop  = useSharedValue(0);
   const breathMid  = useSharedValue(0);
   const breathDeep = useSharedValue(0);
   const activeBoost  = useSharedValue(0);
   const disabledFade = useSharedValue(0);
+  const intensityVal = useSharedValue(intensity);
 
   useEffect(() => {
     breathTop.value = withRepeat(
@@ -133,6 +137,10 @@ export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.E
     disabledFade.value = withTiming(disabled ? 1 : 0, { duration: motion.normal });
   }, [disabled, disabledFade]);
 
+  useEffect(() => {
+    intensityVal.value = withTiming(intensity, { duration: motion.normal });
+  }, [intensity, intensityVal]);
+
   // Per-stain animated styles. Reanimated 4's Babel plugin does NOT
   // auto-promote module-scope arrow helpers to worklets, so the math is
   // inlined here in each style. Calling a non-worklet from inside a
@@ -147,11 +155,9 @@ export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.E
     const scale = (0.97 + 0.05 * t) + 0.04 * activeBoost.value;
     const dx = TOP_OFFSET.x + (-0.5 + 1.0 * t);
     const dy = TOP_OFFSET.y + (-0.5 + 1.0 * t);
-    // Opacity drift 0.92→1.00 (drift 0.08) — gentle. Active adds 0.04
-    // so an active bloom is just-perceptibly fuller-bodied.
     const baseOpacity = 0.92 + 0.08 * t;
     const boosted = baseOpacity + 0.04 * activeBoost.value;
-    const faded = boosted * (1 - disabledFade.value) + 0.05 * disabledFade.value;
+    const faded = (boosted * (1 - disabledFade.value) + 0.05 * disabledFade.value) * intensityVal.value;
     return {
       opacity: faded,
       transform: [
@@ -169,7 +175,7 @@ export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.E
     const dy = MID_OFFSET.y + (0.5 - 1.0 * t);
     const baseOpacity = 0.92 + 0.08 * t;
     const boosted = baseOpacity + 0.04 * activeBoost.value;
-    const faded = boosted * (1 - disabledFade.value) + 0.05 * disabledFade.value;
+    const faded = (boosted * (1 - disabledFade.value) + 0.05 * disabledFade.value) * intensityVal.value;
     return {
       opacity: faded,
       transform: [
@@ -187,7 +193,7 @@ export function Bloom({ side, size, active, disabled }: BloomProps): React.JSX.E
     const dy = DEEP_OFFSET.y + (0.5 - 1.0 * t);
     const baseOpacity = 0.92 + 0.08 * t;
     const boosted = baseOpacity + 0.04 * activeBoost.value;
-    const faded = boosted * (1 - disabledFade.value) + 0.05 * disabledFade.value;
+    const faded = (boosted * (1 - disabledFade.value) + 0.05 * disabledFade.value) * intensityVal.value;
     return {
       opacity: faded,
       transform: [

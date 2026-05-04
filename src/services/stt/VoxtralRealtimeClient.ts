@@ -11,13 +11,21 @@
 //   session.created            — must arrive before we send audio
 //   transcription.text.delta   — incremental partial text (payload.text)
 //   transcription.done         — final result (payload.text)
+//   transcription.language     — language detected (payload.language)
+//   transcription.segment      — emitted but ignored today
 //   error                      — fatal; payload.error.{message,code}
 //
 // Client → server messages:
-//   session.update             — optional audio_format override
+//   session.update             — optional audio_format + delay config
 //   input_audio.append         — base64 PCM chunk, any size
 //   input_audio.flush          — force transcription of buffered audio
 //   input_audio.end            — signal end-of-utterance
+//
+// Session mode (hands-free):
+//   When sessionMode=true, a single WS survives multiple utterances.
+//   After each transcription.done the connection stays open; callers use
+//   flushUtterance() to request a transcript for the latest speech segment
+//   and endSession() to close the connection gracefully.
 //
 // Notes on React Native WebSocket:
 //   - Third argument to `new WebSocket(url, protocols, options)` supports
@@ -32,13 +40,15 @@ const ENDPOINT = 'wss://api.mistral.ai/v1/audio/transcriptions/realtime';
 const DEFAULT_MODEL = 'voxtral-mini-transcribe-realtime-2602';
 const SAMPLE_RATE = 16_000;
 const HANDSHAKE_TIMEOUT_MS = 8_000;
+export const TARGET_STREAMING_DELAY_MS = 480; // sweet-spot from Voxtral docs
 
 export type StreamingState = 'idle' | 'connecting' | 'streaming' | 'ending' | 'closed';
 
 export interface StreamingCallbacks {
   /** Fires with the current partial transcript as text-deltas arrive. */
   readonly onPartial: (partialText: string) => void;
-  /** Fires once with the final transcript. Service is closed after. */
+  /** Fires once with the final transcript. In PTT mode the service is closed
+   *  after; in session mode the connection stays open. */
   readonly onFinal: (finalText: string, language?: string) => void;
   /** Fatal error — service is closed. */
   readonly onError: (error: Error) => void;
@@ -48,6 +58,8 @@ export interface StreamingStartOptions {
   readonly apiKey: string;
   readonly speakerId?: PersonId; // purely for UI routing in the partial store
   readonly model?: string;
+  /** Keep the WS open across multiple utterances (hands-free mode). */
+  readonly sessionMode?: boolean;
 }
 
 /**
@@ -86,6 +98,7 @@ export class VoxtralRealtimeClient {
   private accumulatedText = '';
   private detectedLanguage: string | undefined;
   private sessionReady = false;
+  private sessionMode = false;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
   /** Captured so end()/cancel() can reject a pending start() during the
    *  'connecting' phase. Without this, an early abort calls cleanup() and
@@ -95,6 +108,11 @@ export class VoxtralRealtimeClient {
   /** Chunks fed before session.created — drained once the session is ready. */
   private preSessionChunkQueue: string[] = [];
   private generation = 0;
+
+  // Session-mode flush resolution (one pending flush at a time).
+  private flushResolve: ((result: { text: string; language?: string }) => void) | null = null;
+  private flushReject: ((err: Error) => void) | null = null;
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly wsFactory: WebSocketFactory = defaultWsFactory) {}
 
@@ -118,16 +136,14 @@ export class VoxtralRealtimeClient {
     this.accumulatedText = '';
     this.detectedLanguage = undefined;
     this.sessionReady = false;
+    this.sessionMode = options.sessionMode ?? false;
     this.preSessionChunkQueue = [];
 
     const model = options.model ?? DEFAULT_MODEL;
     const url = `${ENDPOINT}?model=${encodeURIComponent(model)}`;
     const headers = { Authorization: `Bearer ${options.apiKey}` };
 
-    log.info(
-      `[voxtral] connecting model=${model} ` +
-      `keyLen=${options.apiKey.length} keyHead=${options.apiKey.slice(0, 4)}…`,
-    );
+    log.info(`[voxtral] connecting model=${model} sessionMode=${this.sessionMode}`);
 
     let ws: WebSocketLike;
     try {
@@ -161,12 +177,16 @@ export class VoxtralRealtimeClient {
       ws.onopen = () => {
         if (gen !== this.generation) return;
         log.info('[voxtral] onopen — sending session.update');
-        // Voxtral's session schema only accepts audio_format (extra fields are
-        // rejected with Pydantic extra_forbidden). Language is auto-detected
-        // server-side; there's no documented hint parameter.
-        const session = {
+        // Voxtral's session schema only accepts audio_format (and optional
+        // target_streaming_delay_ms). Extra fields are rejected with Pydantic
+        // extra_forbidden, so we only include the delay in session mode where
+        // the lower latency matters most.
+        const session: Record<string, unknown> = {
           audio_format: { encoding: 'pcm_s16le', sample_rate: SAMPLE_RATE },
         };
+        if (this.sessionMode) {
+          session.target_streaming_delay_ms = TARGET_STREAMING_DELAY_MS;
+        }
         try {
           ws.send(JSON.stringify({ type: 'session.update', session }));
         } catch (e) {
@@ -211,12 +231,31 @@ export class VoxtralRealtimeClient {
           return;
         }
 
+        if (parsed.type === 'transcription.segment') {
+          // Emitted by Voxtral in streaming mode. Not used today.
+          return;
+        }
+
         if (parsed.type === 'transcription.done') {
           const finalText = typeof parsed.text === 'string'
             ? parsed.text
             : this.accumulatedText;
           this.callbacks?.onFinal(finalText, this.detectedLanguage);
-          this.cleanup();
+
+          if (this.sessionMode) {
+            // Resolve any pending flushUtterance().
+            const resolve = this.flushResolve;
+            const flushedLang = this.detectedLanguage;
+            if (resolve) {
+              this.clearFlushPending();
+              resolve({ text: finalText, language: flushedLang });
+            }
+            // Reset accumulator for the next utterance — keep WS open.
+            this.accumulatedText = '';
+            this.detectedLanguage = undefined;
+          } else {
+            this.cleanup();
+          }
           return;
         }
 
@@ -281,6 +320,7 @@ export class VoxtralRealtimeClient {
   /**
    * Signal end-of-utterance. Resolves when transcription.done arrives (or on
    * timeout/error). The onFinal callback fires before this resolves.
+   * Only valid in PTT mode (non-session). In session mode, use flushUtterance().
    */
   async end(finalTimeoutMs = 5_000): Promise<void> {
     if (this.state === 'connecting') {
@@ -326,6 +366,52 @@ export class VoxtralRealtimeClient {
     });
   }
 
+  /**
+   * Session-mode only: send input_audio.flush and resolve with the next
+   * transcription.done. The WS stays open for the next utterance.
+   * Rejects if transcription.done doesn't arrive within timeoutMs.
+   */
+  async flushUtterance(timeoutMs = 3_000): Promise<{ text: string; language?: string }> {
+    if (this.state !== 'streaming') {
+      throw new Error(`flushUtterance called in state ${this.state}`);
+    }
+    if (!this.sessionMode) {
+      throw new Error('flushUtterance requires sessionMode=true');
+    }
+    if (this.flushResolve) {
+      throw new Error('flushUtterance already in progress');
+    }
+
+    return new Promise<{ text: string; language?: string }>((resolve, reject) => {
+      this.flushResolve = resolve;
+      this.flushReject = reject;
+      this.flushTimer = setTimeout(() => {
+        this.clearFlushPending();
+        reject(new Error(`flushUtterance timeout after ${timeoutMs} ms`));
+      }, timeoutMs);
+
+      try {
+        this.ws?.send(JSON.stringify({ type: 'input_audio.flush' }));
+      } catch (e) {
+        this.clearFlushPending();
+        reject(new Error(`Failed to send flush: ${String(e)}`));
+      }
+    });
+  }
+
+  /**
+   * Session-mode only: send input_audio.end and close the WebSocket.
+   * Use this instead of end() to terminate a session-mode connection.
+   */
+  async endSession(): Promise<void> {
+    if (this.state === 'idle' || this.state === 'closed') return;
+    this.state = 'ending';
+    try {
+      this.ws?.send(JSON.stringify({ type: 'input_audio.end' }));
+    } catch { /* ignore — we're closing anyway */ }
+    this.cleanup();
+  }
+
   /** Abort without waiting for final. No onFinal fired. */
   cancel(): void {
     if (this.state === 'idle' || this.state === 'closed') return;
@@ -361,6 +447,15 @@ export class VoxtralRealtimeClient {
     return null;
   }
 
+  private clearFlushPending(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.flushResolve = null;
+    this.flushReject = null;
+  }
+
   private cleanup(): void {
     this.generation++;
     if (this.handshakeTimer) {
@@ -368,6 +463,11 @@ export class VoxtralRealtimeClient {
       this.handshakeTimer = null;
     }
     this.handshakeReject = null;
+    // Reject any pending flushUtterance.
+    const flushReject = this.flushReject;
+    this.clearFlushPending();
+    flushReject?.(new Error('VoxtralRealtimeClient closed'));
+
     if (this.ws) {
       this.ws.onopen = null;
       this.ws.onmessage = null;
@@ -379,6 +479,7 @@ export class VoxtralRealtimeClient {
     this.state = 'closed';
     this.callbacks = null;
     this.preSessionChunkQueue = [];
+    this.sessionMode = false;
   }
 }
 

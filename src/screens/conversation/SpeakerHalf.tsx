@@ -10,6 +10,8 @@ import Animated, {
 } from 'react-native-reanimated';
 import LinearGradient from 'react-native-linear-gradient';
 import type { Turn, TurnStage } from '../../store/conversationStore';
+import { useConversationStore } from '../../store/conversationStore';
+import type { PersonId } from '../../app/types';
 import { getLanguage } from '../../app/languages';
 import { stageMicrocopy } from './helpers';
 import {
@@ -20,6 +22,7 @@ import {
   motion,
   space,
 } from '../../ui';
+import type { DiscMode } from '../../ui/primitives/PTTButton';
 
 // ── SourceLine ──────────────────────────────────────────────────────────────
 
@@ -39,6 +42,7 @@ function SourceLine({ label, text }: { readonly label: string; readonly text: st
 // ── SpeakerHalf ─────────────────────────────────────────────────────────────
 
 export interface SpeakerHalfProps {
+  readonly speakerId: PersonId;
   readonly speakerLanguage: string;
   readonly partnerLanguage: string;
   readonly activeTurn: Turn | null;
@@ -49,12 +53,17 @@ export interface SpeakerHalfProps {
   readonly edgeContent: React.ReactNode;
   readonly disabled: boolean;
   readonly firstRun: boolean;
+  /** Show the HF welcome card ("Just speak. Tap any disc to exit."). */
+  readonly firstHfRun?: boolean;
   readonly onPressIn: () => void;
   readonly onPressOut: () => void;
+  /** Fired on a single tap in HF mode — typically exits hands-free. */
+  readonly onTap?: () => void;
   readonly onChangeLanguage: () => void;
 }
 
 export function SpeakerHalf({
+  speakerId,
   speakerLanguage,
   partnerLanguage,
   activeTurn,
@@ -65,12 +74,47 @@ export function SpeakerHalf({
   edgeContent,
   disabled,
   firstRun,
+  firstHfRun = false,
   onPressIn,
   onPressOut,
+  onTap,
   onChangeLanguage,
 }: SpeakerHalfProps): React.JSX.Element {
   const speakerLang = getLanguage(speakerLanguage);
   const partnerLang = getLanguage(partnerLanguage);
+
+  const conversationMode = useConversationStore(s => s.mode);
+  const hfActiveSpeaker = useConversationStore(s => s.hfActiveSpeaker);
+  const hfUnroutedSpeaker = useConversationStore(s => s.hfUnroutedSpeaker);
+
+  // Derive disc mode from conversation mode + HF state.
+  const discMode: DiscMode = (() => {
+    if (conversationMode === 'ptt') {
+      return activeTurn !== null
+        ? { kind: 'ptt-active' }
+        : { kind: 'ptt-idle' };
+    }
+    // HF mode:
+    if (hfActiveSpeaker === speakerId) {
+      return { kind: 'hf-source-active' };
+    }
+    if (hfActiveSpeaker !== null) {
+      return { kind: 'hf-target-speaking' };
+    }
+    return { kind: 'hf-idle' };
+  })();
+
+  // Bloom dims to 15% for 600ms on unrouted utterance from this side.
+  const unroutedFade = useSharedValue(1);
+  useEffect(() => {
+    if (hfUnroutedSpeaker === speakerId) {
+      unroutedFade.value = withTiming(0.15, { duration: 80 });
+      const t = setTimeout(() => {
+        unroutedFade.value = withTiming(1, { duration: 520 });
+      }, 80);
+      return () => clearTimeout(t);
+    }
+  }, [hfUnroutedSpeaker, speakerId, unroutedFade]);
 
   const incomingText = incomingTurn?.translatedText ?? '';
   const incomingStage = incomingTurn?.stage ?? null;
@@ -96,16 +140,10 @@ export function SpeakerHalf({
   const viewH = useSharedValue(0);
 
   const scrollHandler = useAnimatedScrollHandler({
-    onScroll: (e) => {
-      scrollY.value = e.contentOffset.y;
-    },
+    onScroll: (e) => { scrollY.value = e.contentOffset.y; },
   });
-  const onContentSizeChange = (_w: number, h: number) => {
-    contentH.value = h;
-  };
-  const onScrollViewLayout = (e: LayoutChangeEvent) => {
-    viewH.value = e.nativeEvent.layout.height;
-  };
+  const onContentSizeChange = (_w: number, h: number) => { contentH.value = h; };
+  const onScrollViewLayout = (e: LayoutChangeEvent) => { viewH.value = e.nativeEvent.layout.height; };
 
   const topFadeStyle = useAnimatedStyle(() => {
     if (contentH.value <= viewH.value + 1) return { opacity: 0 };
@@ -146,7 +184,7 @@ export function SpeakerHalf({
               {incomingText}
             </Animated.Text>
           )}
-          {!hasIncomingText && firstRun && !activeTurn && (
+          {!hasIncomingText && firstRun && !activeTurn && !firstHfRun && (
             <View style={styles.welcome}>
               <Text variant="serifHero" tone="fgFaint" style={styles.welcomeHeadline}>
                 Press and hold to speak.
@@ -164,23 +202,29 @@ export function SpeakerHalf({
               </View>
             </View>
           )}
+          {!hasIncomingText && firstHfRun && !activeTurn && (
+            <View style={styles.welcome}>
+              <Text variant="serifHero" tone="fgFaint" style={styles.welcomeHeadline}>
+                Just speak.
+              </Text>
+              <Text variant="serifTiny" tone="fgGhost" style={styles.welcomeHfHint}>
+                Tap any disc to exit.
+              </Text>
+            </View>
+          )}
           {incomingTurn?.stage === 'error' && (
             <Text variant="bodySmall" tone="error" style={styles.errorText}>
               ⚠  {incomingTurn.errorMessage ?? 'Translation error'}
             </Text>
           )}
         </Animated.ScrollView>
-        <Animated.View
-          style={[styles.fadeTop, topFadeStyle]}
-          pointerEvents="none">
+        <Animated.View style={[styles.fadeTop, topFadeStyle]} pointerEvents="none">
           <LinearGradient
             colors={['rgba(0,0,0,0.55)', 'transparent']}
             style={styles.fadeGradient}
           />
         </Animated.View>
-        <Animated.View
-          style={[styles.fadeBottom, bottomFadeStyle]}
-          pointerEvents="none">
+        <Animated.View style={[styles.fadeBottom, bottomFadeStyle]} pointerEvents="none">
           <LinearGradient
             colors={['transparent', 'rgba(0,0,0,0.55)']}
             style={styles.fadeGradient}
@@ -228,8 +272,10 @@ export function SpeakerHalf({
           accentRing={accentRing}
           active={activeTurn !== null}
           disabled={disabled}
+          mode={discMode}
           onPressIn={onPressIn}
           onPressOut={onPressOut}
+          onTap={onTap}
         />
       </View>
 
@@ -365,6 +411,9 @@ const styles = StyleSheet.create({
   welcomeFlowArrow: {
     marginHorizontal: space.sm,
     letterSpacing: 1,
+  },
+  welcomeHfHint: {
+    marginTop: space.sm,
   },
 
   buttonSlot: {

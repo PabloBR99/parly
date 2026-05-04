@@ -7,6 +7,8 @@ import { audioCaptureService } from '../audio/AudioCaptureService';
 import { mistralTranslator } from '../translation/MistralTranslator';
 import { nativeTTSService } from '../tts/NativeTTSService';
 import { VoxtralRealtimeClient } from '../stt/VoxtralRealtimeClient';
+import { SileroVadService } from '../vad/SileroVadService';
+import { HANDS_FREE_ENABLED } from '../../app/featureFlags';
 
 let instance: ConversationOrchestrator | null = null;
 
@@ -17,6 +19,7 @@ export function getOrchestrator(): ConversationOrchestrator {
       voxtral: new VoxtralRealtimeClient(),
       translator: mistralTranslator,
       tts: nativeTTSService,
+      vad: HANDS_FREE_ENABLED ? new SileroVadService() : undefined,
     });
   }
   return instance;

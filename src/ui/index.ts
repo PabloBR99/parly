@@ -13,3 +13,4 @@ export { Waveform } from './animations/Waveform';
 export { StateMorph } from './animations/StateMorph';
 export { DuskBackdrop } from './animations/DuskBackdrop';
 export { Bloom } from './animations/Bloom';
+export { SeamShimmer } from './animations/SeamShimmer';

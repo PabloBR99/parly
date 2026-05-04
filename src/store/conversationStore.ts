@@ -24,6 +24,12 @@ export interface Turn {
 interface ConversationState {
   readonly turns: readonly Turn[];
   readonly activeTurnId: string | null;
+  /** 'ptt' = push-to-talk (default); 'hf' = hands-free continuous mode. */
+  readonly mode: 'ptt' | 'hf';
+  /** Which speaker is currently the source of an HF turn being routed. */
+  readonly hfActiveSpeaker: PersonId | null;
+  /** Flashes briefly when an utterance was not routable (lang ∉ pair). */
+  readonly hfUnroutedSpeaker: PersonId | null;
 }
 
 interface ConversationActions {
@@ -31,11 +37,17 @@ interface ConversationActions {
   updateTurn: (id: string, patch: Partial<Turn>) => void;
   endTurn: (id: string, finalPatch?: Partial<Turn>) => void;
   clear: () => void;
+  setMode: (mode: 'ptt' | 'hf') => void;
+  setHfActiveSpeaker: (id: PersonId | null) => void;
+  setHfUnroutedSpeaker: (id: PersonId | null) => void;
 }
 
 export const useConversationStore = create<ConversationState & ConversationActions>(set => ({
   turns: [],
   activeTurnId: null,
+  mode: 'ptt',
+  hfActiveSpeaker: null,
+  hfUnroutedSpeaker: null,
 
   startTurn: turn =>
     set(state => ({ turns: [...state.turns, turn], activeTurnId: turn.id })),
@@ -54,4 +66,10 @@ export const useConversationStore = create<ConversationState & ConversationActio
     })),
 
   clear: () => set({ turns: [], activeTurnId: null }),
+
+  setMode: mode => set({ mode }),
+
+  setHfActiveSpeaker: id => set({ hfActiveSpeaker: id }),
+
+  setHfUnroutedSpeaker: id => set({ hfUnroutedSpeaker: id }),
 }));
