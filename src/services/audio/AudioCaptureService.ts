@@ -1,5 +1,6 @@
 import { Platform, PermissionsAndroid } from 'react-native';
 import { DocumentDirectoryPath } from '@dr.pogodin/react-native-fs';
+import { log } from '../log/logStore';
 
 // react-native-audio-record: records raw PCM and saves to a WAV file
 // Docs: https://github.com/goodatlas/react-native-audio-record
@@ -88,12 +89,16 @@ export class AudioCaptureService {
 
   /** Start continuous capture, forwarding base64 PCM chunks via callback. */
   startStreaming(onData: (base64Pcm: string) => void): void {
-    if (this.recording || this.streaming) return;
+    if (this.recording || this.streaming) {
+      log.warn(`[audio] startStreaming blocked — recording=${this.recording} streaming=${this.streaming}`);
+      return;
+    }
     this.init();
     this.dataSubscription = AudioRecord.on('data', onData) as unknown as { remove(): void };
     this.streaming = true;
     this.recording = true;
     AudioRecord.start();
+    log.info('[audio] startStreaming started');
   }
 
   /** Stop continuous capture. */

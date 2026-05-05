@@ -63,13 +63,15 @@ export class SileroVadService {
   private inferenceRunning = false;
   private inferenceQueue: Int16Array[] = [];
   private initialized = false;
+  private frameCount = 0;
+  private maxProbWindow = 0;
 
   private readonly threshold: number;
   private readonly hangoverMs: number;
   private readonly sessionFactory: OrtSessionFactory;
 
   constructor(config: VadConfig = {}, sessionFactory?: OrtSessionFactory) {
-    this.threshold = config.speechProbThreshold ?? 0.5;
+    this.threshold = config.speechProbThreshold ?? 0.35;
     this.hangoverMs = config.silenceHangoverMs ?? 800;
     this.sessionFactory = sessionFactory ?? defaultOrtSessionFactory;
   }
@@ -179,6 +181,15 @@ export class SileroVadService {
   }
 
   private processProbability(prob: number): void {
+    this.frameCount++;
+    if (prob > this.maxProbWindow) this.maxProbWindow = prob;
+    // Log a diagnostic window every 50 frames (~1.6 s) so we can see if
+    // audio is flowing and what probabilities the model is producing.
+    if (this.frameCount % 50 === 0) {
+      log.info(`[vad] frames=${this.frameCount} maxProb=${this.maxProbWindow.toFixed(3)} threshold=${this.threshold} speaking=${this.speaking}`);
+      this.maxProbWindow = 0;
+    }
+
     const isSpeech = prob >= this.threshold;
 
     if (isSpeech) {

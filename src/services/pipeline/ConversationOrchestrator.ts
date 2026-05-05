@@ -161,6 +161,7 @@ export class ConversationOrchestrator {
   private hfPairA: string | null = null;  // language code for person_a
   private hfPairB: string | null = null;  // language code for person_b
   private vadBuffer: Int16Array = new Int16Array(0);
+  private hfFirstAudioLogged = false;
 
   constructor(private readonly deps: OrchestratorDeps) {}
 
@@ -331,6 +332,7 @@ export class ConversationOrchestrator {
     this.hfEnabled = true;
     this.hfState = 'hf-idle';
     this.vadBuffer = new Int16Array(0);
+    this.hfFirstAudioLogged = false;
 
     const store = (this.deps.conversationStore ?? useConversationStore).getState();
     store.setMode('hf');
@@ -762,6 +764,11 @@ export class ConversationOrchestrator {
 
   private feedAudioToVad(base64Pcm: string): void {
     if (!this.deps.vad || !this.hfEnabled || this.hfPaused) return;
+
+    if (!this.hfFirstAudioLogged) {
+      this.hfFirstAudioLogged = true;
+      log.info('[orch/hf] audio→vad: first chunk received');
+    }
 
     // Decode base64 → bytes → Int16 PCM. Round byteLength down to the
     // nearest even count so a malformed/truncated chunk doesn't throw
