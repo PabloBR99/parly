@@ -338,7 +338,9 @@ export class ConversationOrchestrator {
     // 1. Init VAD (no-op on subsequent calls).
     await this.deps.vad.initialize();
 
-    // 2. Start audio capture with dual routing.
+    // 2. Start audio capture with dual routing. Stop first to guarantee a clean
+    //    state — a failed PTT turn may have left streaming=true (failTurn path).
+    try { await this.deps.audioCapture.stopStreaming(); } catch { /* noop */ }
     this.deps.audioCapture.startStreaming((base64Pcm) => {
       this.deps.voxtral.feedAudio(base64Pcm);
       this.feedAudioToVad(base64Pcm);
@@ -886,6 +888,10 @@ export class ConversationOrchestrator {
     store.endTurn(turnId, { stage: 'error', errorMessage: message });
     try { this.translationAbort?.abort(); } catch { /* noop */ }
     try { this.deps.tts.stop(); } catch { /* noop */ }
+    // Stop the mic so a subsequent enableHandsFree() can re-register the
+    // dual-path callback. Without this, a Voxtral mid-turn error (onError path)
+    // leaves streaming=true and the next startStreaming() is a no-op.
+    void this.deps.audioCapture.stopStreaming().catch(() => {});
     this.completeTurn(turnId);
   }
 
