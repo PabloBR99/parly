@@ -1,4 +1,4 @@
-// SileroVadService — on-device Voice Activity Detection via Silero VAD v4.
+// SileroVadService — on-device Voice Activity Detection via Silero VAD v5.
 //
 // Runs the silero_vad.onnx model (≈2 MB) via onnxruntime-react-native.
 // The model takes 512-sample (32 ms) frames at 16 kHz and outputs a speech
@@ -26,9 +26,9 @@ import { Platform } from 'react-native';
 export const VAD_FRAME_SAMPLES = 512;
 const SAMPLE_RATE = 16_000;
 
-// Silero VAD v4 state shape: [2, 1, 64]
-const STATE_SIZE = 2 * 1 * 64; // = 128 floats
-const STATE_DIMS = [2, 1, 64];
+// Silero VAD v5 state shape: [2, 1, 128] — a single h+c tensor.
+const STATE_SIZE = 2 * 1 * 128; // = 256 floats
+const STATE_DIMS = [2, 1, 128];
 
 export interface VadConfig {
   /** Probability threshold above which a frame is considered speech (0-1). */
@@ -55,8 +55,7 @@ export type OrtSessionFactory = (modelPath: string) => Promise<OrtSession>;
 
 export class SileroVadService {
   private session: OrtSession | null = null;
-  private stateH: Float32Array = new Float32Array(STATE_SIZE);
-  private stateC: Float32Array = new Float32Array(STATE_SIZE);
+  private state: Float32Array = new Float32Array(STATE_SIZE);
   private speaking = false;
   private hangoverTimer: ReturnType<typeof setTimeout> | null = null;
   private active = true;
@@ -129,8 +128,7 @@ export class SileroVadService {
     this.speaking = false;
     this.inferenceQueue = [];
     this.inferenceRunning = false;
-    this.stateH = new Float32Array(STATE_SIZE);
-    this.stateC = new Float32Array(STATE_SIZE);
+    this.state = new Float32Array(STATE_SIZE);
   }
 
   // ── Internal ──────────────────────────────────────────────────────────────
@@ -165,16 +163,14 @@ export class SileroVadService {
 
       const feeds: Record<string, OrtTensor> = {
         input: new ort.Tensor('float32', input, [1, VAD_FRAME_SAMPLES]),
+        state: new ort.Tensor('float32', new Float32Array(this.state), STATE_DIMS),
         sr: new ort.Tensor(typeof BigInt !== 'undefined' ? 'int64' : 'int32', srData, [1]),
-        h: new ort.Tensor('float32', new Float32Array(this.stateH), STATE_DIMS),
-        c: new ort.Tensor('float32', new Float32Array(this.stateC), STATE_DIMS),
       };
 
       const results = await this.session.run(feeds);
 
       const prob = (results['output'].data as Float32Array)[0];
-      this.stateH = results['hn'].data as Float32Array;
-      this.stateC = results['cn'].data as Float32Array;
+      this.state = results['stateN'].data as Float32Array;
 
       this.processProbability(prob);
     } catch (e) {

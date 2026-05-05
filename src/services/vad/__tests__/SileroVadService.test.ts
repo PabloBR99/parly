@@ -35,8 +35,7 @@ function makeOrtSession(speechProbSequence: number[]): OrtSession {
       callIndex++;
       return {
         output: { data: new Float32Array([prob]) } as OrtTensor,
-        hn:     { data: new Float32Array(128) } as OrtTensor,
-        cn:     { data: new Float32Array(128) } as OrtTensor,
+        stateN: { data: new Float32Array(256) } as OrtTensor,
       };
     }),
   };
