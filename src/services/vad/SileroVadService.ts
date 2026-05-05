@@ -65,6 +65,7 @@ export class SileroVadService {
   private initialized = false;
   private frameCount = 0;
   private maxProbWindow = 0;
+  private maxAmpWindow = 0;
 
   private readonly threshold: number;
   private readonly hangoverMs: number;
@@ -131,6 +132,9 @@ export class SileroVadService {
     this.inferenceQueue = [];
     this.inferenceRunning = false;
     this.state = new Float32Array(STATE_SIZE);
+    this.frameCount = 0;
+    this.maxProbWindow = 0;
+    this.maxAmpWindow = 0;
   }
 
   // ── Internal ──────────────────────────────────────────────────────────────
@@ -149,9 +153,13 @@ export class SileroVadService {
     try {
       // Normalise Int16 → Float32 in [-1, 1].
       const input = new Float32Array(VAD_FRAME_SAMPLES);
+      let frameMaxAbs = 0;
       for (let i = 0; i < VAD_FRAME_SAMPLES; i++) {
         input[i] = pcmInt16[i] / 32768.0;
+        const abs = Math.abs(input[i]);
+        if (abs > frameMaxAbs) frameMaxAbs = abs;
       }
+      if (frameMaxAbs > this.maxAmpWindow) this.maxAmpWindow = frameMaxAbs;
 
       // Build ONNX tensors. We import onnxruntime-react-native at call time so
       // the module can be mocked in tests without Metro needing it bundled.
@@ -186,8 +194,9 @@ export class SileroVadService {
     // Log a diagnostic window every 50 frames (~1.6 s) so we can see if
     // audio is flowing and what probabilities the model is producing.
     if (this.frameCount % 50 === 0) {
-      log.info(`[vad] frames=${this.frameCount} maxProb=${this.maxProbWindow.toFixed(3)} threshold=${this.threshold} speaking=${this.speaking}`);
+      log.info(`[vad] frames=${this.frameCount} maxProb=${this.maxProbWindow.toFixed(3)} maxAmp=${this.maxAmpWindow.toFixed(3)} threshold=${this.threshold} speaking=${this.speaking}`);
       this.maxProbWindow = 0;
+      this.maxAmpWindow = 0;
     }
 
     const isSpeech = prob >= this.threshold;
