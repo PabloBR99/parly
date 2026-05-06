@@ -66,6 +66,7 @@ export class SileroVadService {
   private frameCount = 0;
   private maxProbWindow = 0;
   private maxAmpWindow = 0;
+  private maxRmsWindow = 0;
 
   private readonly threshold: number;
   private readonly hangoverMs: number;
@@ -135,6 +136,7 @@ export class SileroVadService {
     this.frameCount = 0;
     this.maxProbWindow = 0;
     this.maxAmpWindow = 0;
+    this.maxRmsWindow = 0;
   }
 
   // ── Internal ──────────────────────────────────────────────────────────────
@@ -154,12 +156,22 @@ export class SileroVadService {
       // Normalise Int16 → Float32 in [-1, 1].
       const input = new Float32Array(VAD_FRAME_SAMPLES);
       let frameMaxAbs = 0;
+      let rmsSum = 0;
       for (let i = 0; i < VAD_FRAME_SAMPLES; i++) {
         input[i] = pcmInt16[i] / 32768.0;
         const abs = Math.abs(input[i]);
         if (abs > frameMaxAbs) frameMaxAbs = abs;
+        rmsSum += input[i] * input[i];
       }
+      const frameRms = Math.sqrt(rmsSum / VAD_FRAME_SAMPLES);
       if (frameMaxAbs > this.maxAmpWindow) this.maxAmpWindow = frameMaxAbs;
+      if (frameRms > this.maxRmsWindow) this.maxRmsWindow = frameRms;
+
+      // First-frame sample dump: log raw Int16 values to verify decode path.
+      if (this.frameCount === 0) {
+        const samples = Array.from(pcmInt16.slice(0, 10)).join(',');
+        log.info(`[vad] frame#1 pcm[0..9]=${samples} rms=${frameRms.toFixed(4)}`);
+      }
 
       // Build ONNX tensors. We import onnxruntime-react-native at call time so
       // the module can be mocked in tests without Metro needing it bundled.
@@ -167,20 +179,25 @@ export class SileroVadService {
       const ort = require('onnxruntime-react-native') as {
         Tensor: new (type: string, data: unknown, dims: number[]) => OrtTensor;
       };
-      const srData = typeof BigInt !== 'undefined'
-        ? BigInt64Array.from([BigInt(SAMPLE_RATE)])
-        : Int32Array.from([SAMPLE_RATE]);
+
+      // Encode sr=16000 as int64 LE. Use explicit element assignment instead of
+      // BigInt64Array.from() to avoid a Hermes edge case where .from() on a
+      // BigInt array can silently produce an empty array on some builds.
+      const srData = new BigInt64Array(1);
+      srData[0] = BigInt(SAMPLE_RATE);
 
       const feeds: Record<string, OrtTensor> = {
         input: new ort.Tensor('float32', input, [1, VAD_FRAME_SAMPLES]),
         state: new ort.Tensor('float32', new Float32Array(this.state), STATE_DIMS),
-        sr: new ort.Tensor(typeof BigInt !== 'undefined' ? 'int64' : 'int32', srData, [1]),
+        sr: new ort.Tensor('int64', srData, [1]),
       };
 
       const results = await this.session.run(feeds);
 
       const prob = (results['output'].data as Float32Array)[0];
-      this.state = results['stateN'].data as Float32Array;
+      // Copy stateN into a JS-owned buffer so subsequent session.run() calls
+      // cannot corrupt the reference via native buffer reuse.
+      this.state = new Float32Array(results['stateN'].data as Float32Array);
 
       this.processProbability(prob);
     } catch (e) {
@@ -194,9 +211,10 @@ export class SileroVadService {
     // Log a diagnostic window every 50 frames (~1.6 s) so we can see if
     // audio is flowing and what probabilities the model is producing.
     if (this.frameCount % 50 === 0) {
-      log.info(`[vad] frames=${this.frameCount} maxProb=${this.maxProbWindow.toFixed(3)} maxAmp=${this.maxAmpWindow.toFixed(3)} threshold=${this.threshold} speaking=${this.speaking}`);
+      log.info(`[vad] frames=${this.frameCount} maxProb=${this.maxProbWindow.toFixed(3)} maxAmp=${this.maxAmpWindow.toFixed(3)} maxRms=${this.maxRmsWindow.toFixed(4)} threshold=${this.threshold} speaking=${this.speaking}`);
       this.maxProbWindow = 0;
       this.maxAmpWindow = 0;
+      this.maxRmsWindow = 0;
     }
 
     const isSpeech = prob >= this.threshold;
