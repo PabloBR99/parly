@@ -180,11 +180,11 @@ export class SileroVadService {
         Tensor: new (type: string, data: unknown, dims: number[]) => OrtTensor;
       };
 
-      // Encode sr=16000 as int64 LE. Use explicit element assignment instead of
-      // BigInt64Array.from() to avoid a Hermes edge case where .from() on a
-      // BigInt array can silently produce an empty array on some builds.
-      const srData = new BigInt64Array(1);
-      srData[0] = BigInt(SAMPLE_RATE);
+      // Encode sr=16000 as int64 using Int32Array([low32, high32]) in little-endian.
+      // Avoids Hermes BigInt64Array JNI interop issues on Android where BigInt values
+      // can silently serialize as 0 through the ORT JNI bridge, causing Silero's
+      // conditional sr==16000 branch to evaluate false → 8kHz path → prob≈0.
+      const srData = new Int32Array([SAMPLE_RATE, 0]); // [0x00003E80, 0x00000000]
 
       const feeds: Record<string, OrtTensor> = {
         input: new ort.Tensor('float32', input, [1, VAD_FRAME_SAMPLES]),
@@ -198,6 +198,11 @@ export class SileroVadService {
       // Copy stateN into a JS-owned buffer so subsequent session.run() calls
       // cannot corrupt the reference via native buffer reuse.
       this.state = new Float32Array(results['stateN'].data as Float32Array);
+
+      // Log raw probability for each of the first 10 frames to confirm model output.
+      if (this.frameCount < 10) {
+        log.info(`[vad] early frame=${this.frameCount} prob=${prob.toFixed(4)} amp=${frameMaxAbs.toFixed(3)}`);
+      }
 
       this.processProbability(prob);
     } catch (e) {
