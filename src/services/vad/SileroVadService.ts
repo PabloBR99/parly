@@ -35,6 +35,15 @@ export interface VadConfig {
   readonly speechProbThreshold?: number;
   /** How long silence must persist after speech before onSpeechEnd fires (ms). */
   readonly silenceHangoverMs?: number;
+  /**
+   * RMS energy threshold for energy-based speech detection (0-1). When > 0,
+   * a frame is considered speech if EITHER the model prob exceeds
+   * speechProbThreshold OR the RMS exceeds this value. Acts as a fallback when
+   * the ONNX model produces near-zero probabilities despite real audio.
+   * Default 0.05 (observed speech RMS ≈ 0.22, silence ≈ 0.0003 on CMF Phone 1).
+   * Set to 0 to disable energy fallback and rely solely on model probability.
+   */
+  readonly energySpeechThreshold?: number;
 }
 
 type Unsubscribe = () => void;
@@ -70,11 +79,13 @@ export class SileroVadService {
 
   private readonly threshold: number;
   private readonly hangoverMs: number;
+  private readonly energyThreshold: number;
   private readonly sessionFactory: OrtSessionFactory;
 
   constructor(config: VadConfig = {}, sessionFactory?: OrtSessionFactory) {
     this.threshold = config.speechProbThreshold ?? 0.08;
     this.hangoverMs = config.silenceHangoverMs ?? 800;
+    this.energyThreshold = config.energySpeechThreshold ?? 0.05;
     this.sessionFactory = sessionFactory ?? defaultOrtSessionFactory;
   }
 
@@ -194,16 +205,11 @@ export class SileroVadService {
         Tensor: new (type: string, data: unknown, dims: number[]) => OrtTensor;
       };
 
-      // Encode sr=16000 as int64 via DataView byte-writes into an ArrayBuffer,
-      // then view as BigInt64Array (required by ORT's type check).
-      // This avoids relying on BigInt() assignment in Hermes, which can write
-      // incorrect bytes on some Android builds, causing Silero's sr==16000
-      // conditional branch to evaluate false (→ 8kHz path → prob≈0).
-      const srBuffer = new ArrayBuffer(8);
-      const srView = new DataView(srBuffer);
-      srView.setUint32(0, SAMPLE_RATE, true); // low 32 bits, little-endian
-      srView.setUint32(4, 0, true);           // high 32 bits = 0
-      const srData = new BigInt64Array(srBuffer); // views same bytes → 16000n
+      // Encode sr=16000 as int64. BigInt64Array([16000n]) uses constructor-time
+      // BigInt literal initialisation — avoids both the Hermes BigInt() JNI
+      // corruption bug and the DataView-buffer-aliasing issue we saw previously.
+      // eslint-disable-next-line no-loss-of-precision
+      const srData = new BigInt64Array([16000n]);
 
       const feeds: Record<string, OrtTensor> = {
         input: new ort.Tensor('float32', input, [1, VAD_FRAME_SAMPLES]),
@@ -226,27 +232,30 @@ export class SileroVadService {
         log.info(`[vad] early frame=${this.frameCount} prob=${prob.toFixed(4)} amp=${frameMaxAbs.toFixed(3)} stateNorm=${stateNorm.toFixed(4)}`);
       }
 
-      this.processProbability(prob);
+      this.processProbability(prob, frameRms);
     } catch (e) {
       log.error('[vad] frame inference error', e instanceof Error ? e : new Error(String(e)));
     }
   }
 
-  private processProbability(prob: number): void {
+  private processProbability(prob: number, frameRms: number): void {
     this.frameCount++;
     if (prob > this.maxProbWindow) this.maxProbWindow = prob;
-    // Log a diagnostic window every 50 frames (~1.6 s) so we can see if
-    // audio is flowing and what probabilities the model is producing.
     if (this.frameCount % 50 === 0) {
-      log.info(`[vad] frames=${this.frameCount} maxProb=${this.maxProbWindow.toFixed(3)} maxAmp=${this.maxAmpWindow.toFixed(3)} maxRms=${this.maxRmsWindow.toFixed(4)} threshold=${this.threshold} speaking=${this.speaking}`);
+      log.info(`[vad] frames=${this.frameCount} maxProb=${this.maxProbWindow.toFixed(3)} maxAmp=${this.maxAmpWindow.toFixed(3)} maxRms=${this.maxRmsWindow.toFixed(4)} threshold=${this.threshold} energyThr=${this.energyThreshold} speaking=${this.speaking}`);
       this.maxProbWindow = 0;
       this.maxAmpWindow = 0;
       this.maxRmsWindow = 0;
     }
 
-    const isSpeech = prob >= this.threshold;
+    const isModelSpeech = prob >= this.threshold;
+    const isEnergySpeech = this.energyThreshold > 0 && frameRms >= this.energyThreshold;
+    const isSpeech = isModelSpeech || isEnergySpeech;
 
     if (isSpeech) {
+      if (isEnergySpeech && !isModelSpeech) {
+        log.info(`[vad] energy trigger: rms=${frameRms.toFixed(4)} prob=${prob.toFixed(4)}`);
+      }
       this.clearHangoverTimer();
       if (!this.speaking) {
         this.speaking = true;
