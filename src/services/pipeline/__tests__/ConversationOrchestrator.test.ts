@@ -75,6 +75,7 @@ function makeMocks() {
       return () => { vadStart = null; vadEnd = null; };
     }),
     setActive: jest.fn(),
+    resetState: jest.fn(),
     destroy: jest.fn(),
   };
 

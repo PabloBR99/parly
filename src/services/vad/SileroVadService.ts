@@ -124,6 +124,20 @@ export class SileroVadService {
     }
   }
 
+  /** Reset the RNN state and speaking flag without destroying the ONNX session.
+   *  Call between HF sessions to prevent stale state from a previous run
+   *  affecting speech detection in the new session. */
+  resetState(): void {
+    this.clearHangoverTimer();
+    this.state = new Float32Array(STATE_SIZE);
+    this.speaking = false;
+    this.frameCount = 0;
+    this.maxProbWindow = 0;
+    this.maxAmpWindow = 0;
+    this.maxRmsWindow = 0;
+    this.inferenceQueue = [];
+  }
+
   destroy(): void {
     this.clearHangoverTimer();
     this.subscribers = [];
@@ -180,11 +194,16 @@ export class SileroVadService {
         Tensor: new (type: string, data: unknown, dims: number[]) => OrtTensor;
       };
 
-      // Encode sr=16000 as int64 using Int32Array([low32, high32]) in little-endian.
-      // Avoids Hermes BigInt64Array JNI interop issues on Android where BigInt values
-      // can silently serialize as 0 through the ORT JNI bridge, causing Silero's
-      // conditional sr==16000 branch to evaluate false → 8kHz path → prob≈0.
-      const srData = new Int32Array([SAMPLE_RATE, 0]); // [0x00003E80, 0x00000000]
+      // Encode sr=16000 as int64 via DataView byte-writes into an ArrayBuffer,
+      // then view as BigInt64Array (required by ORT's type check).
+      // This avoids relying on BigInt() assignment in Hermes, which can write
+      // incorrect bytes on some Android builds, causing Silero's sr==16000
+      // conditional branch to evaluate false (→ 8kHz path → prob≈0).
+      const srBuffer = new ArrayBuffer(8);
+      const srView = new DataView(srBuffer);
+      srView.setUint32(0, SAMPLE_RATE, true); // low 32 bits, little-endian
+      srView.setUint32(4, 0, true);           // high 32 bits = 0
+      const srData = new BigInt64Array(srBuffer); // views same bytes → 16000n
 
       const feeds: Record<string, OrtTensor> = {
         input: new ort.Tensor('float32', input, [1, VAD_FRAME_SAMPLES]),

@@ -91,6 +91,7 @@ export interface VadLike {
   feedFrame(pcmInt16: Int16Array): void;
   subscribe(onSpeechStart: () => void, onSpeechEnd: () => void): () => void;
   setActive(active: boolean): void;
+  resetState(): void;
   destroy(): void;
 }
 
@@ -368,6 +369,9 @@ export class ConversationOrchestrator {
       () => void this.handleHfSpeechEnd(),
     );
 
+    // Reset RNN state so stale state from a previous session doesn't suppress
+    // speech detection at the start of the new one.
+    this.deps.vad.resetState();
     // Always re-arm VAD on enable — disableHandsFree leaves it inactive.
     this.deps.vad.setActive(true);
 
