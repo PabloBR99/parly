@@ -73,7 +73,7 @@ export class SileroVadService {
   private readonly sessionFactory: OrtSessionFactory;
 
   constructor(config: VadConfig = {}, sessionFactory?: OrtSessionFactory) {
-    this.threshold = config.speechProbThreshold ?? 0.35;
+    this.threshold = config.speechProbThreshold ?? 0.08;
     this.hangoverMs = config.silenceHangoverMs ?? 800;
     this.sessionFactory = sessionFactory ?? defaultOrtSessionFactory;
   }
@@ -216,11 +216,14 @@ export class SileroVadService {
       const prob = (results['output'].data as Float32Array)[0];
       // Copy stateN into a JS-owned buffer so subsequent session.run() calls
       // cannot corrupt the reference via native buffer reuse.
-      this.state = new Float32Array(results['stateN'].data as Float32Array);
+      const stateNRaw = results['stateN'].data as Float32Array;
+      this.state = new Float32Array(stateNRaw);
 
-      // Log raw probability for each of the first 10 frames to confirm model output.
+      // Log raw probability and stateN norm for first 10 frames to verify
+      // RNN state is actually propagating (norm > 0 means state is updating).
       if (this.frameCount < 10) {
-        log.info(`[vad] early frame=${this.frameCount} prob=${prob.toFixed(4)} amp=${frameMaxAbs.toFixed(3)}`);
+        const stateNorm = Math.sqrt(this.state.reduce((s, v) => s + v * v, 0));
+        log.info(`[vad] early frame=${this.frameCount} prob=${prob.toFixed(4)} amp=${frameMaxAbs.toFixed(3)} stateNorm=${stateNorm.toFixed(4)}`);
       }
 
       this.processProbability(prob);
