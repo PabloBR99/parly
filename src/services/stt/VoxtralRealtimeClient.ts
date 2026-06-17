@@ -40,7 +40,11 @@ const ENDPOINT = 'wss://api.mistral.ai/v1/audio/transcriptions/realtime';
 const DEFAULT_MODEL = 'voxtral-mini-transcribe-realtime-2602';
 const SAMPLE_RATE = 16_000;
 const HANDSHAKE_TIMEOUT_MS = 8_000;
-export const TARGET_STREAMING_DELAY_MS = 480; // sweet-spot from Voxtral docs
+// Server-side audio buffering before emitting a transcript (session/HF mode).
+// Voxtral docs cite 480 ms as the accuracy sweet-spot; 320 trims ~160 ms off
+// the flush→final tail for snappier hands-free turns, at a marginal accuracy
+// cost. Raise back toward 480 if transcripts degrade.
+export const TARGET_STREAMING_DELAY_MS = 320;
 
 export type StreamingState = 'idle' | 'connecting' | 'streaming' | 'ending' | 'closed';
 

@@ -20,7 +20,11 @@
 
 import Tts from 'react-native-tts';
 
-const SPEECH_RATE = 0.5;
+// react-native-tts (Android) transforms this: rate≥0.5 → androidRate = rate*4-1.
+// 0.55 → 1.2 (≈20% faster than normal), so the spoken translation finishes
+// sooner and turns feel snappier without hurting comprehensibility. 0.5→1.0
+// (normal), 0.6→1.4. Tune here if speech feels rushed or sluggish.
+const SPEECH_RATE = 0.55;
 // Cap measured from this chunk's `tts-start` event. Long enough that a
 // slow-rate full sentence never trips it; short enough to recover from a
 // hung engine mid-utterance.

@@ -40,9 +40,18 @@ export interface LogEntry {
 const LOG_PATH = `${RNFS.DocumentDirectoryPath}/parly-logs.json`;
 const MAX_ENTRIES = 600;
 
+/** Coalesce disk writes to at most one per window. Without this, high-frequency
+ *  logging (VAD telemetry, per-chunk events) stringifies and rewrites the whole
+ *  600-entry buffer on EVERY entry — saturating the bridge and disk during the
+ *  exact moments conversation latency matters most. Errors bypass the throttle
+ *  so a crash trail still survives. */
+const FLUSH_THROTTLE_MS = 1_000;
+
 let buffer: LogEntry[] = [];
 const listeners = new Set<(entries: readonly LogEntry[]) => void>();
 let writeChain: Promise<unknown> = Promise.resolve();
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+let flushPending = false;
 let initialized = false;
 let sessionStart = Date.now();
 
@@ -50,11 +59,8 @@ function notify(): void {
   for (const fn of listeners) fn(buffer);
 }
 
-function scheduleFlush(): void {
-  // Serialize writes; each tick writes the latest snapshot. We capture
-  // the buffer reference at schedule time, but we read it again inside the
-  // promise so successive scheduled flushes coalesce naturally onto the
-  // most recent state.
+/** Serialize the current buffer to disk behind any prior write. */
+function writeBufferToDisk(): void {
   writeChain = writeChain
     .catch(() => undefined)
     .then(async () => {
@@ -64,6 +70,29 @@ function scheduleFlush(): void {
         // Ignore — disk may be full, permissions may be wrong, etc.
       }
     });
+}
+
+function scheduleFlush(immediate = false): void {
+  if (immediate) {
+    flushPending = false;
+    writeBufferToDisk();
+    return;
+  }
+  if (flushTimer) {
+    // Inside the throttle window — coalesce; the trailing write picks this up.
+    flushPending = true;
+    return;
+  }
+  // Leading edge: persist immediately, then hold a window during which further
+  // entries collapse into a single trailing write.
+  writeBufferToDisk();
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    if (flushPending) {
+      flushPending = false;
+      writeBufferToDisk();
+    }
+  }, FLUSH_THROTTLE_MS);
 }
 
 function pushEntry(level: LogLevel, message: string, stack?: string): void {
@@ -80,7 +109,8 @@ function pushEntry(level: LogLevel, message: string, stack?: string): void {
     ? [...buffer.slice(buffer.length - MAX_ENTRIES + 1), entry]
     : [...buffer, entry];
   notify();
-  scheduleFlush();
+  // Errors flush now (crash resilience); everything else is throttled.
+  scheduleFlush(level === 'error');
 }
 
 function formatRest(rest: readonly unknown[]): string {
@@ -126,7 +156,7 @@ export function getLogs(): readonly LogEntry[] {
 export function clearLogs(): void {
   buffer = [];
   notify();
-  scheduleFlush();
+  scheduleFlush(true);
 }
 
 export function exportLogsAsText(): string {

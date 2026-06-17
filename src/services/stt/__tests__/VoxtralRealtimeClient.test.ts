@@ -7,7 +7,7 @@ jest.mock('react-native', () => ({
   NativeModules: {},
 }));
 
-import { VoxtralRealtimeClient, type WebSocketLike, type WebSocketFactory } from '../VoxtralRealtimeClient';
+import { VoxtralRealtimeClient, TARGET_STREAMING_DELAY_MS, type WebSocketLike, type WebSocketFactory } from '../VoxtralRealtimeClient';
 
 // ── Fake WebSocket ────────────────────────────────────────────────────────────
 
@@ -123,7 +123,7 @@ describe('VoxtralRealtimeClient', () => {
 
     const sent = fake.ws.sent.map(s => JSON.parse(s));
     const sessionUpdate = sent.find(m => m.type === 'session.update');
-    expect(sessionUpdate?.session.target_streaming_delay_ms).toBe(480);
+    expect(sessionUpdate?.session.target_streaming_delay_ms).toBe(TARGET_STREAMING_DELAY_MS);
   });
 
   it('does NOT include target_streaming_delay_ms in PTT mode', async () => {

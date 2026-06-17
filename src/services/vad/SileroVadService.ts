@@ -24,7 +24,6 @@ import { Platform } from 'react-native';
 
 /** Number of PCM samples per frame. 512 @ 16 kHz = 32 ms. */
 export const VAD_FRAME_SAMPLES = 512;
-const SAMPLE_RATE = 16_000;
 
 // Silero VAD v5 state shape: [2, 1, 128] — a single h+c tensor.
 const STATE_SIZE = 2 * 1 * 128; // = 256 floats
@@ -61,6 +60,26 @@ export interface OrtTensor {
   readonly data: Float32Array | BigInt64Array | Int32Array;
 }
 export type OrtSessionFactory = (modelPath: string) => Promise<OrtSession>;
+
+// onnxruntime-react-native and the constant sample-rate buffer are resolved
+// once and cached at module scope. The inference path runs ≈31×/s; re-running
+// require() and re-allocating the sr tensor on every frame is pure waste in the
+// hottest loop in the app. Lazy so Jest can mock the module before first use.
+type OrtModule = {
+  Tensor: new (type: string, data: unknown, dims: number[]) => OrtTensor;
+};
+let ortModule: OrtModule | null = null;
+function getOrt(): OrtModule {
+  if (!ortModule) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    ortModule = require('onnxruntime-react-native') as OrtModule;
+  }
+  return ortModule;
+}
+// sr=16000 as int64. Constant model input (read-only), so one shared buffer is
+// safe to reuse across every run. The BigInt literal avoids the Hermes BigInt()
+// JNI corruption + DataView aliasing issues seen in earlier revisions.
+const SR_DATA = new BigInt64Array([16000n]);
 
 export class SileroVadService {
   private session: OrtSession | null = null;
@@ -192,29 +211,11 @@ export class SileroVadService {
       if (frameMaxAbs > this.maxAmpWindow) this.maxAmpWindow = frameMaxAbs;
       if (frameRms > this.maxRmsWindow) this.maxRmsWindow = frameRms;
 
-      // First-frame sample dump: log raw Int16 values to verify decode path.
-      if (this.frameCount === 0) {
-        const samples = Array.from(pcmInt16.slice(0, 10)).join(',');
-        log.info(`[vad] frame#1 pcm[0..9]=${samples} rms=${frameRms.toFixed(4)}`);
-      }
-
-      // Build ONNX tensors. We import onnxruntime-react-native at call time so
-      // the module can be mocked in tests without Metro needing it bundled.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const ort = require('onnxruntime-react-native') as {
-        Tensor: new (type: string, data: unknown, dims: number[]) => OrtTensor;
-      };
-
-      // Encode sr=16000 as int64. BigInt64Array([16000n]) uses constructor-time
-      // BigInt literal initialisation — avoids both the Hermes BigInt() JNI
-      // corruption bug and the DataView-buffer-aliasing issue we saw previously.
-      // eslint-disable-next-line no-loss-of-precision
-      const srData = new BigInt64Array([16000n]);
-
+      const ort = getOrt();
       const feeds: Record<string, OrtTensor> = {
         input: new ort.Tensor('float32', input, [1, VAD_FRAME_SAMPLES]),
         state: new ort.Tensor('float32', new Float32Array(this.state), STATE_DIMS),
-        sr: new ort.Tensor('int64', srData, [1]),
+        sr: new ort.Tensor('int64', SR_DATA, [1]),
       };
 
       const results = await this.session.run(feeds);
@@ -224,13 +225,6 @@ export class SileroVadService {
       // cannot corrupt the reference via native buffer reuse.
       const stateNRaw = results['stateN'].data as Float32Array;
       this.state = new Float32Array(stateNRaw);
-
-      // Log raw probability and stateN norm for first 10 frames to verify
-      // RNN state is actually propagating (norm > 0 means state is updating).
-      if (this.frameCount < 10) {
-        const stateNorm = Math.sqrt(this.state.reduce((s, v) => s + v * v, 0));
-        log.info(`[vad] early frame=${this.frameCount} prob=${prob.toFixed(4)} amp=${frameMaxAbs.toFixed(3)} stateNorm=${stateNorm.toFixed(4)}`);
-      }
 
       this.processProbability(prob, frameRms);
     } catch (e) {
@@ -253,9 +247,6 @@ export class SileroVadService {
     const isSpeech = isModelSpeech || isEnergySpeech;
 
     if (isSpeech) {
-      if (isEnergySpeech && !isModelSpeech) {
-        log.info(`[vad] energy trigger: rms=${frameRms.toFixed(4)} prob=${prob.toFixed(4)}`);
-      }
       this.clearHangoverTimer();
       if (!this.speaking) {
         this.speaking = true;
