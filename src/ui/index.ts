@@ -9,6 +9,7 @@ export { LanguageCard } from './primitives/LanguageCard';
 export { LanguagePickerSheet } from './primitives/LanguagePickerSheet';
 export { SwapButton } from './primitives/SwapButton';
 export { PTTButton } from './primitives/PTTButton';
+export { SeamControl } from './primitives/SeamControl';
 export { Waveform } from './animations/Waveform';
 export { StateMorph } from './animations/StateMorph';
 export { DuskBackdrop } from './animations/DuskBackdrop';

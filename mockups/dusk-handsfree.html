@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Parly — Dusk · hands-free control</title>
+<style>
+  /* Spec for the hands-free seam control. Reuses dusk-concept.html tokens.
+     The control is a small glass knob seated on the seam at centre-right —
+     neutral (it belongs to neither speaker, like the seam), with a glyph of
+     a horizon line radiating sound up and down. White only; colour lives in
+     the atmosphere, never in the chrome. */
+
+  html, body {
+    margin: 0; padding: 0;
+    background:
+      radial-gradient(ellipse at 30% 20%, #1a1320 0%, transparent 55%),
+      radial-gradient(ellipse at 70% 80%, #131822 0%, transparent 55%),
+      #07070A;
+    min-height: 100%;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+  body { display: grid; place-items: center; padding: 56px 24px; box-sizing: border-box; }
+  .stage { display: flex; gap: 56px; flex-wrap: wrap; justify-content: center; align-items: center; max-width: 1180px; }
+
+  .caption { max-width: 320px; color: rgba(255,255,255,0.55); font-size: 13.5px; line-height: 1.7; }
+  .caption .eyebrow { font-size: 11px; letter-spacing: 2.4px; color: rgba(255,255,255,0.40); text-transform: uppercase; margin-bottom: 14px; }
+  .caption h1 { font-family: Georgia, serif; font-style: italic; font-weight: 400; font-size: 30px; line-height: 1.25; letter-spacing: -0.6px; color: #fff; margin: 0 0 20px 0; }
+  .caption p { margin: 0 0 14px 0; }
+  .caption .meta { margin-top: 24px; font-size: 10.5px; letter-spacing: 1.6px; color: rgba(255,255,255,0.30); text-transform: uppercase; }
+
+  /* ── phone (trimmed from dusk-concept) ─────────────────────────────── */
+  .phone {
+    position: relative; width: 360px; height: 760px; border-radius: 50px; overflow: hidden;
+    background: linear-gradient(180deg,#0A0E14 0%,#0B0C13 38%,#0C0B12 50%,#0D0B11 62%,#0E0A10 100%);
+    box-shadow: 0 0 0 1.5px rgba(255,255,255,0.06), 0 80px 140px -40px rgba(0,0,0,0.85),
+      0 30px 60px -20px rgba(168,178,255,0.05), 0 30px 60px 20px rgba(255,179,122,0.04);
+  }
+  .seam {
+    position: absolute; left: 0; right: 0; top: 50%; height: 80px; transform: translateY(-50%);
+    background: linear-gradient(180deg, rgba(168,178,255,0.00) 0%, rgba(168,178,255,0.07) 35%, rgba(255,179,122,0.07) 65%, rgba(255,179,122,0.00) 100%);
+    filter: blur(8px); pointer-events: none; z-index: 1;
+  }
+  .seam::after {
+    content:''; position: absolute; left: 12%; right: 12%; top: 50%; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.10) 20%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.10) 80%, transparent);
+    transform: translateY(-50%); animation: seam-shimmer 8s ease-in-out infinite alternate;
+  }
+  @keyframes seam-shimmer { 0% { opacity: 0.5; transform: translateY(-50%) scaleX(0.92); } 100% { opacity: 0.9; transform: translateY(-50%) scaleX(1.00); } }
+
+  .half { position: absolute; left: 0; right: 0; height: 50%; padding: 26px 28px; display: flex; flex-direction: column; z-index: 2; box-sizing: border-box; }
+  .half.top { top: 0; transform: rotate(180deg); }
+  .half.bot { bottom: 0; }
+  .big { flex: 1; padding: 12px 0 4px 0; display: flex; align-items: flex-start; }
+  .big-text { color: #FFFFFF; font-size: 30px; line-height: 38px; font-weight: 300; letter-spacing: -0.5px; max-width: 70%; }
+  .identity { display: flex; align-items: center; margin-bottom: 10px; }
+  .chip { display: flex; align-items: center; padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.09); background: rgba(255,255,255,0.015); }
+  .chip .dot { width: 6px; height: 6px; border-radius: 50%; margin-right: 9px; }
+  .chip .endonym { font-size: 10.5px; letter-spacing: 1.5px; color: rgba(255,255,255,0.62); text-transform: uppercase; }
+  .chip .code { margin-left: 10px; font-family: Georgia, serif; font-style: italic; font-size: 13px; color: rgba(255,255,255,0.42); }
+  .ptt-slot { position: relative; height: 188px; display: grid; place-items: center; margin: -8px 0; }
+  .bloom { position: absolute; width: 300px; height: 300px; border-radius: 50%; filter: blur(30px); mix-blend-mode: screen; pointer-events: none; opacity: 0.55; }
+  .bloom.warm { background: radial-gradient(circle at 32% 38%, #FFB37A 0%, transparent 42%), radial-gradient(circle at 68% 62%, #FF8E76 0%, transparent 48%), radial-gradient(circle at 50% 80%, #E26F5C 0%, transparent 52%); }
+  .bloom.cool { background: radial-gradient(circle at 62% 32%, #A8B2FF 0%, transparent 42%), radial-gradient(circle at 32% 68%, #7FD8C9 0%, transparent 48%), radial-gradient(circle at 72% 78%, #9C8AE6 0%, transparent 52%); }
+  .disc { position: relative; width: 92px; height: 92px; border-radius: 50%; background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)); border: 1px solid rgba(255,255,255,0.10); display: grid; place-items: center; box-shadow: inset 0 1px 1px rgba(255,255,255,0.07), 0 8px 24px rgba(0,0,0,0.55); }
+  .disc .tick { position: absolute; top: 30px; width: 14px; height: 1.5px; border-radius: 1px; background: rgba(255,255,255,0.40); }
+  .disc .lang { font-family: Georgia, serif; font-style: italic; font-size: 14px; color: rgba(255,255,255,0.62); letter-spacing: 1.2px; margin-top: 14px; }
+  .edge { display: flex; align-items: center; justify-content: center; gap: 10px; color: rgba(255,255,255,0.35); font-family: Georgia, serif; font-style: italic; font-size: 11px; letter-spacing: 1.5px; padding-top: 12px; }
+  .edge .net { width: 6px; height: 6px; border-radius: 50%; background: #7FD8C9; box-shadow: 0 0 10px rgba(127,216,201,0.7); }
+  .vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.55) 100%); pointer-events: none; mix-blend-mode: multiply; z-index: 4; }
+
+  /* ── the hands-free seam control ───────────────────────────────────── */
+  .seam-ctl {
+    position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+    z-index: 5; display: flex; flex-direction: column; align-items: center; gap: 9px;
+  }
+  .knob {
+    position: relative; width: 54px; height: 54px; border-radius: 50%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.012));
+    border: 1px solid rgba(255,255,255,0.12);
+    display: grid; place-items: center;
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.08), 0 6px 18px rgba(0,0,0,0.5);
+  }
+  .knob::after { content:''; position:absolute; inset:5px; border-radius:50%; background: radial-gradient(circle at 35% 30%, rgba(255,255,255,0.07), transparent 60%); }
+  .glyph .line { fill: rgba(255,255,255,0.50); }
+  .glyph .inner { stroke: rgba(255,255,255,0.50); stroke-width: 1.5; fill: none; stroke-linecap: round; }
+  .glyph .outer { stroke: rgba(255,255,255,0.20); stroke-width: 1.4; fill: none; stroke-linecap: round; }
+  .cap { font-family: Georgia, serif; font-style: italic; font-size: 10px; letter-spacing: 1.4px; color: rgba(255,255,255,0.30); }
+  .live { position:absolute; top:8px; right:8px; width:4px; height:4px; border-radius:50%; background:#fff; box-shadow:0 0 7px rgba(255,255,255,0.95); }
+
+  /* state: ON (listening) — ring glows, glyph breathes, caps alternate flare */
+  .on .knob { border-color: rgba(255,255,255,0.30); box-shadow: inset 0 1px 1px rgba(255,255,255,0.10), 0 0 20px rgba(255,255,255,0.10), 0 0 0 1px rgba(255,255,255,0.05); }
+  .on .glyph { animation: breathe 3.6s ease-in-out infinite; }
+  .on .glyph .line { fill: rgba(255,255,255,0.72); }
+  .on .glyph .inner { stroke: rgba(255,255,255,0.72); }
+  .on .glyph .up   { animation: flare-up 4.8s ease-in-out infinite; }
+  .on .glyph .down { animation: flare-down 4.8s ease-in-out infinite; }
+  .on .cap { color: rgba(255,255,255,0.58); }
+  @keyframes breathe { 0%,100% { opacity: 0.7; } 50% { opacity: 1; } }
+  @keyframes flare-up   { 0%,45%,100% { stroke: rgba(255,255,255,0.20);} 18% { stroke: rgba(255,255,255,0.85);} }
+  @keyframes flare-down { 50%,95% { stroke: rgba(255,255,255,0.20);} 68% { stroke: rgba(255,255,255,0.85);} 0%,100%{stroke:rgba(255,255,255,0.20);} }
+
+  /* state: PAUSED (offline) — muted, still */
+  .paused .knob { border-color: rgba(255,255,255,0.10); box-shadow: inset 0 1px 1px rgba(255,255,255,0.05), 0 6px 18px rgba(0,0,0,0.5); }
+  .paused .glyph .line, .paused .glyph .inner { stroke: rgba(255,255,255,0.28); fill: rgba(255,255,255,0.28); }
+  .paused .glyph .outer { stroke: rgba(255,255,255,0.10); }
+  .paused .cap { color: rgba(255,255,255,0.36); }
+
+  /* anatomy row */
+  .row { display: flex; gap: 40px; align-items: flex-start; }
+  .spec { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .spec .lbl { font-family: Georgia, serif; font-style: italic; font-size: 12px; letter-spacing: 1px; color: rgba(255,255,255,0.45); }
+  .pad { padding: 22px; border-radius: 22px; background: linear-gradient(180deg,#0A0E14,#0E0A10); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05); }
+</style>
+</head>
+<body>
+  <div class="stage">
+
+    <div class="caption">
+      <div class="eyebrow">PARLY — DUSK · HANDS-FREE</div>
+      <h1>A knob on the horizon.</h1>
+      <p>Hands-free belongs to neither speaker — so it lives on the seam, the encounter line, at the right edge. Not a word in the footer: a small glass knob seated on the horizon.</p>
+      <p>Its mark is the seam itself — a line with sound radiating up and down. Off, it is quiet glass. On, the ring warms with light, the glyph breathes, and the waves flare in the direction the translation just flowed — the same pulse that runs along the seam.</p>
+      <p class="meta">Spec · neutral white · 54px glass · seated on 50%</p>
+    </div>
+
+    <!-- anatomy: the three states -->
+    <div class="pad">
+      <div class="row">
+        <div class="spec">
+          <div class="seam-ctl" style="position:relative; top:auto; right:auto; transform:none;">
+            <div class="knob">
+              <svg class="glyph" width="28" height="28" viewBox="0 0 28 28">
+                <rect class="line" x="10.5" y="13.25" width="7" height="1.5" rx="0.75"/>
+                <path class="inner up"  d="M 9.67 10.61 A 5.5 5.5 0 0 1 18.33 10.61"/>
+                <path class="outer up"  d="M 6.51 8.15 A 9.5 9.5 0 0 1 21.49 8.15"/>
+                <path class="inner down" d="M 18.33 17.39 A 5.5 5.5 0 0 1 9.67 17.39"/>
+                <path class="outer down" d="M 21.49 19.85 A 9.5 9.5 0 0 1 6.51 19.85"/>
+              </svg>
+            </div>
+            <span class="cap">hands-free</span>
+          </div>
+          <span class="lbl">off</span>
+        </div>
+
+        <div class="spec on">
+          <div class="seam-ctl" style="position:relative; top:auto; right:auto; transform:none;">
+            <div class="knob">
+              <span class="live"></span>
+              <svg class="glyph" width="28" height="28" viewBox="0 0 28 28">
+                <rect class="line" x="10.5" y="13.25" width="7" height="1.5" rx="0.75"/>
+                <path class="inner up"  d="M 9.67 10.61 A 5.5 5.5 0 0 1 18.33 10.61"/>
+                <path class="outer up"  d="M 6.51 8.15 A 9.5 9.5 0 0 1 21.49 8.15"/>
+                <path class="inner down" d="M 18.33 17.39 A 5.5 5.5 0 0 1 9.67 17.39"/>
+                <path class="outer down" d="M 21.49 19.85 A 9.5 9.5 0 0 1 6.51 19.85"/>
+              </svg>
+            </div>
+            <span class="cap">listening</span>
+          </div>
+          <span class="lbl">on</span>
+        </div>
+
+        <div class="spec paused">
+          <div class="seam-ctl" style="position:relative; top:auto; right:auto; transform:none;">
+            <div class="knob">
+              <svg class="glyph" width="28" height="28" viewBox="0 0 28 28">
+                <rect class="line" x="10.5" y="13.25" width="7" height="1.5" rx="0.75"/>
+                <path class="inner up"  d="M 9.67 10.61 A 5.5 5.5 0 0 1 18.33 10.61"/>
+                <path class="outer up"  d="M 6.51 8.15 A 9.5 9.5 0 0 1 21.49 8.15"/>
+                <path class="inner down" d="M 18.33 17.39 A 5.5 5.5 0 0 1 9.67 17.39"/>
+                <path class="outer down" d="M 21.49 19.85 A 9.5 9.5 0 0 1 6.51 19.85"/>
+              </svg>
+            </div>
+            <span class="cap">offline</span>
+          </div>
+          <span class="lbl">paused</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- phone in context, control ON -->
+    <div class="phone">
+      <div class="half top">
+        <div class="big"><div class="big-text">¿Te apetece un café?</div></div>
+        <div class="identity"><div class="chip"><span class="dot" style="background:#A8B2FF;"></span><span class="endonym">Español</span><span class="code">es</span></div></div>
+        <div class="ptt-slot"><div class="bloom cool"></div><div class="disc"><span class="tick"></span><span class="lang">es</span></div></div>
+        <div class="edge"><span class="net"></span><span>online</span></div>
+      </div>
+
+      <div class="seam"></div>
+
+      <!-- hands-free control, seated on the seam, centre-right -->
+      <div class="seam-ctl on">
+        <div class="knob">
+          <span class="live"></span>
+          <svg class="glyph" width="28" height="28" viewBox="0 0 28 28">
+            <rect class="line" x="10.5" y="13.25" width="7" height="1.5" rx="0.75"/>
+            <path class="inner up"  d="M 9.67 10.61 A 5.5 5.5 0 0 1 18.33 10.61"/>
+            <path class="outer up"  d="M 6.51 8.15 A 9.5 9.5 0 0 1 21.49 8.15"/>
+            <path class="inner down" d="M 18.33 17.39 A 5.5 5.5 0 0 1 9.67 17.39"/>
+            <path class="outer down" d="M 21.49 19.85 A 9.5 9.5 0 0 1 6.51 19.85"/>
+          </svg>
+        </div>
+        <span class="cap">listening</span>
+      </div>
+
+      <div class="half bot">
+        <div class="big"><div class="big-text">Yes, gladly.</div></div>
+        <div class="identity"><div class="chip"><span class="dot" style="background:#FFB37A;"></span><span class="endonym">English</span><span class="code">en</span></div></div>
+        <div class="ptt-slot"><div class="bloom warm"></div><div class="disc"><span class="tick"></span><span class="lang">en</span></div></div>
+        <div class="edge"><span>settings</span></div>
+      </div>
+
+      <div class="vignette"></div>
+    </div>
+
+  </div>
+</body>
+</html>

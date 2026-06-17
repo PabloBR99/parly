@@ -14,11 +14,12 @@ import { HANDS_FREE_ENABLED } from '../app/featureFlags';
 import {
   DuskBackdrop,
   LanguagePickerSheet,
+  SeamControl,
   Text,
   color,
-  haptics,
   space,
 } from '../ui';
+import type { SeamControlMode } from '../ui/primitives/SeamControl';
 import { SeamShimmer } from '../ui/animations/SeamShimmer';
 import { SpeakerHalf } from './conversation/SpeakerHalf';
 import { NetworkPill } from './conversation/NetworkPill';
@@ -200,26 +201,8 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   const topIncomingTurn = lastTurnA;
   const bottomIncomingTurn = lastTurnB;
 
-  // HF toggle edge content (alongside "settings").
-  const showPausedCopy = isHfActive && isHfPaused;
-  const hfToggleNode = showHfToggle ? (
-    <Pressable
-      onPress={handleToggleHf}
-      hitSlop={14}
-      accessibilityRole="button"
-      accessibilityLabel={isHfActive ? 'Disable hands-free' : 'Enable hands-free'}>
-      <View style={styles.hfToggleRow}>
-        {isHfActive && !isHfPaused && <View style={styles.hfActiveDot} />}
-        {showPausedCopy && <View style={styles.hfPausedDot} />}
-        <Text
-          variant="serifSmall"
-          tone={isHfActive ? 'fgMuted' : 'fgFaint'}
-          style={styles.hfToggleText}>
-          {showPausedCopy ? 'hands-free paused — offline' : 'hands-free'}
-        </Text>
-      </View>
-    </Pressable>
-  ) : null;
+  // Hands-free lives on the seam now (SeamControl), not in the footer.
+  const hfMode: SeamControlMode = !isHfActive ? 'off' : isHfPaused ? 'paused' : 'on';
 
   return (
     <View style={styles.root}>
@@ -265,23 +248,15 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
           accentRing={color.accentARing}
           edgePadding={insets.bottom + space.md}
           edgeContent={
-            <View style={styles.bottomEdge}>
-              <Pressable
-                onPress={() => navigation.navigate('Settings')}
-                hitSlop={14}
-                accessibilityRole="button"
-                accessibilityLabel="Settings">
-                <Text variant="serif" tone="fgFaint" style={styles.settingsLink}>
-                  settings
-                </Text>
-              </Pressable>
-              {hfToggleNode && (
-                <>
-                  <Text variant="serifSmall" tone="fgGhost" style={styles.edgeSep}>·</Text>
-                  {hfToggleNode}
-                </>
-              )}
-            </View>
+            <Pressable
+              onPress={() => navigation.navigate('Settings')}
+              hitSlop={14}
+              accessibilityRole="button"
+              accessibilityLabel="Settings">
+              <Text variant="serif" tone="fgFaint" style={styles.settingsLink}>
+                settings
+              </Text>
+            </Pressable>
           }
           disabled={noKey || (!isHfActive && !!activeTurn && activeTurn?.speakerId !== 'person_a')}
           firstRun={firstRun}
@@ -292,6 +267,15 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
           onChangeLanguage={() => setPickerSlot('self')}
         />
       </View>
+
+      {/* Hands-free control — neutral glass knob seated on the seam. */}
+      {showHfToggle && (
+        <SeamControl
+          mode={hfMode}
+          pulseDirection={seamPulseDir}
+          onToggle={handleToggleHf}
+        />
+      )}
 
       {noKey && (
         <View style={styles.bannerWrap} pointerEvents="box-none">
@@ -334,44 +318,8 @@ const styles = StyleSheet.create({
   half: { flex: 1 },
   flipped: { flex: 1, transform: [{ rotate: '180deg' }] },
 
-  bottomEdge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
   settingsLink: {
     paddingVertical: space.xs,
-  },
-  edgeSep: {
-    marginHorizontal: 6,
-    paddingVertical: space.xs,
-  },
-  hfToggleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: space.xs,
-  },
-  hfActiveDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#FFFFFF',
-    marginRight: 5,
-    // Glow approximated via border (RN doesn't support box-shadow on View).
-    shadowColor: '#FFFFFF',
-    shadowOpacity: 0.9,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 2,
-  },
-  hfPausedDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#666666',
-    marginRight: 5,
-  },
-  hfToggleText: {
-    // fontSize 11 via serifSmall variant
   },
 
   bannerWrap: {
