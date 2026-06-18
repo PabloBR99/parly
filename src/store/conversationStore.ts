@@ -21,6 +21,13 @@ export interface Turn {
   readonly startedAt: number;
 }
 
+/**
+ * Live "breath" of the hands-free seam wave. Mirrors the HF state machine:
+ * `capturing → 'listening'`, `speaking → 'speaking'`, everything else → 'idle'.
+ * Drives `SeamControl`'s wave; it does NOT imply which speaker is talking.
+ */
+export type HfActivity = 'idle' | 'listening' | 'speaking';
+
 interface ConversationState {
   readonly turns: readonly Turn[];
   readonly activeTurnId: string | null;
@@ -30,6 +37,8 @@ interface ConversationState {
   readonly hfActiveSpeaker: PersonId | null;
   /** Flashes briefly when an utterance was not routable (lang ∉ pair). */
   readonly hfUnroutedSpeaker: PersonId | null;
+  /** What the hands-free control is doing right now — drives the seam wave. */
+  readonly hfActivity: HfActivity;
 }
 
 interface ConversationActions {
@@ -40,6 +49,7 @@ interface ConversationActions {
   setMode: (mode: 'ptt' | 'hf') => void;
   setHfActiveSpeaker: (id: PersonId | null) => void;
   setHfUnroutedSpeaker: (id: PersonId | null) => void;
+  setHfActivity: (activity: HfActivity) => void;
 }
 
 export const useConversationStore = create<ConversationState & ConversationActions>(set => ({
@@ -48,6 +58,7 @@ export const useConversationStore = create<ConversationState & ConversationActio
   mode: 'ptt',
   hfActiveSpeaker: null,
   hfUnroutedSpeaker: null,
+  hfActivity: 'idle',
 
   startTurn: turn =>
     set(state => ({ turns: [...state.turns, turn], activeTurnId: turn.id })),
@@ -72,4 +83,6 @@ export const useConversationStore = create<ConversationState & ConversationActio
   setHfActiveSpeaker: id => set({ hfActiveSpeaker: id }),
 
   setHfUnroutedSpeaker: id => set({ hfUnroutedSpeaker: id }),
+
+  setHfActivity: activity => set({ hfActivity: activity }),
 }));

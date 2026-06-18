@@ -213,22 +213,30 @@ Salidas globales:
 - Sólo visible cuando `apiKey && !noKey && languages elegidos`.
 
 **3.2. `PTTButton` extendido**
+
+> **⚠ CORRECCIÓN DE DISEÑO (redesign "Voz", reemplaza lo de abajo).** En HF no
+> sabemos quién habla hasta transcribir y detectar el idioma, así que los discos
+> **no** reaccionan por lado. Se eliminaron `hf-source-active` y
+> `hf-target-speaking`. Con HF activo ambos discos se quedan en su aspecto neutro
+> de reposo (vidrio + tick + código de idioma), bloom recesivo al 30%, sin ring,
+> sin waveform, sin shimmer ni punto pulsante. El **único** elemento vivo en HF
+> es la onda de voz de la costura (`SeamControl`). `DiscMode` queda en
+> `ptt-idle | ptt-active | hf-idle`. El pulso direccional del `SeamShimmer`
+> (§3.3) se mantiene: se dispara *después* de enrutar, cuando la dirección sí se
+> conoce.
+
 - Nuevo prop `mode: DiscMode`:
   ```ts
   type DiscMode =
     | { kind: 'ptt-idle' }
     | { kind: 'ptt-active' }
-    | { kind: 'hf-idle' }              // ambos discos en este modo cuando HF on
-    | { kind: 'hf-source-active' }     // VAD detectó voz en este lado
-    | { kind: 'hf-target-speaking' };  // TTS en este lado (idioma destino)
+    | { kind: 'hf-idle' };  // ambos discos en este modo, neutros, cuando HF on
   ```
 - Nuevo prop `onTap` (single-tap) — usado para salir de HF.
 - Comportamiento visual:
   - `ptt-*`: idéntico al actual.
-  - `hf-idle`: bloom respira al 30% de intensidad. `tick` se sustituye por un punto luminoso de 1 px que pulsa al ritmo del seam-shimmer (período 8s).
-  - `hf-source-active`: idéntico a `ptt-active` (Waveform + accent ring + bloom 100%).
-  - `hf-target-speaking`: bloom al 60%, accent ring estático (sin breathing), shimmer radial dentro del disco (RadialGradient blanco animado en opacity 0.04→0.10→0.04, período 1.6s) en lugar de Waveform. La traducción "habla" desde aquí.
-- Nueva animación `discInhale`: una respiración profunda (scale 1.0 → 1.08 → 1.0, ease in-out, 700 ms) que se dispara al activar HF — confirmación física de la entrada en modo.
+  - `hf-idle`: aspecto de reposo neutro (tick + código de idioma), bloom recesivo al 30%, sin animación por lado.
+- Animación `discInhale`: una respiración (scale 1.0 → 1.08 → 1.0, ease in-out) que se dispara una vez al activar HF — confirmación física de la entrada en modo (transición de una sola pasada, no un elemento "vivo" persistente).
 
 **3.3. `SeamShimmer` direccional (nuevo componente)**
 - `src/ui/animations/SeamShimmer.tsx`
@@ -303,22 +311,19 @@ Salidas globales:
 - Hairline divisor opcional (`borderLeft: 1px hairline`) — decidir tras prototipar.
 - Estado primer uso: si nunca se ha activado, prefijar un punto pulsante muy tenue para invitarlo. Tras primer uso, queda estático.
 
-### Disco — modo `hf-idle`
+### Disco — modo `hf-idle` (único modo de disco en HF)
 
-- Bloom: opacity multiplicada por 0.30, mismo período de respiración.
-- Tick (línea horizontal): sustituido por un punto blanco de 2 px @ 50% opacidad, pulsando con período 4 s (mitad del seam).
-- Lang label: igual que en idle PTT, pero opacidad bajada de 62% a 45% — "atento, no protagonista".
+- Bloom: opacity multiplicada por 0.30, mismo período de respiración — recesivo.
+- Tick (línea horizontal): **se mantiene** el tick neutro de reposo. (Corrección: el punto pulsante anterior se eliminó — el único elemento vivo en HF es la onda de la costura.)
+- Lang label: opacidad 45% — "atento, no protagonista".
 
-### Disco — modo `hf-source-active`
+### Discos en HF — sin reacción por lado (corrección de diseño)
 
-- Idéntico visualmente a `ptt-active`. La diferencia es que no hay dedo presionando — pero el comportamiento del bloom, waveform y accent ring es el mismo. El usuario reconoce el estado.
-
-### Disco — modo `hf-target-speaking`
-
-- Bloom: 60%.
-- Accent ring: presente, **estático** (sin breathing — ese efecto está reservado al estado activo de captura).
-- En lugar de Waveform: shimmer radial dentro del disco. SVG `<RadialGradient>` blanco con opacity oscilando 0.04↔0.10, período 1.6 s. Idea: el disco "se ilumina por dentro" como si la voz emergiera del objeto.
-- Lang label: visible al 62% como en idle.
+Los modos `hf-source-active` y `hf-target-speaking` se eliminaron. En HF no se
+conoce el hablante en tiempo real, así que ningún disco anima por lado: ambos
+mantienen `hf-idle`. La señal de captura/salida vive en la onda de la costura
+(`SeamControl`: onda viva al escuchar, oscilación calmada al traducir) y, para la
+dirección ya conocida tras enrutar, en el pulso del `SeamShimmer`.
 
 ### SeamShimmer pulso direccional
 

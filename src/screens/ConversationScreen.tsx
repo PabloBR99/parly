@@ -40,6 +40,7 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   const activeTurnId = useConversationStore(s => s.activeTurnId);
   const conversationMode = useConversationStore(s => s.mode);
   const hfActiveSpeaker = useConversationStore(s => s.hfActiveSpeaker);
+  const hfActivity = useConversationStore(s => s.hfActivity);
   const networkState = useNetworkStore(s => s.state);
   const [pickerSlot, setPickerSlot] = useState<PickerSlot>(null);
   const [hfFirstRun, setHfFirstRun] = useState(false);
@@ -268,11 +269,12 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
         />
       </View>
 
-      {/* Hands-free control — neutral glass knob seated on the seam. */}
+      {/* Hands-free control — a neutral voice wave seated dead-centre on the
+          seam. The wave is the only live element in HF; the discs stay quiet. */}
       {showHfToggle && (
         <SeamControl
           mode={hfMode}
-          pulseDirection={seamPulseDir}
+          activity={hfActivity}
           onToggle={handleToggleHf}
         />
       )}

@@ -30,6 +30,7 @@
 //   Android TTS. Every collaborator is an interface.
 
 import { useConversationStore } from '../../store/conversationStore';
+import type { HfActivity } from '../../store/conversationStore';
 import type { PersonId } from '../../app/types';
 import { log } from '../log/logStore';
 
@@ -174,6 +175,22 @@ export class ConversationOrchestrator {
   /** Read-only HF state for UI debugging. */
   getHfState(): HfState {
     return this.hfState;
+  }
+
+  /**
+   * Single funnel for HF state transitions. Updates the internal state AND
+   * mirrors the derived "activity" onto the store so the seam voice wave
+   * (`SeamControl`) can breathe in step: capturing → listening, speaking →
+   * speaking, everything else → idle. Routing all `hfState` writes through
+   * here keeps the wave and the machine from drifting apart.
+   */
+  private setHfState(next: HfState): void {
+    this.hfState = next;
+    const activity: HfActivity =
+      next === 'hf-capturing' ? 'listening'
+      : next === 'hf-speaking' ? 'speaking'
+      : 'idle';
+    (this.deps.conversationStore ?? useConversationStore).getState().setHfActivity(activity);
   }
 
   /** Whether hands-free mode is currently active. */
@@ -331,7 +348,7 @@ export class ConversationOrchestrator {
     this.hfPairA = pairA;
     this.hfPairB = pairB;
     this.hfEnabled = true;
-    this.hfState = 'hf-idle';
+    this.setHfState('hf-idle');
     this.vadBuffer = new Int16Array(0);
     this.hfFirstAudioLogged = false;
 
@@ -393,7 +410,7 @@ export class ConversationOrchestrator {
 
     this.hfPaused = false;
     this.hfEnabled = false;
-    this.hfState = 'hf-idle';
+    this.setHfState('hf-idle');
 
     // 1. Clear UI state synchronously — UI is coherent before any await.
     const store = (this.deps.conversationStore ?? useConversationStore).getState();
@@ -440,7 +457,7 @@ export class ConversationOrchestrator {
     if (!this.hfEnabled || this.hfPaused) return;
     log.info('[orch/hf] pausing — network offline');
     this.hfPaused = true;
-    this.hfState = 'hf-idle';
+    this.setHfState('hf-idle');
     this.vadBuffer = new Int16Array(0);
     this.deps.vad?.setActive(false);
     try { await this.deps.audioCapture.stopStreaming(); } catch { /* noop */ }
@@ -477,7 +494,7 @@ export class ConversationOrchestrator {
   private handleHfSpeechStart(): void {
     if (!this.hfEnabled || this.hfPaused || this.hfState !== 'hf-idle') return;
     log.info('[orch/hf] speech_start → capturing');
-    this.hfState = 'hf-capturing';
+    this.setHfState('hf-capturing');
   }
 
   private async handleHfSpeechEnd(): Promise<void> {
@@ -486,7 +503,7 @@ export class ConversationOrchestrator {
 
     const vadEndAt = Date.now();
     log.info('[orch/hf] speech_end → flushing');
-    this.hfState = 'hf-flushing';
+    this.setHfState('hf-flushing');
 
     let result: { text: string; language?: string };
     const flushSentAt = Date.now();
@@ -495,7 +512,7 @@ export class ConversationOrchestrator {
     } catch (e) {
       log.error('[orch/hf] flushUtterance failed', e instanceof Error ? e : new Error(String(e)));
       if (this.hfEnabled) {
-        this.hfState = 'hf-idle';
+        this.setHfState('hf-idle');
         await this.attemptHfReconnect();
       }
       return;
@@ -507,7 +524,7 @@ export class ConversationOrchestrator {
     const { text, language } = result;
     const trimmed = text.trim();
     if (trimmed.length === 0) {
-      this.hfState = 'hf-idle';
+      this.setHfState('hf-idle');
       return;
     }
 
@@ -528,12 +545,12 @@ export class ConversationOrchestrator {
           })}`,
         );
       }
-      this.hfState = 'hf-idle';
+      this.setHfState('hf-idle');
       return;
     }
 
     const { speakerId, sourceLang, targetLang, kind: routingKind } = routing;
-    this.hfState = 'hf-routing';
+    this.setHfState('hf-routing');
 
     const store = (this.deps.conversationStore ?? useConversationStore).getState();
     store.setHfActiveSpeaker(speakerId);
@@ -549,13 +566,13 @@ export class ConversationOrchestrator {
 
     if (this.hfEnabled) {
       store.setHfActiveSpeaker(null);
-      this.hfState = 'hf-cooldown';
+      this.setHfState('hf-cooldown');
       await new Promise<void>((r) => setTimeout(r, HF_COOLDOWN_MS));
       if (this.hfEnabled && !this.hfPaused) {
-        this.hfState = 'hf-idle';
+        this.setHfState('hf-idle');
         this.deps.vad?.setActive(true);
       } else if (this.hfEnabled) {
-        this.hfState = 'hf-idle';
+        this.setHfState('hf-idle');
       }
     }
   }
@@ -647,7 +664,7 @@ export class ConversationOrchestrator {
       startedAt: Date.now(),
     });
 
-    this.hfState = 'hf-speaking';
+    this.setHfState('hf-speaking');
     this.deps.tts.prewarm(targetLang);
     this.deps.vad?.setActive(false);
 
@@ -737,7 +754,7 @@ export class ConversationOrchestrator {
     // against a half-open or freshly-reconnected session.
     this.deps.vad?.setActive(false);
     this.vadBuffer = new Int16Array(0);
-    this.hfState = 'hf-idle';
+    this.setHfState('hf-idle');
 
     log.info('[orch/hf] reconnecting in 500 ms');
     await new Promise<void>((r) => setTimeout(r, 500));

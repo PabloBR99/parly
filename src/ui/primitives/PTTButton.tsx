@@ -6,8 +6,11 @@
 // component lays out the disc, the active outer ring, the inner glossy
 // halo, and wires press handling.
 //
-// Hands-free (HF) mode adds a `mode` prop that drives distinct visual states
-// without requiring the caller to track `active` separately. See `DiscMode`.
+// Hands-free (HF) mode adds a `mode` prop. In HF the disc is deliberately
+// quiet and non-reactive: until audio is transcribed and the language detected
+// we don't know who is speaking, so any per-side capture/speak animation would
+// imply knowledge that doesn't exist. The only live element in HF is the seam
+// voice wave (`SeamControl`); both discs hold their neutral resting look.
 
 import React, { useEffect, useRef } from 'react';
 import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
@@ -33,12 +36,9 @@ import { haptics } from '../haptics';
 export type DiscMode =
   | { kind: 'ptt-idle' }
   | { kind: 'ptt-active' }
-  /** Both discs while HF is on but no one is speaking. */
-  | { kind: 'hf-idle' }
-  /** VAD detected voice on this disc's speaker. */
-  | { kind: 'hf-source-active' }
-  /** TTS is playing through this disc's speaker (translation target). */
-  | { kind: 'hf-target-speaking' };
+  /** Hands-free is on. Both discs hold this neutral resting look at all times
+   *  — no per-side capture/speak reaction (the seam wave carries that). */
+  | { kind: 'hf-idle' };
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -75,9 +75,6 @@ const SHADOW_OFFSET_Y = 8;
 const SHADOW_CIRCLE_CY = SHADOW_DISC_CY + SHADOW_OFFSET_Y;
 const SHADOW_REACH = SIZE / 2 + 32;
 
-// HF idle: dot pulses every 4 s (half the seam-shimmer period of 8 s).
-const HF_DOT_PULSE_MS = 4_000;
-
 export function PTTButton({
   label,
   accent,
@@ -93,14 +90,11 @@ export function PTTButton({
   // Derive effective mode from either the `mode` prop or the legacy `active` flag.
   const effectiveMode: DiscMode = mode ?? (active ? { kind: 'ptt-active' } : { kind: 'ptt-idle' });
   const isHf = effectiveMode.kind.startsWith('hf-');
-  const isActive =
-    effectiveMode.kind === 'ptt-active' ||
-    effectiveMode.kind === 'hf-source-active';
+  const isActive = effectiveMode.kind === 'ptt-active';
 
   const press = useSharedValue(0);
   const ring = useSharedValue(0);
   const inhale = useSharedValue(1);
-  const hfDotPulse = useSharedValue(0);
 
   // Bloom palette key.
   const side: 'A' | 'B' = accent === color.accentB ? 'B' : 'A';
@@ -122,7 +116,7 @@ export function PTTButton({
     }
   }, [isHf, inhale]);
 
-  // Active outer-ring breath (PTT and hf-source-active).
+  // Active outer-ring breath (PTT capture only).
   useEffect(() => {
     if (isActive) {
       ring.value = 0;
@@ -137,24 +131,6 @@ export function PTTButton({
     }
     return () => cancelAnimation(ring);
   }, [isActive, ring]);
-
-  // HF-idle dot pulse.
-  useEffect(() => {
-    if (effectiveMode.kind === 'hf-idle') {
-      hfDotPulse.value = withRepeat(
-        withSequence(
-          withTiming(1, { duration: HF_DOT_PULSE_MS * 0.1, easing: Easing.out(Easing.quad) }),
-          withTiming(0, { duration: HF_DOT_PULSE_MS * 0.9, easing: Easing.in(Easing.quad) }),
-        ),
-        -1,
-        false,
-      );
-    } else {
-      cancelAnimation(hfDotPulse);
-      hfDotPulse.value = 0;
-    }
-    return () => cancelAnimation(hfDotPulse);
-  }, [effectiveMode.kind, hfDotPulse]);
 
   const handlePressIn = () => {
     if (disabled || isHf) return;
@@ -189,37 +165,11 @@ export function PTTButton({
     opacity: 0.6 * (1 - ring.value),
   }));
 
-  // HF-target-speaking: radial shimmer inside disc (white, 0.04→0.10→0.04, 1.6 s period).
-  const targetShimmer = useSharedValue(0);
-  useEffect(() => {
-    if (effectiveMode.kind === 'hf-target-speaking') {
-      targetShimmer.value = withRepeat(
-        withSequence(
-          withTiming(1, { duration: 800, easing: Easing.inOut(Easing.sin) }),
-          withTiming(0, { duration: 800, easing: Easing.inOut(Easing.sin) }),
-        ),
-        -1,
-        false,
-      );
-    } else {
-      cancelAnimation(targetShimmer);
-      targetShimmer.value = 0;
-    }
-    return () => cancelAnimation(targetShimmer);
-  }, [effectiveMode.kind, targetShimmer]);
-
-  const targetShimmerStyle = useAnimatedStyle(() => ({
-    opacity: 0.04 + 0.06 * targetShimmer.value,
-  }));
-
   // HF idle: lang label at 45% opacity; normal: 62%.
   const langOpacity = effectiveMode.kind === 'hf-idle' ? 0.45 : 0.62;
 
-  // Bloom intensity by mode.
-  const bloomIntensity =
-    effectiveMode.kind === 'hf-idle' ? 0.30
-    : effectiveMode.kind === 'hf-target-speaking' ? 0.60
-    : 1.0;
+  // Bloom intensity by mode — recessive in HF, full in PTT.
+  const bloomIntensity = effectiveMode.kind === 'hf-idle' ? 0.30 : 1.0;
 
   const disk: ViewStyle = {
     width: SIZE,
@@ -232,9 +182,6 @@ export function PTTButton({
     backgroundColor: isActive ? `${accent}26` : 'transparent',
     overflow: 'hidden',
   };
-
-  // hf-target-speaking: static accent ring (no breathing animation).
-  const showStaticRing = effectiveMode.kind === 'hf-target-speaking';
 
   return (
     <Pressable
@@ -271,17 +218,6 @@ export function PTTButton({
               styles.ring,
               { width: SIZE, height: SIZE, borderRadius: SIZE / 2, borderColor: accentRing },
               ringStyle,
-            ]}
-          />
-        )}
-
-        {/* HF target-speaking: static accent ring. */}
-        {showStaticRing && (
-          <View
-            pointerEvents="none"
-            style={[
-              styles.ring,
-              { width: SIZE, height: SIZE, borderRadius: SIZE / 2, borderColor: accentRing, borderWidth: 1.5 },
             ]}
           />
         )}
@@ -354,40 +290,10 @@ export function PTTButton({
             </Svg>
           </View>
 
-          {/* HF target-speaking: radial shimmer from centre. */}
-          {effectiveMode.kind === 'hf-target-speaking' && (
-            <Animated.View
-              pointerEvents="none"
-              style={[StyleSheet.absoluteFill, targetShimmerStyle]}>
-              <Svg width={SIZE} height={SIZE}>
-                <Defs>
-                  <RadialGradient
-                    id={`hf-shimmer-${side}`}
-                    cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
-                    <Stop offset="0"   stopColor="#FFFFFF" stopOpacity="1" />
-                    <Stop offset="0.6" stopColor="#FFFFFF" stopOpacity="0.4" />
-                    <Stop offset="1"   stopColor="#FFFFFF" stopOpacity="0" />
-                  </RadialGradient>
-                </Defs>
-                <Circle
-                  cx={SIZE / 2} cy={SIZE / 2} r={SIZE / 2}
-                  fill={`url(#hf-shimmer-${side})`}
-                />
-              </Svg>
-            </Animated.View>
-          )}
-
-          {/* Disc content by mode. */}
+          {/* Disc content by mode. PTT-active shows the live waveform; every
+              resting state (incl. HF) shows the neutral tick + language code. */}
           {isActive ? (
             <Waveform active color={accent} bars={5} height={30} />
-          ) : effectiveMode.kind === 'hf-idle' ? (
-            <View style={styles.discIdleContent} pointerEvents="none">
-              {/* Pulsing 2 px dot replaces the tick in HF idle. */}
-              <Animated.View style={[styles.hfDot, { opacity: 0.5 + 0.5 * hfDotPulse.value }]} />
-              <Text style={[styles.lang, { color: `rgba(255,255,255,${langOpacity})` }]}>
-                {label}
-              </Text>
-            </View>
           ) : (
             <View style={styles.discIdleContent} pointerEvents="none">
               <View style={styles.tick} />
@@ -445,12 +351,6 @@ const styles = StyleSheet.create({
     height: 1.5,
     borderRadius: 1,
     backgroundColor: 'rgba(255,255,255,0.40)',
-  },
-  hfDot: {
-    width: 2,
-    height: 2,
-    borderRadius: 1,
-    backgroundColor: '#FFFFFF',
   },
   lang: {
     marginTop: 16,

@@ -53,8 +53,8 @@ interface BloomProps {
   readonly active: boolean;
   /** Disabled fades stains to a near-invisible whisper. */
   readonly disabled: boolean;
-  /** Multiplier [0-1] applied to final opacity. Used in HF mode to dim the
-   *  bloom (0.30 for hf-idle, 0.60 for hf-target-speaking). Default 1.0. */
+  /** Multiplier [0-1] applied to final opacity. Used in HF mode to keep the
+   *  bloom recessive (0.30 for hf-idle). Default 1.0. */
   readonly intensity?: number;
 }
 

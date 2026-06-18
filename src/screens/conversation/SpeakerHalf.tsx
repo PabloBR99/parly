@@ -84,22 +84,17 @@ export function SpeakerHalf({
   const partnerLang = getLanguage(partnerLanguage);
 
   const conversationMode = useConversationStore(s => s.mode);
-  const hfActiveSpeaker = useConversationStore(s => s.hfActiveSpeaker);
   const hfUnroutedSpeaker = useConversationStore(s => s.hfUnroutedSpeaker);
 
-  // Derive disc mode from conversation mode + HF state.
+  // Derive disc mode from conversation mode. In HF the disc never reacts
+  // per-speaker — we don't know who is talking until audio is transcribed and
+  // routed — so both discs hold the neutral resting look; the seam voice wave
+  // is the only live element. See SeamControl.
   const discMode: DiscMode = (() => {
     if (conversationMode === 'ptt') {
       return activeTurn !== null
         ? { kind: 'ptt-active' }
         : { kind: 'ptt-idle' };
-    }
-    // HF mode:
-    if (hfActiveSpeaker === speakerId) {
-      return { kind: 'hf-source-active' };
-    }
-    if (hfActiveSpeaker !== null) {
-      return { kind: 'hf-target-speaking' };
     }
     return { kind: 'hf-idle' };
   })();
