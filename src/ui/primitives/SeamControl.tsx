@@ -32,7 +32,6 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
-import LinearGradient from 'react-native-linear-gradient';
 import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { motion } from '../theme';
 import { haptics } from '../haptics';
@@ -109,6 +108,9 @@ function Bar({ height, color, period, delay, low }: BarProps): React.JSX.Element
       // Waveform.tsx. This also removes any dependency on a separately-set
       // start value (the old `v.value = low` double-assignment was fragile).
       v.value = withSequence(
+        // Match the prototype's CSS entrance: snap to the 0% keyframe (low)
+        // and hold there during the per-bar animation-delay, then oscillate.
+        withTiming(low, { duration: 0 }),
         withTiming(low, { duration: delay }),
         withRepeat(
           withSequence(
@@ -264,18 +266,10 @@ export function SeamControl({ mode, activity = 'idle', onToggle }: SeamControlPr
         {/* Invite halo — a 1 px ring 4 px outside the pill, breathing when off. */}
         <Animated.View style={[styles.invite, inviteStyle]} pointerEvents="none" />
 
-        {/* The pill. */}
+        {/* The pill. The recessed-glass feel is a real inset box-shadow
+            (inset 0 1px 2px rgba(0,0,0,.45)) declared in styles.pill, matching
+            the prototype exactly. */}
         <Animated.View style={[styles.pill, pillStyle]}>
-          {/* Inset top shadow — recessed-glass feel. */}
-          <LinearGradient
-            pointerEvents="none"
-            colors={['rgba(0,0,0,0.32)', 'rgba(0,0,0,0)']}
-            start={{ x: 0.5, y: 0 }}
-            end={{ x: 0.5, y: 1 }}
-            locations={[0, 0.4]}
-            style={StyleSheet.absoluteFill}
-          />
-
           {/* Active inner glow (on only). */}
           <Animated.View style={[StyleSheet.absoluteFill, styles.glow, glowStyle]} pointerEvents="none">
             <Svg width={PILL_W} height={PILL_H}>
@@ -335,7 +329,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
+    // No overflow:'hidden' — it can suppress inset box-shadows on Android, and
+    // nothing here needs clipping (the glow ellipse is already transparent
+    // before the corners; the bars are small and centred).
+    // Prototype: box-shadow: inset 0 1px 2px rgba(0,0,0,.45). RN 0.84 (New
+    // Architecture) supports inset box-shadows natively.
+    boxShadow: [
+      { inset: true, offsetX: 0, offsetY: 1, blurRadius: 2, spreadDistance: 0, color: 'rgba(0,0,0,0.45)' },
+    ],
   },
   glow: {
     alignItems: 'center',
@@ -345,10 +346,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    // Prototype: 7 bars, 2px wide, 3px gap. Use real gap (no outer margins) so
+    // the row width matches the prototype exactly.
+    gap: 3,
   },
   bar: {
     width: 2,
-    marginHorizontal: 1.5,
     borderRadius: 2,
   },
 });
