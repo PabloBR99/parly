@@ -27,7 +27,6 @@ import Animated, {
   interpolateColor,
   useAnimatedStyle,
   useSharedValue,
-  withDelay,
   withRepeat,
   withSpring,
   withSequence,
@@ -101,13 +100,23 @@ function Bar({ height, color, period, delay, low }: BarProps): React.JSX.Element
   useEffect(() => {
     cancelAnimation(v);
     if (period > 0) {
-      v.value = low;
-      v.value = withDelay(
-        delay,
+      const half = period / 2;
+      // NOTE: do NOT use withDelay here. `withDelay(d, withRepeat(...))`
+      // freezes the value at `low` on this Reanimated 4 + worklets release
+      // build (the inner repeat never ticks). Instead, stagger the entrance
+      // with a leading withTiming, then oscillate with a self-contained
+      // withSequence repeat — the same withDelay-free shape proven in
+      // Waveform.tsx. This also removes any dependency on a separately-set
+      // start value (the old `v.value = low` double-assignment was fragile).
+      v.value = withSequence(
+        withTiming(low, { duration: delay }),
         withRepeat(
-          withTiming(1, { duration: period / 2, easing: Easing.inOut(Easing.sin) }),
+          withSequence(
+            withTiming(1, { duration: half, easing: Easing.inOut(Easing.sin) }),
+            withTiming(low, { duration: half, easing: Easing.inOut(Easing.sin) }),
+          ),
           -1,
-          true,
+          false,
         ),
       );
     } else {
