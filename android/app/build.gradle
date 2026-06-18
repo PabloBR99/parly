@@ -81,8 +81,11 @@ android {
         applicationId "com.parly"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // CI injects a unique, increasing version per build so each APK installs
+        // as a genuine update (a static versionCode lets Android keep an older
+        // build) and is identifiable. Local builds fall back to 1 / "1.0-dev".
+        versionCode (System.getenv("PARLY_VERSION_CODE") ?: "1").toInteger()
+        versionName (System.getenv("PARLY_VERSION_NAME") ?: "1.0-dev")
     }
     signingConfigs {
         debug {

@@ -63,19 +63,31 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
+      - name: Compute version
+        id: version
+        run: |
+          SHA_SHORT=$(git rev-parse --short HEAD)
+          echo "sha_short=$SHA_SHORT" >> "$GITHUB_OUTPUT"
+          # Monotonic per-build versionCode so each APK installs as an update.
+          echo "version_code=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "version_name=1.0-$SHA_SHORT" >> "$GITHUB_OUTPUT"
+
       - name: Build release APK (signed with debug keystore)
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon --stacktrace
         env:
           # Skip proguard/shrinking on CI for faster + more predictable builds
           ORG_GRADLE_PROJECT_enableProguardInReleaseBuilds: 'false'
+          # Unique, identifiable version per build (see android/app/build.gradle).
+          PARLY_VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          PARLY_VERSION_NAME: ${{ steps.version.outputs.version_name }}
 
       - name: Locate APK
         id: locate
         run: |
           APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -n1)
           echo "apk=$APK" >> "$GITHUB_OUTPUT"
-          echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "sha_short=${{ steps.version.outputs.sha_short }}" >> "$GITHUB_OUTPUT"
           ls -lh "$APK"
 
       - name: Upload as workflow artifact
@@ -92,6 +104,7 @@ jobs:
           name: Dev build ${{ steps.locate.outputs.sha_short }}
           body: |
             Automated dev build from commit ${{ github.sha }}.
+            App version: ${{ steps.version.outputs.version_name }} (versionCode ${{ steps.version.outputs.version_code }}).
             Signed with the committed debug keystore — Android will warn about
             "unknown developer" on install. Enable "install from unknown sources"
             for your browser to sideload.
