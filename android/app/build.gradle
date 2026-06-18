@@ -84,8 +84,12 @@ android {
         // CI injects a unique, increasing version per build so each APK installs
         // as a genuine update (a static versionCode lets Android keep an older
         // build) and is identifiable. Local builds fall back to 1 / "1.0-dev".
-        versionCode (System.getenv("PARLY_VERSION_CODE") ?: "1").toInteger()
-        versionName (System.getenv("PARLY_VERSION_NAME") ?: "1.0-dev")
+        // NB: compute into locals first — `versionCode (expr).toInteger()` would
+        // be parsed by Groovy as `versionCode((expr))` and break.
+        def ciVersionCode = System.getenv("PARLY_VERSION_CODE")
+        def ciVersionName = System.getenv("PARLY_VERSION_NAME")
+        versionCode ciVersionCode ? ciVersionCode.toInteger() : 1
+        versionName ciVersionName ?: "1.0-dev"
     }
     signingConfigs {
         debug {
