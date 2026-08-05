@@ -76,15 +76,17 @@ consistency, drift.
     if (!this.streaming) return;
     this.streaming = false;
     this.recording = false;
-    const sub = this.dataSubscription;   // capture BEFORE any await
+    const sub = this.dataSubscription;   // capture + null BEFORE any await
     this.dataSubscription = null;
-    sub?.remove();
     await AudioRecord.stop();
+    sub?.remove();                       // removes THIS call's listener, never a newer one
   }
   ```
 
-  None of the 98 tests cover this interleave (the mocks resolve `stopStreaming`
-  immediately).
+  Nulling the field before the await gives a concurrent `startStreaming` a clean
+  slot; removing the *captured* `sub` after the stop preserves trailing-chunk
+  delivery on the legitimate release path (which matters for H4). None of the 98
+  tests cover this interleave (the mocks resolve `stopStreaming` immediately).
 
 ### C3. Conversation chrome is one-sided and English-only
 
@@ -220,7 +222,9 @@ consistency, drift.
   "sí", "ok", "gracias", the most common turns in a live conversation — are the
   ones most likely to fit entirely inside the handshake window.
 - **Why it hurts:** The user spoke, the disc animated, and nothing happened. No
-  error, no text, no sound. Dead air is the product's stated worst enemy.
+  error, no text, no sound. Worse: the turn ends `done`, so `useTerminalHaptic`
+  fires the *success* haptic — the phone physically confirms a turn that never
+  happened. Dead air is the product's stated worst enemy.
 - **Fix:** On release-during-connecting, don't abort — set a `flushOnReady`
   flag. When `session.created` arrives, drain the queue, send
   `input_audio.flush`/`end`, and let the turn complete normally. The queueing
@@ -231,7 +235,8 @@ consistency, drift.
 - **Where:** `ConversationOrchestrator.ts:851-856`.
 - **What's wrong:** Voxtral returning empty/whitespace (too quiet, mic muffled,
   permission half-granted) ends the turn as `done` with empty strings. Nothing
-  renders anywhere.
+  renders anywhere — and the `done` transition fires the success haptic
+  (`useTerminalHaptic`), actively signalling the opposite of what happened.
 - **Why it hurts:** "Did it hear me?" is the question the UI must never leave
   open. This path leaves it open every time.
 - **Fix:** Route it through the (fixed, C1) speaker-side notice with copy like
@@ -371,9 +376,10 @@ consistency, drift.
   comment says "the orchestrator calls this after an online failure"; nothing
   calls it.
 - **What's wrong:** Pressing PTT while offline shows `recording` + "listening"
-  for the full 8-second handshake timeout before failing (into C1's wrong-side
-  error). Meanwhile the pill can honestly claim "online" for up to ~60 s after a
-  drop (30 s cadence × 2-failure threshold + 3 s timeouts).
+  for up to 8 s before failing (airplane mode fast-fails via `onerror`;
+  degraded/black-hole networks ride the full `HANDSHAKE_TIMEOUT_MS`) — into
+  C1's wrong-side error. Meanwhile the pill can honestly claim "online" for up
+  to ~66 s after a drop (30 s cadence × 2-failure threshold + 3 s timeouts).
 - **Fix:** (1) In `failTurn`, call `probeNetworkNow()` — one line, closes the
   loop the comment promises. (2) If `networkStore.state === 'offline'` at press
   time, short-circuit with the offline notice instead of opening a doomed
@@ -382,15 +388,18 @@ consistency, drift.
 
 ### H13. Status and error type is illegible at table distance
 
-- **Where:** `theme.ts:33-34` (`fgFaint` = 36 % white ≈ **2.7:1** contrast on
-  the dusk background; `fgGhost` = 16 % ≈ 1.6:1), used for: stage microcopy at
-  10 pt italic (`SpeakerHalf.tsx:250-253`), source lines, the welcome-flow
-  language arrow, the network pill label. The error pane is `bodySmall` (13 pt).
+- **Where:** `theme.ts:33-34` (`fgFaint` = 36 % white ≈ **3.3:1** contrast
+  across the dusk backdrop's stops; `fgGhost` = 16 % ≈ **1.5:1**), used for:
+  stage microcopy at 10 pt italic (`SpeakerHalf.tsx:250-253`), source lines, the
+  welcome-flow language arrow, the network pill label. The error pane is
+  `bodySmall` (13 pt).
 - **What's wrong:** The product spec is glanceable at ~50 cm in a bright café.
-  10 pt italic serif at 2.7:1 fails WCAG AA even for large text, and these are
-  the strings that report machine state and errors — the highest-stakes text on
-  screen. The 34 pt translation text is fine; everything *about* the pipeline is
-  whispered.
+  3.3:1 sits below the 4.5:1 WCAG AA minimum that applies to 10–13 pt text (the
+  3:1 concession exists only for ≥18 pt), and these are the strings that report
+  machine state and errors — the highest-stakes text on screen. `fgGhost` at
+  1.5:1 fails every threshold yet carries the instructional welcome-flow arrow.
+  The 34 pt translation text is fine (fg ≈ 18:1); everything *about* the
+  pipeline is whispered.
 - **Fix:** State/error strings move up to ≥13 pt and ≥`fgMuted` (62 % ≈ 7:1);
   error copy gets `body` size (15 pt) plus the error tint. Keep `fgFaint` for
   genuinely decorative chrome (the version tag), not for anything a user must
@@ -530,7 +539,10 @@ resolving from the `transcription.done` handler; `speakChunk` resolves `void` on
 `tts-error` (fold into H6); PTT turns aren't torn down on app-background (HF is
 — `ConversationScreen.tsx:62-75`; a backgrounded mid-turn PTT keeps the WS and
 mic alive until the turn ends); the error-stage StateMorph is a 6 px static dot
-(invisible at distance; fold into H13).
+(invisible at distance; fold into H13); `TRANSLATION_MODELS` /
+`setTranslationModel` (`settingsStore.ts:10-16,54`) have zero UI call sites — a
+three-model picker the store and README advertise that no screen renders (dead
+settings surface: `ministral-3b` / `mistral-large` are unreachable).
 
 ---
 
