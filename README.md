@@ -4,6 +4,10 @@ Bidirectional speech translation app. React Native (bare), Android-first. The ph
 
 Bring your own Mistral API key. The app guides non-technical users through getting one in three plain-language steps the first time they open the app. The conversation surface itself is bilingual by construction: each half renders its chrome — stage microcopy, notices, welcome copy, the network pill — in that half's reader's language (`src/i18n/strings.ts`, 32 languages).
 
+<p align="center">
+  <img src="docs/ui-conversation.jpg" width="340" alt="Conversation screen mid-turn: the Spanish half at the top rotated 180° (asking 'Hola, ¿cuál es su nombre?'), the English half at the bottom reading the live translation 'My name is Pablo.'" />
+</p>
+
 ---
 
 ## Quick Start
@@ -34,11 +38,12 @@ The app needs a Mistral API key on first run. The in-app onboarding opens [conso
 | **Translation** | Mistral chat completions, streaming SSE — `mistral-small-latest` |
 | **TTS** | `react-native-tts` (OS-native voices, per-language voice cache) |
 | **Audio capture** | `react-native-audio-record` — PCM 16kHz mono, base64-framed |
+| **VAD (hands-free)** | Silero VAD v5 via `onnxruntime-react-native` — 512-sample frames @ 16 kHz decide turn-taking on-device |
 | **Secret storage** | `react-native-keychain` — API key only, never leaves the device except in `Authorization: Bearer …` |
 | **Settings persistence** | Zustand `persist` over a `react-native-fs` file — language pair, model, key status survive restarts (the key itself stays in the keychain) |
-| **Tests** | Jest, 120 passing across orchestrator / Voxtral client / translator / audio capture / network monitor / VAD / app tree |
+| **Tests** | Jest, 123 passing across orchestrator / Voxtral client / translator / audio capture / network monitor / VAD / app tree |
 
-No on-device ML models. No bundled audio assets. Footprint is the React Native runtime plus a thin native shim. The only egress is `api.mistral.ai`.
+One on-device ML model ships in the APK: Silero VAD (`android/app/src/main/assets/silero_vad.onnx`, 2.3 MB), which drives hands-free turn detection locally — audio only leaves the device for STT. Everything else stays cloud (STT, translation) or OS-native (TTS). The only egress is `api.mistral.ai`.
 
 **Connectivity:** required during conversations. Connection state shows as a network pill on **both** edges (localized to each reader's language). Failures surface as a plain-language notice on the **speaker's own half**, in the speaker's language — raw error strings go to the log buffer only. Pressing PTT while known-offline answers immediately with the offline notice instead of opening a doomed socket.
 
