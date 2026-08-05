@@ -483,6 +483,40 @@ describe('ConversationOrchestrator (hands-free)', () => {
     expect(o.isHandsFreeActive()).toBe(true);
   });
 
+  it('denied mic permission never enables HF and notifies both halves', async () => {
+    const { m, o } = makeHfOrchestrator();
+    m.audioCapture.hasPermission.mockResolvedValue(false);
+    m.audioCapture.requestPermission.mockResolvedValue(false);
+
+    await o.enableHandsFree('es', 'en');
+
+    expect(m.audioCapture.startStreaming).not.toHaveBeenCalled();
+    expect(m.voxtral.start).not.toHaveBeenCalled();
+    expect(m.vad.initialize).not.toHaveBeenCalled();
+    expect(o.isHandsFreeActive()).toBe(false);
+    expect(useConversationStore.getState().mode).toBe('ptt');
+    expect(useConversationStore.getState().notices.person_a).toEqual({
+      key: 'micPermission',
+      kind: 'info',
+    });
+    expect(useConversationStore.getState().notices.person_b).toEqual({
+      key: 'micPermission',
+      kind: 'info',
+    });
+  });
+
+  it('grant-on-request proceeds into hands-free', async () => {
+    const { m, o } = makeHfOrchestrator();
+    m.audioCapture.hasPermission.mockResolvedValue(false);
+    m.audioCapture.requestPermission.mockResolvedValue(true);
+
+    await o.enableHandsFree('es', 'en');
+
+    expect(m.audioCapture.requestPermission).toHaveBeenCalledTimes(1);
+    expect(m.audioCapture.startStreaming).toHaveBeenCalledTimes(1);
+    expect(o.isHandsFreeActive()).toBe(true);
+  });
+
   it('routes A→B when VAD fires and flush returns lang matching pair A', async () => {
     const { m, o } = makeHfOrchestrator();
     m.translator.translateStream.mockImplementation(async (args) => {

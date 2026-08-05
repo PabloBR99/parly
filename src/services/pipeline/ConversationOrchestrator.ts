@@ -402,6 +402,29 @@ export class ConversationOrchestrator {
     if (!this.config?.apiKey) throw new Error('Orchestrator not configured (missing API key)');
     if (!this.deps.vad) throw new Error('No VAD service configured');
 
+    // Mic permission, checked BEFORE anything flips to hands-free.
+    // AudioRecord.start() without RECORD_AUDIO dies in native code — no JS
+    // try/catch sees it, the process just ends. Unlike a PTT press (which
+    // physically ends under the system dialog), the toggle tap survives the
+    // dialog, so a grant can continue straight into hands-free.
+    let granted: boolean;
+    try {
+      granted = await this.deps.audioCapture.hasPermission();
+    } catch {
+      granted = true; // permission APIs unavailable — let the platform decide
+    }
+    if (!granted) {
+      granted = await this.deps.audioCapture.requestPermission().catch(() => false);
+    }
+    if (!granted) {
+      // The toggle isn't owned by either speaker — both readers see why
+      // hands-free didn't start, each in their own language.
+      const s = (this.deps.conversationStore ?? useConversationStore).getState();
+      s.setNotice('person_a', { key: 'micPermission', kind: 'info' });
+      s.setNotice('person_b', { key: 'micPermission', kind: 'info' });
+      return;
+    }
+
     const cfg = this.config;
     log.info(`[orch/hf] enabling — pair=${pairA}↔${pairB}`);
 
