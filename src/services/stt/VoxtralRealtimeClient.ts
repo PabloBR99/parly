@@ -39,7 +39,9 @@ import { log } from '../log/logStore';
 const ENDPOINT = 'wss://api.mistral.ai/v1/audio/transcriptions/realtime';
 const DEFAULT_MODEL = 'voxtral-mini-transcribe-realtime-2602';
 const SAMPLE_RATE = 16_000;
-const HANDSHAKE_TIMEOUT_MS = 8_000;
+// 4 s, not 8: on a degraded network nobody is still holding the disc at
+// 8 seconds — fail fast into the speaker-side retry notice instead.
+const HANDSHAKE_TIMEOUT_MS = 4_000;
 // Server-side audio buffering before emitting a transcript (session/HF mode).
 // Voxtral docs cite 480 ms as the accuracy sweet-spot; 320 trims ~160 ms off
 // the flush→final tail for snappier hands-free turns, at a marginal accuracy
@@ -111,6 +113,15 @@ export class VoxtralRealtimeClient {
   private handshakeReject: ((err: Error) => void) | null = null;
   /** Chunks fed before session.created — drained once the session is ready. */
   private preSessionChunkQueue: string[] = [];
+  /** Set when end() is called during 'connecting': PTT was released before
+   *  the handshake finished. Instead of aborting and throwing the queued
+   *  audio away (which silently ate every short utterance — "sí", "ok"),
+   *  the session.created handler drains the queue and immediately sends
+   *  flush + end so the turn completes normally. */
+  private flushOnReady = false;
+  /** Resolvers waiting for this connection to finish (transcription.done or
+   *  any terminal cleanup). Resolved from the event handlers — no polling. */
+  private finalWaiters: Array<() => void> = [];
   private generation = 0;
 
   // Session-mode flush resolution (one pending flush at a time).
@@ -142,6 +153,7 @@ export class VoxtralRealtimeClient {
     this.sessionReady = false;
     this.sessionMode = options.sessionMode ?? false;
     this.preSessionChunkQueue = [];
+    this.flushOnReady = false;
 
     const model = options.model ?? DEFAULT_MODEL;
     const url = `${ENDPOINT}?model=${encodeURIComponent(model)}`;
@@ -216,6 +228,20 @@ export class VoxtralRealtimeClient {
             this.preSessionChunkQueue = [];
             for (const chunk of queued) this.sendAudioChunk(chunk);
             settle(() => resolve());
+            // PTT was already released while we were connecting — the whole
+            // utterance is the queue we just drained. Flush it now so the
+            // quick-release turn transcribes instead of being discarded.
+            if (this.flushOnReady) {
+              this.flushOnReady = false;
+              this.state = 'ending';
+              try {
+                ws.send(JSON.stringify({ type: 'input_audio.flush' }));
+                ws.send(JSON.stringify({ type: 'input_audio.end' }));
+              } catch (e) {
+                this.callbacks?.onError(new Error(`Failed to signal end: ${String(e)}`));
+                this.cleanup();
+              }
+            }
           }
           return;
         }
@@ -328,20 +354,19 @@ export class VoxtralRealtimeClient {
    */
   async end(finalTimeoutMs = 5_000): Promise<void> {
     if (this.state === 'connecting') {
-      // User released before the WS finished handshaking. Reject the pending
-      // start() so the caller's `await` unblocks instead of hanging forever.
-      const reject = this.handshakeReject;
-      this.handshakeReject = null;
-      this.cleanup();
-      reject?.(new Error('Voxtral handshake aborted'));
-      return;
+      // User released before the WS finished handshaking. Don't abort — the
+      // whole utterance is sitting in preSessionChunkQueue. Mark the session
+      // to flush the instant it opens and wait for the final like any other
+      // turn. If the handshake genuinely fails, cleanup() rejects start()
+      // (via the handshake timer / onerror / onclose) and resolves us.
+      this.flushOnReady = true;
+      return this.waitForFinal(finalTimeoutMs + HANDSHAKE_TIMEOUT_MS);
     }
     if (this.state !== 'streaming') {
       this.cleanup();
       return;
     }
     this.state = 'ending';
-    const gen = this.generation;
 
     try {
       this.ws?.send(JSON.stringify({ type: 'input_audio.flush' }));
@@ -352,21 +377,33 @@ export class VoxtralRealtimeClient {
       return;
     }
 
-    // Wait up to finalTimeoutMs for transcription.done (cleanup() fires after).
-    await new Promise<void>((resolve) => {
-      const start = Date.now();
-      const tick = () => {
-        const s: StreamingState = this.state;
-        if (gen !== this.generation || s === 'closed') return resolve();
-        if (Date.now() - start >= finalTimeoutMs) {
-          // Force-close: onFinal with whatever partial we accumulated, then cleanup.
-          this.callbacks?.onFinal(this.accumulatedText, this.detectedLanguage);
+    return this.waitForFinal(finalTimeoutMs);
+  }
+
+  /** Resolve when this connection reaches a terminal event (transcription.done
+   *  in PTT mode, or any cleanup). Event-driven — resolved from cleanup(), not
+   *  polled. On timeout, emit whatever partial we accumulated and close. */
+  private waitForFinal(timeoutMs: number): Promise<void> {
+    const gen = this.generation;
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        if (gen === this.generation && this.state !== 'closed') {
+          // Still connecting? The pending start() must reject, or beginTurn
+          // hangs forever (cleanup alone silently nulls the handlers).
+          const rejectHandshake = this.handshakeReject;
+          this.handshakeReject = null;
+          if (!rejectHandshake) {
+            this.callbacks?.onFinal(this.accumulatedText, this.detectedLanguage);
+          }
           this.cleanup();
-          return resolve();
+          rejectHandshake?.(new Error('Voxtral handshake timed out after release'));
         }
-        setTimeout(tick, 50);
-      };
-      tick();
+        resolve();
+      }, timeoutMs);
+      this.finalWaiters.push(() => {
+        clearTimeout(timer);
+        resolve();
+      });
     });
   }
 
@@ -414,6 +451,16 @@ export class VoxtralRealtimeClient {
       this.ws?.send(JSON.stringify({ type: 'input_audio.end' }));
     } catch { /* ignore — we're closing anyway */ }
     this.cleanup();
+  }
+
+  /**
+   * Session-mode: drop any transcript accumulated since the last flush.
+   * Used when re-arming VAD after TTS playback — anything captured in the
+   * gap is the echo of the phone's own speaker, not the next speaker.
+   */
+  resetUtterance(): void {
+    this.accumulatedText = '';
+    this.detectedLanguage = undefined;
   }
 
   /** Abort without waiting for final. No onFinal fired. */
@@ -467,10 +514,15 @@ export class VoxtralRealtimeClient {
       this.handshakeTimer = null;
     }
     this.handshakeReject = null;
+    this.flushOnReady = false;
     // Reject any pending flushUtterance.
     const flushReject = this.flushReject;
     this.clearFlushPending();
     flushReject?.(new Error('VoxtralRealtimeClient closed'));
+    // Resolve anything awaiting end() — this connection is terminal.
+    const waiters = this.finalWaiters;
+    this.finalWaiters = [];
+    for (const w of waiters) w();
 
     if (this.ws) {
       this.ws.onopen = null;

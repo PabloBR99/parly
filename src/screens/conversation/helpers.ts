@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { Turn, TurnStage } from '../../store/conversationStore';
 import type { PersonId } from '../../app/types';
+import { stringsFor } from '../../i18n/strings';
 import { haptics } from '../../ui';
 
 export function findLastTurn(turns: readonly Turn[], speakerId: PersonId): Turn | null {
@@ -10,13 +11,19 @@ export function findLastTurn(turns: readonly Turn[], speakerId: PersonId): Turn 
   return null;
 }
 
-export function stageMicrocopy(stage: TurnStage | null): string {
+/**
+ * Stage word for a half, in that half's READER'S language. The two people at
+ * the table don't share one — an English "thinking" on the Japanese half is
+ * chrome only one side can read.
+ */
+export function stageMicrocopy(stage: TurnStage | null, readerLang: string): string {
+  const t = stringsFor(readerLang);
   switch (stage) {
-    case 'recording': return 'listening';
+    case 'recording': return t.listening;
     case 'transcribing':
-    case 'translating': return 'thinking';
-    case 'speaking': return 'speaking';
-    case 'error': return 'error';
+    case 'translating': return t.thinking;
+    case 'speaking': return t.speaking;
+    case 'error': return t.error;
     default: return '';
   }
 }
@@ -55,14 +62,19 @@ export function useTurnHaptics(
 
 function useTerminalHaptic(turn: Turn | null): void {
   const prev = useRef<TurnStage | null>(null);
+  const hadText = turn !== null && turn.translatedText.length > 0;
   useEffect(() => {
     const curr = turn?.stage ?? null;
     if (prev.current !== curr) {
       if (prev.current !== null) {
-        if (curr === 'done') haptics.done();
+        // The success buzz is a physical claim that a translation happened.
+        // Empty turns (discarded audio, blank transcript, user cancel) end as
+        // 'done' too — those must stay silent, not confirm a turn that never
+        // was.
+        if (curr === 'done' && hadText) haptics.done();
         else if (curr === 'error') haptics.error();
       }
       prev.current = curr;
     }
-  }, [turn?.stage]);
+  }, [turn?.stage, hadText]);
 }

@@ -74,8 +74,13 @@ function Bar({ index, total, active, color, maxHeight }: BarProps): React.JSX.El
     return () => cancelAnimation(v);
   }, [active, index, total, v]);
 
+  // scaleY, never height: animating height re-layouts every bar every frame
+  // exactly while the JS thread is busiest (audio chunks, base64 decode,
+  // store writes per partial). A transform stays on the UI thread —
+  // rock-solid on Android, same visual (bars are center-aligned, so both
+  // grow from the middle). Same approach as SeamControl.
   const animatedStyle = useAnimatedStyle(() => ({
-    height: maxHeight * (0.18 + 0.82 * v.value),
+    transform: [{ scaleY: 0.18 + 0.82 * v.value }],
     opacity: 0.55 + 0.45 * v.value,
   }));
 
@@ -83,7 +88,7 @@ function Bar({ index, total, active, color, maxHeight }: BarProps): React.JSX.El
     <Animated.View
       style={[
         styles.bar,
-        { backgroundColor: color },
+        { backgroundColor: color, height: maxHeight },
         animatedStyle,
       ]}
     />

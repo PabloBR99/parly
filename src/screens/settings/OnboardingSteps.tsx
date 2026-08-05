@@ -111,13 +111,16 @@ export function OnboardingSteps({
         number="3"
         title="Paste it here">
         <Surface style={styles.inputCard}>
+          {/* Deliberately NOT secureTextEntry: the user needs to see that the
+              paste took the whole key — masking it as dots hides the #1
+              failure of this flow (a partial clipboard grab), and an API key
+              gains ~nothing from masking during entry on a personal device. */}
           <TextInput
             ref={inputRef}
             value={apiKey}
             onChangeText={onChangeKey}
             onFocus={onApiInputFocus}
             onBlur={onApiInputBlur}
-            secureTextEntry
             autoCapitalize="none"
             autoCorrect={false}
             spellCheck={false}
@@ -289,8 +292,8 @@ const styles = StyleSheet.create({
     padding: space.md,
     borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: 'rgba(127,216,201,0.30)',
-    backgroundColor: 'rgba(127,216,201,0.06)',
+    borderColor: color.okBorder,
+    backgroundColor: color.okSoft,
   },
   successLine: {
     fontWeight: '500',

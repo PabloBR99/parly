@@ -275,19 +275,47 @@ describe('VoxtralRealtimeClient', () => {
     expect(rec.finals[0].text).toBe('ok');
   });
 
-  it('end() during connecting rejects pending start() (fast-tap freeze fix)', async () => {
+  it('end() during connecting keeps queued audio and flushes once the session opens (quick release)', async () => {
     const fake = createFakeWs();
     const svc = new VoxtralRealtimeClient(fake.factory);
     const rec = recording();
 
     const startPromise = svc.start({ apiKey: 'sk' }, rec.callbacks);
     expect(svc.currentState).toBe('connecting');
+    // The whole short utterance ("sí") arrives before the handshake finishes.
+    svc.feedAudio('quick-utterance-b64');
+    const endPromise = svc.end();
 
-    await svc.end();
+    // Handshake completes AFTER the release — the audio must not be thrown away.
+    fake.ws.fire('open');
+    fake.ws.fire('message', JSON.stringify({ type: 'session.created', session: {} }));
+    await startPromise;
 
-    await expect(startPromise).rejects.toThrow(/handshake aborted/);
+    const types = fake.ws.sent.map(s => JSON.parse(s).type);
+    expect(types).toContain('input_audio.append');
+    expect(types).toContain('input_audio.flush');
+    expect(types).toContain('input_audio.end');
+    // Queue drains before the flush, so the server transcribes the utterance.
+    expect(types.indexOf('input_audio.append')).toBeLessThan(types.indexOf('input_audio.flush'));
+
+    fake.ws.fire('message', JSON.stringify({ type: 'transcription.done', text: 'sí' }));
+    await endPromise;
+    expect(rec.finals[0].text).toBe('sí');
+  });
+
+  it('end() during connecting resolves and start() rejects when the handshake fails', async () => {
+    const fake = createFakeWs();
+    const svc = new VoxtralRealtimeClient(fake.factory);
+    const rec = recording();
+
+    const startPromise = svc.start({ apiKey: 'sk' }, rec.callbacks);
+    const endPromise = svc.end();
+
+    fake.ws.fire('close');
+
+    await expect(startPromise).rejects.toThrow(/closed before session/);
+    await endPromise;
     expect(svc.currentState).toBe('closed');
-    expect(rec.finals).toHaveLength(0);
   });
 
   it('cancel() during connecting rejects pending start()', async () => {
@@ -445,6 +473,23 @@ describe('VoxtralRealtimeClient', () => {
 
       const types = fake.ws.sent.map(s => JSON.parse(s).type);
       expect(types).toContain('input_audio.end');
+    });
+
+    it('resetUtterance() drops text accumulated since the last flush', async () => {
+      const fake = createFakeWs();
+      const svc = new VoxtralRealtimeClient(fake.factory);
+      const rec = recording();
+
+      await handshake(fake, svc, rec, { sessionMode: true });
+
+      // TTS echo leaks in while VAD is gated…
+      fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'echo' }));
+      // …the orchestrator scrubs it before re-arming…
+      svc.resetUtterance();
+      // …so the next real utterance starts clean.
+      fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'real' }));
+
+      expect(rec.partials).toEqual(['echo', 'real']);
     });
 
     it('flushUtterance() throws if called outside sessionMode', async () => {

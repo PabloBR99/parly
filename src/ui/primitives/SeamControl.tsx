@@ -250,18 +250,19 @@ export function SeamControl({ mode, activity = 'idle', onToggle }: SeamControlPr
     return { period: 0, delay: 0, low: 1 }; // reposo / paused — flat, still
   });
 
-  const a11yState = isOn ? 'on' : isPaused ? 'paused, offline' : 'off';
-
   return (
     <Animated.View style={[styles.anchor, wrapStyle]} pointerEvents="box-none">
+      {/* State lives in accessibilityState/Value (switch semantics), not baked
+          into the label string — screen readers announce changes properly. */}
       <Pressable
         onPress={handlePress}
         onPressIn={() => { press.value = withSpring(1, motion.springSnappy); }}
         onPressOut={() => { press.value = withSpring(0, motion.springSnappy); }}
         hitSlop={10}
-        accessibilityRole="button"
-        accessibilityState={{ selected: isOn }}
-        accessibilityLabel={`Hands-free, ${a11yState}`}
+        accessibilityRole="switch"
+        accessibilityState={{ checked: isOn, disabled: isPaused }}
+        accessibilityValue={isPaused ? { text: 'paused — offline' } : undefined}
+        accessibilityLabel="Hands-free"
         style={styles.press}>
         {/* Invite halo — a 1 px ring 4 px outside the pill, breathing when off. */}
         <Animated.View style={[styles.invite, inviteStyle]} pointerEvents="none" />

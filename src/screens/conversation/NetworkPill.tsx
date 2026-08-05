@@ -1,20 +1,25 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
+import { stringsFor } from '../../i18n/strings';
 import { Text, color } from '../../ui';
 
 interface NetworkPillProps {
   readonly state: 'unknown' | 'online' | 'offline';
+  /** Language of the half this pill renders on — the label localizes to its
+   *  reader, because the pill now lives on BOTH edges. */
+  readonly lang: string;
 }
 
-export function NetworkPill({ state }: NetworkPillProps): React.JSX.Element {
+export function NetworkPill({ state, lang }: NetworkPillProps): React.JSX.Element {
+  const t = stringsFor(lang);
   const dotColor =
     state === 'online' ? color.ok :
     state === 'offline' ? color.error :
     color.fgGhost;
   const label =
-    state === 'online' ? 'online' :
-    state === 'offline' ? 'offline' :
-    'connecting';
+    state === 'online' ? t.online :
+    state === 'offline' ? t.offline :
+    t.connecting;
   // A soft halo behind the live dot — colour glows can't use box-shadow on
   // Android, so we layer a translucent disc. Only "online" glows (seafoam);
   // offline/connecting stay quiet so the glow always reads as "good".
@@ -25,7 +30,9 @@ export function NetworkPill({ state }: NetworkPillProps): React.JSX.Element {
         {showHalo && <View style={[styles.halo, { backgroundColor: dotColor }]} />}
         <View style={[styles.dot, { backgroundColor: dotColor }]} />
       </View>
-      <Text variant="serif" tone="fgFaint" style={styles.label}>{label}</Text>
+      {/* fgMuted, not fgFaint: connection state is operational reading
+          matter at ~50 cm, not decoration. */}
+      <Text variant="serif" tone="fgMuted" style={styles.label}>{label}</Text>
     </View>
   );
 }

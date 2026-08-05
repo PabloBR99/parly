@@ -28,6 +28,36 @@ export interface Turn {
  */
 export type HfActivity = 'idle' | 'listening' | 'speaking';
 
+/**
+ * Keys for the per-speaker notice pane. The store carries a KEY, not a
+ * sentence: each half renders the notice in its reader's language
+ * (`i18n/strings.ts`), because the two people at the table do not share one.
+ * Raw service errors stay in the log buffer only.
+ */
+export type NoticeKey =
+  | 'connectionDropped'
+  | 'keyInvalid'
+  | 'rateLimit'
+  | 'generic'
+  | 'didntCatch'
+  | 'micPermission'
+  | 'noVoice'
+  | 'offline';
+
+export interface SpeakerNotice {
+  readonly key: NoticeKey;
+  /** 'error' renders in the error tint; 'info' is a quieter guidance tone. */
+  readonly kind: 'error' | 'info';
+  /** Language code for notices that reference one (noVoice). */
+  readonly lang?: string;
+}
+
+/** Keep the history bounded: `updateTurn` maps the whole array on every STT
+ *  partial (several per second during capture), so an unbounded array turns a
+ *  long session into per-frame O(n) work exactly when the frame budget is
+ *  tightest. 50 turns is far more scroll-back than either reader uses. */
+const MAX_TURNS = 50;
+
 interface ConversationState {
   readonly turns: readonly Turn[];
   readonly activeTurnId: string | null;
@@ -39,6 +69,8 @@ interface ConversationState {
   readonly hfUnroutedSpeaker: PersonId | null;
   /** What the hands-free control is doing right now — drives the seam wave. */
   readonly hfActivity: HfActivity;
+  /** Per-speaker notice shown on that speaker's own half, in their language. */
+  readonly notices: { readonly [K in PersonId]: SpeakerNotice | null };
 }
 
 interface ConversationActions {
@@ -50,7 +82,10 @@ interface ConversationActions {
   setHfActiveSpeaker: (id: PersonId | null) => void;
   setHfUnroutedSpeaker: (id: PersonId | null) => void;
   setHfActivity: (activity: HfActivity) => void;
+  setNotice: (speaker: PersonId, notice: SpeakerNotice | null) => void;
 }
+
+const emptyNotices = { person_a: null, person_b: null } as const;
 
 export const useConversationStore = create<ConversationState & ConversationActions>(set => ({
   turns: [],
@@ -59,9 +94,16 @@ export const useConversationStore = create<ConversationState & ConversationActio
   hfActiveSpeaker: null,
   hfUnroutedSpeaker: null,
   hfActivity: 'idle',
+  notices: emptyNotices,
 
   startTurn: turn =>
-    set(state => ({ turns: [...state.turns, turn], activeTurnId: turn.id })),
+    set(state => ({
+      turns:
+        state.turns.length >= MAX_TURNS
+          ? [...state.turns.slice(state.turns.length - MAX_TURNS + 1), turn]
+          : [...state.turns, turn],
+      activeTurnId: turn.id,
+    })),
 
   updateTurn: (id, patch) =>
     set(state => ({
@@ -76,7 +118,7 @@ export const useConversationStore = create<ConversationState & ConversationActio
       activeTurnId: state.activeTurnId === id ? null : state.activeTurnId,
     })),
 
-  clear: () => set({ turns: [], activeTurnId: null }),
+  clear: () => set({ turns: [], activeTurnId: null, notices: emptyNotices }),
 
   setMode: mode => set({ mode }),
 
@@ -85,4 +127,7 @@ export const useConversationStore = create<ConversationState & ConversationActio
   setHfUnroutedSpeaker: id => set({ hfUnroutedSpeaker: id }),
 
   setHfActivity: activity => set({ hfActivity: activity }),
+
+  setNotice: (speaker, notice) =>
+    set(state => ({ notices: { ...state.notices, [speaker]: notice } })),
 }));

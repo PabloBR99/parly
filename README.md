@@ -2,7 +2,7 @@
 
 Bidirectional speech translation app. React Native (bare), Android-first. The phone is laid flat between two people; each half of the screen is rotated 180° so both speakers read upright from their side of the table. Half-duplex push-to-talk with streaming STT, streaming translation, and OS-native TTS — every stage starts before the previous one finishes.
 
-Bring your own Mistral API key. The app guides non-technical users through getting one in three plain-Spanish steps the first time they open the app.
+Bring your own Mistral API key. The app guides non-technical users through getting one in three plain-language steps the first time they open the app. The conversation surface itself is bilingual by construction: each half renders its chrome — stage microcopy, notices, welcome copy, the network pill — in that half's reader's language (`src/i18n/strings.ts`, 32 languages).
 
 ---
 
@@ -35,11 +35,12 @@ The app needs a Mistral API key on first run. The in-app onboarding opens [conso
 | **TTS** | `react-native-tts` (OS-native voices, per-language voice cache) |
 | **Audio capture** | `react-native-audio-record` — PCM 16kHz mono, base64-framed |
 | **Secret storage** | `react-native-keychain` — API key only, never leaves the device except in `Authorization: Bearer …` |
-| **Tests** | Jest 29, 63 passing across orchestrator / Voxtral client / translator / network monitor |
+| **Settings persistence** | Zustand `persist` over a `react-native-fs` file — language pair, model, key status survive restarts (the key itself stays in the keychain) |
+| **Tests** | Jest, 120 passing across orchestrator / Voxtral client / translator / audio capture / network monitor / VAD / app tree |
 
 No on-device ML models. No bundled audio assets. Footprint is the React Native runtime plus a thin native shim. The only egress is `api.mistral.ai`.
 
-**Connectivity:** required during conversations. Failed handshakes surface in the UI as a network-state pill (`en línea` / `conectando` / `sin conexión`) and as a per-turn error pane.
+**Connectivity:** required during conversations. Connection state shows as a network pill on **both** edges (localized to each reader's language). Failures surface as a plain-language notice on the **speaker's own half**, in the speaker's language — raw error strings go to the log buffer only. Pressing PTT while known-offline answers immediately with the offline notice instead of opening a doomed socket.
 
 ---
 
@@ -88,40 +89,40 @@ The WebSocket is opened fresh per turn. Idle WS connections are subject to opaqu
 
 ```
 ┌─────────────────────────────┐
-│   ●  en línea               │  ← partner's edge chrome (network pill)
+│   ●  en línea               │  ← partner's edge chrome (network pill, partner's language)
 │                             │
 │           ◯                 │  ← partner's PTT (rotated 180°)
 │                             │
-│   español  ▾   PENSANDO ◐   │  ← identity chip + state morph + microcopy
+│   español  ▾   pensando ◐   │  ← identity chip + state morph + microcopy (partner's language)
 │                             │
 │   Lo que el usuario         │  ← big translated text — what partner reads
-│   acaba de decir            │     (tap to replay)
+│   acaba de decir            │     (tap to stop it while it's speaking)
 │                             │
 │   — fuente —                │  ← source line (small, near center)
 │                             │
 │           (gap)             │  ← PURE SPACE — no divider line
 │                             │
-│   — fuente —                │
+│   — source —                │
 │                             │
 │   What the partner          │
 │   just said                 │
 │                             │
-│   english  ▾    ↺ REPETIR   │  ← identity chip + replay affordance
+│   english  ▾   speaking ◉   │  ← identity chip + microcopy (user's language)
 │                             │
 │           ◯                 │  ← user's PTT
 │                             │
-│   ⌘  ajustes                │  ← user's edge chrome
+│   ●  online      settings   │  ← user's edge chrome (pill on THIS edge too)
 └─────────────────────────────┘
 ```
 
 Each `SpeakerHalf` is rendered top-down in reading order (source → big → identity → button → edge chrome). The top half wraps the whole stack in `transform: rotate(180deg)` so the partner sees everything upright from their side.
 
 **PTTButton — object metaphor:**
-- **96 pt disc** surrounded by an asymmetric watercolour bloom (three offset SVG radial gradients, not concentric halos).
-- **Idle:** bloom breathes subtly (±1 px drift, opacities 0.92–1.00), with meditative tempos (7.4 / 8.0 / 8.6 s) that feel alive, not anxious.
+- **108 pt disc** surrounded by an asymmetric watercolour bloom (three offset SVG radial gradients, not concentric halos).
+- **Idle:** bloom breathes subtly with meditative tempos that feel alive, not anxious.
 - **Press:** disc scales by ~5 % (spring); halos brighten.
-- **Active:** outer ring breathes outward every 1.6 s, a 5-bar waveform pulses inside the disc, bloom couples to the RMS of the incoming audio.
-- **Label:** clean horizontal mic-affordance tick (14 × 1.5 pt) — **no language code text inside the disc** (removed in favor of accent tint; endonym lives in the identity chip above).
+- **Active:** outer ring breathes outward every 1.6 s, a 5-bar waveform pulses inside the disc (transform-driven — no per-frame layout).
+- **Label:** a horizontal mic-affordance tick (16 × 1.5 pt) above the language code at reduced opacity; the endonym lives in the identity chip above. The accessibility label uses the language *name*, never the code.
 
 **Felt rhythm — haptic choreography across the turn:**
 
@@ -137,43 +138,47 @@ Each `SpeakerHalf` is rendered top-down in reading order (source → big → ide
 
 The turn has a felt rhythm that matches its visual rhythm — the user doesn't need to read the screen to know where the machine is.
 
-**Tap-to-replay:** when a turn is `done` and there's translated text on screen, tapping the big text (or the quiet `↺ REPETIR` affordance in the chip row) re-speaks the partner's last translation via the OS TTS. Gated on idle so audio never collides with in-flight orchestrator TTS.
+**Tap-to-interrupt:** while a turn is `translating`/`speaking`, tapping the big translated text cancels it — TTS stops, the lock releases, both discs come back. A half-duplex lock without an abort is an elevator with no door-open button.
 
-**Settling reveal:** incoming text fades AND drifts up 6 px on first appearance. Driven by a boolean transition (`hasIncomingText`), not by text length — so each streamed sentence doesn't re-trigger the entrance and jiggle the line back into place.
+**Settling reveal:** incoming text fades AND drifts up 6 px on first appearance, then streams in place — translation deltas render as they arrive (display never waits for a sentence boundary; sentences are the unit for TTS, not for eyes). Driven by a boolean transition (`hasIncomingText`), not by text length — so streaming doesn't re-trigger the entrance and jiggle the line back into place.
 
-**Status microcopy beside `StateMorph`:** `ESCUCHANDO` / `PENSANDO` / `HABLANDO` / `ERROR`. The glyph alone was ambiguous; two words make the system audible.
+**Status microcopy beside `StateMorph`:** listening / thinking / speaking / error — each half in its reader's language (`escuchando` on the Spanish half, `聞いています` on the Japanese half). The glyph alone was ambiguous; the word makes the system audible. The `transcribing` glyph settles the bars to rest (the mic is closed — the glyph must stop claiming capture).
 
-**First-run hint:** the press-and-hold gesture isn't universal, especially for older users expecting a single tap, so a quiet italic `mantén pulsado para hablar` sits under each disc until the first turn from either side completes — then it disappears for good.
+**First-run hint:** the press-and-hold gesture isn't universal, especially for older users expecting a single tap, so a quiet italic "press and hold to speak" (localized per half) sits on each side until the first turn from either side completes — then it disappears for good.
+
+**Notices:** every failure mode has one plain sentence, on the half of the person who can act, in their language: connection dropped, key stopped working, rate limited, "I didn't catch that", mic permission, missing TTS voice, offline. Cancelled turns show nothing — user intent is not an error.
 
 ---
 
 ## API-Key Onboarding (Mom-Test)
 
-The hard barrier for non-technical users isn't the conversation — it's the API key. The first-run Settings screen replaces every piece of jargon with plain Spanish and a guided three-step flow.
+The hard barrier for non-technical users isn't the conversation — it's the API key. The first-run Settings screen replaces every piece of jargon with plain language and a guided three-step flow.
 
 ```
-Bienvenido
-Vamos a poner Parly en marcha en tres pasos.
+Welcome.
+Let's get Parly up and running in three steps.
 
-①  Crea tu cuenta en Mistral
-   Es gratis y solo necesitas un correo electrónico.
-   [ Abrir Mistral  ↗ ]                          ← Linking.openURL
+①  Create your Mistral account
+   Sign up or log in — it's free and only needs an email address.
+   [ Open Mistral  ↗ ]                           ← Linking.openURL
 
-②  Copia tu clave
-   Una vez dentro, pulsa "Create new key". Aparecerá un código
-   largo en pantalla — mantenlo pulsado y copia el texto entero.
+②  Copy your key
+   Tap "Create new key". A long code appears —
+   long-press it and copy the whole thing.
 
-③  Pégala aquí debajo
-   [_______________________________________]
-   Mantén el dedo sobre el cuadro y pulsa Pegar.
+③  Paste it here
+   [_______________________________________]     ← visible, NOT masked:
+   Long-press the box and tap Paste.               the user must see the
+                                                   paste took the whole key
+   [ Verify key ]                                ← primary button
 
-   [ Verificar clave ]                           ← primary button
-
-   ✓  Listo. Ya puedes empezar a hablar.
-   [ Empezar a hablar  → ]                       ← navigation.goBack()
+   ✓  All set. You can start talking now.
+   [ Start talking  → ]                          ← navigation.goBack()
 ```
 
-What's *not* there: the strings "API key", "Authorization", "sk-", "llavero", "endpoint". When the user already has a working key, this whole flow collapses to a compact **`● Conectado a Mistral`** card with `COMPROBAR` and `CAMBIAR CLAVE` buttons. Diagnostic and history sections appear only after a connection is established, so first-run focus stays on the welcome.
+What's *not* there: the strings "Authorization", "sk-", "keychain", "endpoint". When the user already has a working key, this whole flow collapses to a compact **`● Connected to Mistral`** card — and that green state means *validated*, not merely non-empty; an unverified key is checked silently in the background, and a definitively bad one flips the banner and disables the discs.
+
+**Changing the key is non-destructive:** "change key" opens an inline editor; the working key keeps working until a *new* key verifies. There is no single tap anywhere that can strand the user keyless (Mistral's console never re-shows an existing key).
 
 ---
 
@@ -185,13 +190,16 @@ parly/
 │   ├── app/
 │   │   ├── languages.ts             # Language metadata (endonym, emoji, scripts)
 │   │   └── types.ts                 # PersonId, Language, etc.
+│   ├── i18n/
+│   │   └── strings.ts               # Per-half surface strings, 32 languages
 │   ├── store/
-│   │   ├── conversationStore.ts     # Turns, active turn id, stage transitions
-│   │   ├── settingsStore.ts         # PersonA/B language, API key, model id
+│   │   ├── conversationStore.ts     # Turns, notices, stage transitions
+│   │   ├── settingsStore.ts         # PersonA/B language, key status, model id (persisted)
 │   │   └── networkStore.ts          # 'unknown' | 'online' | 'offline'
 │   ├── services/
 │   │   ├── pipeline/
 │   │   │   ├── ConversationOrchestrator.ts  # The state machine
+│   │   │   ├── errors.ts                    # Raw error → NoticeKey mapping
 │   │   │   └── orchestrator.ts              # Singleton DI wiring
 │   │   ├── stt/
 │   │   │   └── VoxtralRealtimeClient.ts     # WebSocket + frame protocol
@@ -266,7 +274,7 @@ parly/
 
 **Bloom redesign (`f7dfd68`):** The HTML mockup uses `filter: blur(30px)` + `mix-blend-mode: screen` — RN can't do either, so a 280 px tight-falloff bloom rendered as a small dim ring on the disc instead of the wide painted wash of the mockup. Three changes: `BLOOM_SIZE` 280 → 480 pt to span the full half of the screen edge-to-edge; stops `0/.18/.42/.72/1` → `0/.22/.50/.80/1` with alpha factors `1/.66/.32/.11/0` → `1/.78/.50/.22/0` so visible alpha carries to ~80 % of radius (the "blur substitute"); peak alphas bumped (warm 0.42/0.38/0.34 → 0.55/0.50/0.45, cool 0.48/0.44/0.40 → 0.62/0.56/0.50) to compensate for missing screen-blend. Stain offsets scaled ~1.7× to keep the painterly asymmetric silhouette in the bigger bloom.
 
-**PTTButton polish (`65a17ce`, `3ef41cd`):** Language code text inside the disc removed; without it the disc was near-invisible, so the idle shell is now tinted with the speaker accent — `bg = ${accent}1A` (10 %) idle / `${accent}26` (15 %) active; `border = ${accent}66` (~40 %) idle / `accentRing` active. Accessibility label still exposes the language code for screen readers.
+**PTTButton polish (`65a17ce`, `3ef41cd`):** The disc's resting face settled on a mic-affordance tick above the language code at reduced opacity (0.45 in hands-free, 0.62 otherwise), with a neutral hairline border idle and the accent ring + `${accent}26` fill while active. The accessibility label exposes the language *name* for screen readers.
 
 **Settings keyboard handling (`65a17ce`):** Replaced the brittle `scrollToEnd-on-focus` with a `Keyboard.didShow` listener that measures the API-key input's position, computes overlap with the keyboard, and scrolls it ~48 px above the keyboard edge so long-press → Paste is comfortable. Dropped `KeyboardAvoidingView` (Android `adjustResize` handles the heavy lifting). Bumped bottom padding to give the ScrollView room to scroll the input that high. Light Dusk pass on the header (`DuskBackdrop`, peach/periwinkle dot eyebrow, `serifHero` "Welcome." / "Settings.").
 
@@ -281,17 +289,18 @@ parly/
 | **v4 pivot** — Voxtral + Mistral + native TTS | ✅ | New orchestrator, streaming end-to-end, half-duplex lock, Mistral key validation. |
 | **v5 — UI redesign** | ✅ commit `a43525e` | Vertical PTT axis, bloom disc, editorial restraint, Diplomatic theme. |
 | **v5.1 — Picker overhaul + bloom + settings** | ✅ commits `65a17ce` → `f7dfd68` | Reanimated dual-side picker, BLOOM_SIZE 280→480 with softer falloff, accent-tinted PTT, settings keyboard scroll-to-input. |
-| **v6 — Final polish** | ✅ commit `a34e6e7` | Haptic choreography, tap-to-replay, status microcopy, settling reveal, first-run hint, mom-tier onboarding. |
+| **v6 — Polish** | ✅ commit `a34e6e7` | Haptic choreography, status microcopy, settling reveal, first-run hint, mom-tier onboarding. |
+| **v7 — Audit fixes** | ✅ (this change set) | Speaker-side localized notices (32 languages), settings persistence, streamed translation display, capture stop/start race fix, release hangover, quick-release flush, no-replay translation fallback, echo gating in hands-free, validate-then-replace key flow, tap-to-interrupt, lazy mic permission, contrast pass, both-edge network pill. |
 
 ---
 
 ## Troubleshooting
 
-**"Falta la API key" banner won't go away after pasting:**  
-Tap **Verificar clave**. Successful validation flips the banner. If you see `KEY RECHAZADA`, the key is invalid; regenerate it in [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys). If you see `SIN RED`, your phone is offline.
+**The "Connect Parly to its brain" banner won't go away after pasting:**  
+Tap **Verify key** in Settings. Successful validation flips the banner. If validation reports the key as invalid, regenerate it in [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys). If your phone is offline, the check is retried automatically once you're back online.
 
 **TTS doesn't speak in the target language:**  
-The OS may not have a voice installed for that language. On Android, open *Settings → Accessibility → Text-to-speech → Install voice data* and download the language pack. The translation still appears on screen even when TTS can't speak it.
+The OS has no voice installed for that language. The app shows a one-time notice on the listener's half ("No voice installed for … — showing text only") and deliberately does **not** read the text with a wrong-language voice. On Android, open *Settings → Accessibility → Text-to-speech → Install voice data* and download the language pack.
 
 **Picker animates erratically when you select a language:**  
 Fixed in commit `a34e6e7` (frozenExclude snapshot). Pull `main`.
@@ -306,7 +315,7 @@ npm start -- --reset-cache
 cd ios && rm -rf Pods Podfile.lock && bundle exec pod install && cd ..
 ```
 
-**Logs:** Settings → *Diagnóstico* → *Ver logs* (only visible after a key is configured).
+**Logs:** Settings → *Diagnostics* → *View logs* (only visible after a key is configured). Raw pipeline errors land here; the conversation surface only ever shows the humanized notices.
 
 ---
 

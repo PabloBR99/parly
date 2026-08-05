@@ -51,50 +51,18 @@ export function LanguagePairScreen({ navigation }: Props): React.JSX.Element {
   // Picker sheet state.
   const [pickerSlot, setPickerSlot] = useState<Slot | null>(null);
 
-  const openPicker = (slot: Slot) => {
-    log.info(`[picker] open slot=${slot} (partner=${partnerCode || '∅'} self=${selfCode || '∅'})`);
-    setPickerSlot(slot);
-  };
-  const closePicker = () => {
-    log.info('[picker] close');
-    setPickerSlot(null);
-  };
+  const openPicker = (slot: Slot) => setPickerSlot(slot);
+  const closePicker = () => setPickerSlot(null);
 
   const onPick = (code: string) => {
-    const slot = pickerSlot;
-    log.info(`[picker] onPick start slot=${slot} code=${code}`);
-    try {
-      if (slot === 'partner') {
-        log.info('[picker] step 1: setPersonLanguage B');
-        setPersonLanguage('B', code);
-        log.info('[picker] step 1 done');
-      } else if (slot === 'self') {
-        log.info('[picker] step 1: setPersonLanguage A');
-        setPersonLanguage('A', code);
-        log.info('[picker] step 1 done');
-      } else {
-        log.warn(`[picker] onPick called with no slot active`);
-      }
-      log.info('[picker] step 2: haptics.tick');
-      haptics.tick();
-      log.info('[picker] step 2 done');
-      log.info('[picker] step 3: closePicker');
-      closePicker();
-      log.info('[picker] step 3 done — onPick complete');
-    } catch (e) {
-      log.error('[picker] onPick threw', e as Error);
-      throw e;
-    }
+    if (pickerSlot === 'partner') setPersonLanguage('B', code);
+    else if (pickerSlot === 'self') setPersonLanguage('A', code);
+    haptics.tick();
+    closePicker();
   };
 
-  const clearPartner = () => {
-    log.info('[picker] clearPartner');
-    setPersonLanguage('B', '');
-  };
-  const clearSelf = () => {
-    log.info('[picker] clearSelf');
-    setPersonLanguage('A', '');
-  };
+  const clearPartner = () => setPersonLanguage('B', '');
+  const clearSelf = () => setPersonLanguage('A', '');
 
   const swap = () => {
     if (!bothFilled) return;

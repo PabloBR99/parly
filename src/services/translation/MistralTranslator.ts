@@ -16,9 +16,10 @@
 //
 // Why a min-length guard on sentence emits?
 //   Naïve splitting on `.!?` would emit "Mr." or "Sr." (abbreviations) as
-//   independent chunks, causing audible choppiness. We require ~30 chars of
-//   accumulated text before emitting. Short single-sentence responses still
-//   work because the stream's tail flush always emits whatever's left.
+//   independent chunks, causing audible choppiness. We require MIN_CHUNK_LEN
+//   (15) chars of accumulated text before emitting. Short single-sentence
+//   responses still work because the stream's tail flush always emits
+//   whatever's left.
 //
 // Why XHR fallback?
 //   `fetch().body.getReader()` works in RN 0.84 with Hermes, but we keep an
@@ -59,6 +60,11 @@ function buildSystemPrompt(srcCode: string, tgtCode: string): string {
 export interface TranslateStreamCallbacks {
   /** Fires when a complete sentence (or chunk) is ready to be spoken. */
   readonly onSentence: (sentence: string) => void;
+  /** Optional: fires on every content delta with the FULL text so far.
+   *  Drives progressive on-screen text — the reader should never stare at a
+   *  spinner while translated tokens are already arriving. Sentence
+   *  boundaries remain the unit for TTS (`onSentence`), not for display. */
+  readonly onDelta?: (fullTextSoFar: string) => void;
   /** Fires once with the full translated text when the stream completes. */
   readonly onDone: (fullText: string) => void;
   /** Fatal error. After this fires, no other callbacks fire. */
@@ -136,6 +142,16 @@ interface StreamingFetcher {
 /** Default fetcher: tries fetch().body.getReader(), falls back to XHR. */
 const defaultFetcher: StreamingFetcher = {
   async postStream({ url, headers, body, signal, onChunk }) {
+    // The XHR fallback re-POSTs the full request from byte zero. That is
+    // only safe before any bytes arrived: once a chunk has been delivered,
+    // its sentences are already queued into TTS, and a replay would speak
+    // them all a second time. Track delivery and surface mid-stream deaths
+    // as real errors instead of retrying.
+    let receivedAny = false;
+    const guarded: ChunkSink = (c) => {
+      receivedAny = true;
+      onChunk(c);
+    };
     // Try native fetch streaming first
     try {
       const response = await fetch(url, {
@@ -154,17 +170,19 @@ const defaultFetcher: StreamingFetcher = {
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
-          if (value) onChunk(decoder.decode(value, { stream: true }));
+          if (value) guarded(decoder.decode(value, { stream: true }));
         }
         const tail = decoder.decode();
-        if (tail) onChunk(tail);
+        if (tail) guarded(tail);
         return { ok: true, status: response.status };
       }
       // No reader available — fall through to XHR. Drop this response.
       response.body?.cancel?.().catch(() => {});
     } catch (e) {
-      // Fetch may have thrown for network/CORS reasons. Try XHR.
       if ((e as { name?: string })?.name === 'AbortError') throw e;
+      if (receivedAny) throw e;
+      // Zero bytes delivered — fetch/streaming unsupported or failed before
+      // the response started. The XHR retry below is duplicate-free.
     }
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -270,6 +288,7 @@ export class MistralTranslator {
           }
           translationBuffer += delta;
           fullText += delta;
+          args.onDelta?.(fullText);
           translationBuffer = flushSentences(translationBuffer, args.onSentence);
         }
         boundary = sseBuffer.indexOf('\n\n');

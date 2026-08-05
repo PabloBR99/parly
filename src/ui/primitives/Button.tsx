@@ -100,7 +100,7 @@ const variantStyles = StyleSheet.create({
   danger: {
     backgroundColor: color.errorSoft,
     borderWidth: 1,
-    borderColor: 'rgba(248,113,113,0.32)',
+    borderColor: color.errorBorder,
   },
   dangerDisabled: {
     opacity: 0.4,

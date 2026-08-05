@@ -7,7 +7,7 @@
 // This screen is meant to be deleted once the production crash is solved.
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, Share, StyleSheet, View } from 'react-native';
+import { ScrollView, Share, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import {
@@ -15,7 +15,6 @@ import {
   exportLogsAsText,
   subscribeLogs,
   type LogEntry,
-  type LogLevel,
 } from '../services/log/logStore';
 import type { RootStackParamList } from '../navigation/types';
 import { Button, Surface, Text, color, radius, space } from '../ui';

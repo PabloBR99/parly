@@ -50,6 +50,20 @@ export class AudioCaptureService {
     this.initialized = false;
   }
 
+  /** Non-interactive check — never shows a dialog. */
+  async hasPermission(): Promise<boolean> {
+    if (Platform.OS === 'android') {
+      try {
+        return await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+      } catch {
+        return false;
+      }
+    }
+    // iOS permission is requested automatically by AVAudioSession when
+    // recording starts. Info.plist must have NSMicrophoneUsageDescription.
+    return true;
+  }
+
   async requestPermission(): Promise<boolean> {
     if (Platform.OS === 'android') {
       const granted = await PermissionsAndroid.request(
@@ -106,9 +120,17 @@ export class AudioCaptureService {
     if (!this.streaming) return;
     this.streaming = false;
     this.recording = false;
-    await AudioRecord.stop();
-    this.dataSubscription?.remove();
+    // Capture + null the subscription BEFORE the await. If a new turn's
+    // startStreaming lands while AudioRecord.stop() is in flight (the recovery
+    // press right after an error), it must get a clean slot — otherwise this
+    // continuation would remove the NEW turn's listener and the next turn
+    // records into the void. Removing the captured sub only after the stop
+    // preserves delivery of the trailing in-flight chunk on the normal
+    // release path.
+    const sub = this.dataSubscription;
     this.dataSubscription = null;
+    await AudioRecord.stop();
+    sub?.remove();
   }
 
   get isRecording(): boolean {

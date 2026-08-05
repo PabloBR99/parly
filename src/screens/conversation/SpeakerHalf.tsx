@@ -9,16 +9,18 @@ import Animated, {
   Easing,
 } from 'react-native-reanimated';
 import LinearGradient from 'react-native-linear-gradient';
-import type { Turn, TurnStage } from '../../store/conversationStore';
+import type { SpeakerNotice, Turn, TurnStage } from '../../store/conversationStore';
 import { useConversationStore } from '../../store/conversationStore';
 import type { PersonId } from '../../app/types';
 import { getLanguage } from '../../app/languages';
+import { noticeText, stringsFor } from '../../i18n/strings';
 import { stageMicrocopy } from './helpers';
 import {
   PTTButton,
   StateMorph,
   Text,
   color,
+  font,
   motion,
   space,
 } from '../../ui';
@@ -29,7 +31,7 @@ import type { DiscMode } from '../../ui/primitives/PTTButton';
 function SourceLine({ label, text }: { readonly label: string; readonly text: string }): React.JSX.Element {
   return (
     <View>
-      <Text variant="serifTiny" tone="fgFaint" style={styles.sourceLabel}>
+      <Text variant="serifTiny" tone="fgMuted" style={styles.sourceLabel}>
         {label.toLowerCase()}
       </Text>
       <Text variant="serif" tone="fgMuted" numberOfLines={2} ellipsizeMode="tail">
@@ -47,6 +49,9 @@ export interface SpeakerHalfProps {
   readonly partnerLanguage: string;
   readonly activeTurn: Turn | null;
   readonly incomingTurn: Turn | null;
+  /** Notice addressed to THIS half's reader, rendered in their language.
+   *  Errors land on the speaker's own half — they are the one who can act. */
+  readonly notice: SpeakerNotice | null;
   readonly accent: string;
   readonly accentRing: string;
   readonly edgePadding: number;
@@ -59,6 +64,8 @@ export interface SpeakerHalfProps {
   readonly onPressOut: () => void;
   /** Fired on a single tap in HF mode — typically exits hands-free. */
   readonly onTap?: () => void;
+  /** Tap on the streaming/spoken translation — interrupts the turn. */
+  readonly onInterrupt?: () => void;
   readonly onChangeLanguage: () => void;
 }
 
@@ -68,6 +75,7 @@ export function SpeakerHalf({
   partnerLanguage,
   activeTurn,
   incomingTurn,
+  notice,
   accent,
   accentRing,
   edgePadding,
@@ -78,10 +86,12 @@ export function SpeakerHalf({
   onPressIn,
   onPressOut,
   onTap,
+  onInterrupt,
   onChangeLanguage,
 }: SpeakerHalfProps): React.JSX.Element {
   const speakerLang = getLanguage(speakerLanguage);
   const partnerLang = getLanguage(partnerLanguage);
+  const t = stringsFor(speakerLanguage);
 
   const conversationMode = useConversationStore(s => s.mode);
   const hfUnroutedSpeaker = useConversationStore(s => s.hfUnroutedSpeaker);
@@ -99,17 +109,21 @@ export function SpeakerHalf({
     return { kind: 'hf-idle' };
   })();
 
-  // Bloom dims to 15% for 600ms on unrouted utterance from this side.
+  // Disc + bloom dim to 15% for 600ms on unrouted utterance from this side.
   const unroutedFade = useSharedValue(1);
+  const hfUnroutedHere = hfUnroutedSpeaker === speakerId;
   useEffect(() => {
-    if (hfUnroutedSpeaker === speakerId) {
+    if (hfUnroutedHere) {
       unroutedFade.value = withTiming(0.15, { duration: 80 });
-      const t = setTimeout(() => {
+      const timer = setTimeout(() => {
         unroutedFade.value = withTiming(1, { duration: 520 });
       }, 80);
-      return () => clearTimeout(t);
+      return () => clearTimeout(timer);
     }
-  }, [hfUnroutedSpeaker, speakerId, unroutedFade]);
+  }, [hfUnroutedHere, unroutedFade]);
+  const unroutedFadeStyle = useAnimatedStyle(() => ({
+    opacity: unroutedFade.value,
+  }));
 
   const incomingText = incomingTurn?.translatedText ?? '';
   const incomingStage = incomingTurn?.stage ?? null;
@@ -153,6 +167,12 @@ export function SpeakerHalf({
   const stageForMorph: TurnStage | null = activeTurn?.stage ?? incomingStage ?? null;
   const showMorph = stageForMorph !== null && stageForMorph !== 'done';
 
+  // A tap on the live translation interrupts the turn — the half-duplex lock
+  // needs a door-open button once the machine holds the floor.
+  const interruptible =
+    onInterrupt !== undefined &&
+    (incomingStage === 'translating' || incomingStage === 'speaking');
+
   const sourceNode =
     activeTurn !== null && ownSource.length > 0 ? (
       <SourceLine label={speakerLang.endonym} text={ownSource} />
@@ -175,23 +195,29 @@ export function SpeakerHalf({
           showsVerticalScrollIndicator={false}
           bounces={false}>
           {hasIncomingText && (
-            <Animated.Text style={[styles.bigText, bigStyle]}>
-              {incomingText}
-            </Animated.Text>
+            <Pressable
+              onPress={interruptible ? onInterrupt : undefined}
+              disabled={!interruptible}
+              accessibilityRole={interruptible ? 'button' : undefined}
+              accessibilityLabel={interruptible ? 'Stop this translation' : undefined}>
+              <Animated.Text style={[styles.bigText, bigStyle]}>
+                {incomingText}
+              </Animated.Text>
+            </Pressable>
           )}
           {!hasIncomingText && firstRun && !activeTurn && !firstHfRun && (
             <View style={styles.welcome}>
               <Text variant="serifHero" tone="fgFaint" style={styles.welcomeHeadline}>
-                Press and hold to speak.
+                {t.holdToSpeak}
               </Text>
               <View style={styles.welcomeFlow}>
-                <Text variant="serifTiny" tone="fgGhost">
+                <Text variant="serifSmall" tone="fgMuted">
                   {speakerLang.endonym.toUpperCase()}
                 </Text>
-                <Text variant="serifTiny" tone="fgGhost" style={styles.welcomeFlowArrow}>
+                <Text variant="serifSmall" tone="fgMuted" style={styles.welcomeFlowArrow}>
                   →
                 </Text>
-                <Text variant="serifTiny" tone="fgGhost">
+                <Text variant="serifSmall" tone="fgMuted">
                   {partnerLang.endonym.toUpperCase()}
                 </Text>
               </View>
@@ -200,16 +226,20 @@ export function SpeakerHalf({
           {!hasIncomingText && firstHfRun && !activeTurn && (
             <View style={styles.welcome}>
               <Text variant="serifHero" tone="fgFaint" style={styles.welcomeHeadline}>
-                Just speak.
+                {t.justSpeak}
               </Text>
-              <Text variant="serifTiny" tone="fgGhost" style={styles.welcomeHfHint}>
-                Tap any disc to exit.
+              <Text variant="serifSmall" tone="fgMuted" style={styles.welcomeHfHint}>
+                {t.tapToExit}
               </Text>
             </View>
           )}
-          {incomingTurn?.stage === 'error' && (
-            <Text variant="bodySmall" tone="error" style={styles.errorText}>
-              ⚠  {incomingTurn.errorMessage ?? 'Translation error'}
+          {notice !== null && (
+            <Text
+              variant="body"
+              tone={notice.kind === 'error' ? 'error' : 'fgMuted'}
+              style={styles.noticeText}>
+              {notice.kind === 'error' ? '⚠  ' : ''}
+              {noticeText(speakerLanguage, notice)}
             </Text>
           )}
         </Animated.ScrollView>
@@ -246,10 +276,15 @@ export function SpeakerHalf({
           </Text>
         </Pressable>
         <View style={styles.flex} />
+        {hfUnroutedHere && (
+          <Text variant="serif" tone="fgMuted" style={styles.microcopy}>
+            {t.unrouted}
+          </Text>
+        )}
         {showMorph && (
           <View style={styles.statusRow}>
-            <Text variant="serifTiny" tone="fgFaint" style={styles.microcopy}>
-              {stageMicrocopy(stageForMorph)}
+            <Text variant="serif" tone="fgMuted" style={styles.microcopy}>
+              {stageMicrocopy(stageForMorph, speakerLanguage)}
             </Text>
             <View style={styles.morphSlot}>
               <StateMorph stage={stageForMorph} accent={accent} size={18} />
@@ -260,9 +295,10 @@ export function SpeakerHalf({
 
       <View style={styles.spacer} />
 
-      <View style={styles.buttonSlot}>
+      <Animated.View style={[styles.buttonSlot, unroutedFadeStyle]}>
         <PTTButton
           label={speakerLanguage || '—'}
+          languageName={speakerLang.name}
           accent={accent}
           accentRing={accentRing}
           active={activeTurn !== null}
@@ -272,7 +308,7 @@ export function SpeakerHalf({
           onPressOut={onPressOut}
           onTap={onTap}
         />
-      </View>
+      </Animated.View>
 
       <View style={[styles.edgeRow, { paddingBottom: edgePadding }]}>
         {edgeContent}
@@ -338,12 +374,9 @@ const styles = StyleSheet.create({
   },
   bigText: {
     color: color.fg,
-    fontSize: 34,
-    lineHeight: 42,
-    fontWeight: '300',
-    letterSpacing: -0.6,
+    ...font.displayHero,
   },
-  errorText: {
+  noticeText: {
     marginTop: space.sm,
   },
 

@@ -21,11 +21,14 @@ export const color = {
   // periwinkle→bg→peach sky is painted by `DuskBackdrop` via a real
   // LinearGradient, so we don't carry any wash-tint tokens here anymore.
   bg:        '#0B0B11',                  // base midnight, slightly violet-warm
+  bgElevated: '#0E0E14',                 // floating banners / sheets, same hue one step up
   surface1:  'rgba(255,255,255,0.035)',  // card / pill
   surface2:  'rgba(255,255,255,0.065)',  // hover / pressed
   surface3:  'rgba(255,255,255,0.10)',   // filled state
   hairline:  'rgba(255,255,255,0.06)',
   hairlineStrong: 'rgba(255,255,255,0.14)',
+  discBorder: 'rgba(255,255,255,0.10)',  // PTT disc resting outline
+  discTick:   'rgba(255,255,255,0.40)',  // PTT disc idle tick mark
 
   // Foreground — inverted, with a discipline of opacity tiers.
   fg:        'rgba(255,255,255,0.97)',
@@ -64,9 +67,12 @@ export const color = {
   // Status — re-tinted so success aligns with the cool palette (seafoam) and
   // warning doesn't clash with the warm palette.
   ok:        '#7FD8C9',  // seafoam — coherent with cool bloom
+  okBorder:  'rgba(127,216,201,0.30)',
+  okSoft:    'rgba(127,216,201,0.06)',
   warn:      '#F4D06A',
   error:     '#F87171',
   errorSoft: 'rgba(248,113,113,0.16)',
+  errorBorder: 'rgba(248,113,113,0.32)',
 } as const;
 
 // ── Spacing (8pt-ish) ────────────────────────────────────────────────────────

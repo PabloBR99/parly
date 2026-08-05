@@ -9,6 +9,7 @@ import {
   type VoxtralLike,
   type TranslatorLike,
   type TTSLike,
+  type TTSSpeakOutcome,
   type VadLike,
 } from '../ConversationOrchestrator';
 import { useConversationStore } from '../../../store/conversationStore';
@@ -25,6 +26,7 @@ type FlushResolver = (result: { text: string; language?: string }) => void;
 
 function makeMocks() {
   const audioCapture: jest.Mocked<AudioCapture> = {
+    hasPermission: jest.fn().mockResolvedValue(true),
     requestPermission: jest.fn().mockResolvedValue(true),
     startStreaming: jest.fn(),
     stopStreaming: jest.fn().mockResolvedValue(undefined),
@@ -41,6 +43,7 @@ function makeMocks() {
     end: jest.fn().mockResolvedValue(undefined),
     cancel: jest.fn(),
     endSession: jest.fn().mockResolvedValue(undefined),
+    resetUtterance: jest.fn(),
     flushUtterance: jest.fn().mockImplementation(() => {
       return new Promise<{ text: string; language?: string }>((resolve) => {
         flushResolver = resolve;
@@ -54,7 +57,7 @@ function makeMocks() {
     prewarm: jest.fn(),
     speakChunk: jest.fn().mockImplementation((text: string, language: string) => {
       ttsCalls.push({ text, language });
-      return Promise.resolve();
+      return Promise.resolve<TTSSpeakOutcome>('spoken');
     }),
     stop: jest.fn(),
   };
@@ -191,7 +194,9 @@ describe('ConversationOrchestrator (PTT)', () => {
     const ttsResolvers: Array<() => void> = [];
     m.tts.speakChunk.mockImplementation((text, language) => {
       m.ttsCalls.push({ text, language });
-      return new Promise<void>((resolve) => { ttsResolvers.push(resolve); });
+      return new Promise<TTSSpeakOutcome>((resolve) => {
+        ttsResolvers.push(() => resolve('spoken'));
+      });
     });
 
     m.translator.translateStream.mockImplementation(async (args) => {
@@ -304,7 +309,7 @@ describe('ConversationOrchestrator (PTT)', () => {
     });
   });
 
-  it('cancelTurn aborts an in-flight turn', async () => {
+  it('cancelTurn aborts an in-flight turn quietly (done, no error, no notice)', async () => {
     const m = makeMocks();
     const o = new ConversationOrchestrator(m);
     o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
@@ -318,9 +323,110 @@ describe('ConversationOrchestrator (PTT)', () => {
     expect(m.voxtral.cancel).toHaveBeenCalled();
     expect(m.tts.stop).toHaveBeenCalled();
     expect(o.getState()).toBe('idle');
-    const turn = useConversationStore.getState().turns[0];
-    expect(turn.stage).toBe('error');
-    expect(turn.errorMessage).toContain('cancelled');
+    const state = useConversationStore.getState();
+    // User intent is not a failure: no error stage (would fire the error
+    // haptic), no notice pane.
+    expect(state.turns[0].stage).toBe('done');
+    expect(state.notices.person_a).toBeNull();
+  });
+
+  it('surfaces a speaker-side notice when the turn fails (humanized, keyed)', async () => {
+    const m = makeMocks();
+    const o = new ConversationOrchestrator(m);
+    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+
+    m.translator.translateStream.mockImplementation(async (args) => {
+      args.onError(new Error('HTTP 401: Authentication failed (check API key).'));
+    });
+
+    const turnPromise = o.beginTurn({ speakerId: 'person_a', sourceLang: 'es', targetLang: 'en' });
+    await Promise.resolve();
+    await o.endTurn();
+    m.fireVoxtralFinal('hola');
+    await turnPromise;
+
+    const state = useConversationStore.getState();
+    // Notice lands on the SPEAKER's half (person_a spoke), as a key — the UI
+    // renders it in the speaker's language; raw text stays in the log.
+    expect(state.notices.person_a).toEqual({ key: 'keyInvalid', kind: 'error' });
+    expect(state.notices.person_b).toBeNull();
+  });
+
+  it('empty transcript sets a quiet didntCatch notice for the speaker', async () => {
+    const m = makeMocks();
+    const o = new ConversationOrchestrator(m);
+    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+
+    const turnPromise = o.beginTurn({ speakerId: 'person_b', sourceLang: 'en', targetLang: 'es' });
+    await Promise.resolve();
+    await o.endTurn();
+    m.fireVoxtralFinal('   ');
+    await turnPromise;
+
+    expect(useConversationStore.getState().notices.person_b).toEqual({
+      key: 'didntCatch',
+      kind: 'info',
+    });
+  });
+
+  it('a fresh press clears the speaker\'s previous notice', async () => {
+    const m = makeMocks();
+    const o = new ConversationOrchestrator(m);
+    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    useConversationStore.getState().setNotice('person_a', { key: 'generic', kind: 'error' });
+
+    const turnPromise = o.beginTurn({ speakerId: 'person_a', sourceLang: 'es', targetLang: 'en' });
+    await Promise.resolve();
+    expect(useConversationStore.getState().notices.person_a).toBeNull();
+
+    m.translator.translateStream.mockImplementation(async (args) => {
+      args.onSentence('Hello world.');
+      args.onDone('Hello world.');
+    });
+    await o.endTurn();
+    m.fireVoxtralFinal('hola');
+    await turnPromise;
+  });
+
+  it('denied mic permission never starts a turn and notifies the speaker', async () => {
+    const m = makeMocks();
+    m.audioCapture.hasPermission.mockResolvedValue(false);
+    m.audioCapture.requestPermission.mockResolvedValue(false);
+    const o = new ConversationOrchestrator(m);
+    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+
+    await o.beginTurn({ speakerId: 'person_a', sourceLang: 'es', targetLang: 'en' });
+
+    expect(m.audioCapture.startStreaming).not.toHaveBeenCalled();
+    expect(useConversationStore.getState().turns).toHaveLength(0);
+    expect(useConversationStore.getState().notices.person_a).toEqual({
+      key: 'micPermission',
+      kind: 'info',
+    });
+    expect(o.getState()).toBe('idle');
+  });
+
+  it('streams translation deltas into translatedText before any sentence completes', async () => {
+    const m = makeMocks();
+    const o = new ConversationOrchestrator(m);
+    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+
+    m.translator.translateStream.mockImplementation(async (args) => {
+      args.onDelta?.('Hel');
+      // Second delta inside the throttle window is allowed to be skipped;
+      // what matters is text is visible LONG before the sentence boundary.
+      expect(useConversationStore.getState().turns[0].translatedText).toBe('Hel');
+      args.onSentence('Hello world.');
+      args.onDone('Hello world.');
+    });
+
+    const turnPromise = o.beginTurn({ speakerId: 'person_a', sourceLang: 'es', targetLang: 'en' });
+    await Promise.resolve();
+    await o.endTurn();
+    m.fireVoxtralFinal('hola');
+    await turnPromise;
+
+    expect(useConversationStore.getState().turns[0].translatedText).toBe('Hello world.');
   });
 
   it('fires speculative TTS prewarm at beginTurn AND on first translation token', async () => {
@@ -468,7 +574,9 @@ describe('ConversationOrchestrator (hands-free)', () => {
     const { m, o } = makeHfOrchestrator();
 
     let ttsResolve: (() => void) | undefined;
-    m.tts.speakChunk.mockImplementation(() => new Promise<void>(r => { ttsResolve = r; }));
+    m.tts.speakChunk.mockImplementation(
+      () => new Promise<TTSSpeakOutcome>(r => { ttsResolve = () => r('spoken'); }),
+    );
 
     m.translator.translateStream.mockImplementation(async (args) => {
       args.onSentence('Hello.');
@@ -492,6 +600,42 @@ describe('ConversationOrchestrator (hands-free)', () => {
 
     // After cooldown, VAD should be re-enabled
     expect(m.vad.setActive).toHaveBeenCalledWith(true);
+  });
+
+  it('stops feeding Voxtral while HF speaks, and scrubs the accumulator on re-arm (echo gate)', async () => {
+    const { m, o } = makeHfOrchestrator();
+
+    let ttsResolve: (() => void) | undefined;
+    m.tts.speakChunk.mockImplementation(
+      () => new Promise<TTSSpeakOutcome>(r => { ttsResolve = () => r('spoken'); }),
+    );
+    m.translator.translateStream.mockImplementation(async (args) => {
+      args.onSentence('Hello.');
+      args.onDone('Hello.');
+    });
+
+    await enableHf(m, o);
+    const onData = m.audioCapture.startStreaming.mock.calls[0][0] as (b64: string) => void;
+
+    m.fireVadStart();
+    m.fireVadEnd();
+    await Promise.resolve();
+    m.resolveFlush('hola', 'es');
+    await new Promise<void>(r => setTimeout(r, 20));
+
+    // hf-speaking: the mic is hearing the phone's own TTS — none of it may
+    // reach the Voxtral session.
+    m.voxtral.feedAudio.mockClear();
+    onData('AAAA');
+    expect(m.voxtral.feedAudio).not.toHaveBeenCalled();
+
+    ttsResolve?.();
+    await new Promise<void>(r => setTimeout(r, 300)); // cooldown elapses
+
+    // Re-armed: leaked partial state was scrubbed, feed is live again.
+    expect(m.voxtral.resetUtterance).toHaveBeenCalled();
+    onData('AAAA');
+    expect(m.voxtral.feedAudio).toHaveBeenCalled();
   });
 
   it('disableHandsFree() cleans up VAD, audio, Voxtral and resets store', async () => {

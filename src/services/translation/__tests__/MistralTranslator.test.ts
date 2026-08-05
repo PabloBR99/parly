@@ -173,6 +173,29 @@ describe('MistralTranslator.translateStream', () => {
     expect(fullText.endsWith('tail')).toBe(true);
   });
 
+  it('fires onDelta with cumulative text on every content delta', async () => {
+    const fetcher = mockFetcherOk([
+      sseChunk('Hola'),
+      sseChunk(' mundo'),
+      sseDone,
+    ]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const t = new MistralTranslator(fetcher as any);
+    const deltas: string[] = [];
+    await t.translateStream({
+      apiKey: 'sk',
+      sourceText: 'x',
+      sourceLang: 'es',
+      targetLang: 'en',
+      onDelta: full => deltas.push(full),
+      onSentence: () => {},
+      onDone: () => {},
+      onError: () => {},
+    });
+    // Progressive display: text is available WELL before a sentence boundary.
+    expect(deltas).toEqual(['Hola', 'Hola mundo']);
+  });
+
   it('flushes the trailing buffer on stream end (no terminator)', async () => {
     const fetcher = mockFetcherOk([
       sseChunk('Yes.'),  // shorter than MIN_CHUNK_LEN — held in buffer

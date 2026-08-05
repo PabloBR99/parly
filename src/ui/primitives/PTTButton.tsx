@@ -44,6 +44,8 @@ export type DiscMode =
 
 interface PTTButtonProps {
   readonly label: string;        // language code, e.g. "es"
+  /** Human name for accessibility ("Spanish"), never the raw code. */
+  readonly languageName?: string;
   readonly accent: string;       // canonical accent hex; picks the bloom palette
   readonly accentRing: string;   // active outer-ring tint
   readonly active: boolean;      // used when `mode` is not provided (PTT legacy)
@@ -77,6 +79,7 @@ const SHADOW_REACH = SIZE / 2 + 32;
 
 export function PTTButton({
   label,
+  languageName,
   accent,
   accentRing,
   active,
@@ -178,7 +181,7 @@ export function PTTButton({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: isActive ? accentRing : 'rgba(255,255,255,0.10)',
+    borderColor: isActive ? accentRing : color.discBorder,
     backgroundColor: isActive ? `${accent}26` : 'transparent',
     overflow: 'hidden',
   };
@@ -191,7 +194,7 @@ export function PTTButton({
       disabled={disabled}
       hitSlop={6}
       accessibilityRole="button"
-      accessibilityLabel={`Microphone ${label}`}
+      accessibilityLabel={`Microphone — ${languageName ?? label}`}
       accessibilityState={{ disabled, busy: isActive }}>
       <View
         style={[
@@ -350,7 +353,7 @@ const styles = StyleSheet.create({
     width: 16,
     height: 1.5,
     borderRadius: 1,
-    backgroundColor: 'rgba(255,255,255,0.40)',
+    backgroundColor: color.discTick,
   },
   lang: {
     marginTop: 16,

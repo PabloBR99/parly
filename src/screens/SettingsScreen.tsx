@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { useSettingsStore } from '../store/settingsStore';
+import { TRANSLATION_MODELS, useSettingsStore } from '../store/settingsStore';
 import { useConversationStore } from '../store/conversationStore';
 import { validateMistralApiKey, type KeyValidation } from '../services/auth/validateApiKey';
 import { log } from '../services/log/logStore';
@@ -41,11 +41,20 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
 export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const insets = useSafeAreaInsets();
   const apiKey = useSettingsStore(s => s.mistralApiKey);
+  const keyStatus = useSettingsStore(s => s.keyStatus);
   const setApiKey = useSettingsStore(s => s.setMistralApiKey);
+  const setKeyStatus = useSettingsStore(s => s.setKeyStatus);
+  const translationModel = useSettingsStore(s => s.translationModel);
+  const setTranslationModel = useSettingsStore(s => s.setTranslationModel);
   const clearConversation = useConversationStore(s => s.clear);
 
   const [keyValidation, setKeyValidation] = useState<KeyValidation | null>(null);
   const [validating, setValidating] = useState(false);
+  // "Change key" flow: the working key stays untouched until a NEW key
+  // validates. A single tap must never be able to strand the user keyless —
+  // Mistral's console never re-shows an existing key.
+  const [editingKey, setEditingKey] = useState(false);
+  const [draftKey, setDraftKey] = useState('');
 
   const scrollRef = useRef<ScrollView>(null);
   const inputRef = useRef<TextInput>(null);
@@ -76,18 +85,66 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const onApiInputFocus = () => { inputFocusedRef.current = true; };
   const onApiInputBlur = () => { inputFocusedRef.current = false; };
 
+  const applyValidationResult = (result: KeyValidation) => {
+    setKeyValidation(result);
+    if (result.status === 'ok') {
+      setKeyStatus('valid');
+      haptics.tick();
+    } else if (result.status === 'invalid') {
+      setKeyStatus('invalid');
+      haptics.error();
+    } else {
+      // network/unknown — not the key's fault; leave the status alone.
+      haptics.error();
+    }
+  };
+
+  /** Validate the stored key (onboarding + "check" button). */
   const onValidateKey = async () => {
     haptics.tap();
     setValidating(true);
     setKeyValidation(null);
     try {
-      const result = await validateMistralApiKey(apiKey);
-      setKeyValidation(result);
-      if (result.status === 'ok') haptics.tick();
-      else haptics.error();
+      applyValidationResult(await validateMistralApiKey(apiKey));
     } finally {
       setValidating(false);
     }
+  };
+
+  /** Validate the DRAFT key; only replace the stored key on success. */
+  const onValidateDraft = async () => {
+    haptics.tap();
+    setValidating(true);
+    setKeyValidation(null);
+    try {
+      const result = await validateMistralApiKey(draftKey);
+      setKeyValidation(result);
+      if (result.status === 'ok') {
+        setApiKey(draftKey.trim());
+        setKeyStatus('valid');
+        setEditingKey(false);
+        setDraftKey('');
+        haptics.tick();
+      } else {
+        haptics.error();
+      }
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  const onStartEditingKey = () => {
+    haptics.tap();
+    setDraftKey('');
+    setKeyValidation(null);
+    setEditingKey(true);
+  };
+
+  const onCancelEditingKey = () => {
+    haptics.tap();
+    setEditingKey(false);
+    setDraftKey('');
+    setKeyValidation(null);
   };
 
   const onClearHistory = () => {
@@ -110,6 +167,28 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
 
   const noKey = apiKey.trim() === '';
   const keyOk = keyValidation?.status === 'ok';
+
+  const connectionCard = (() => {
+    if (keyStatus === 'valid') {
+      return {
+        dot: color.ok,
+        title: 'Connected to Mistral',
+        subtitle: 'Your key is stored securely on this device.',
+      };
+    }
+    if (keyStatus === 'invalid') {
+      return {
+        dot: color.error,
+        title: "The key isn't working",
+        subtitle: 'Enter a new key below — the old one stays until it verifies.',
+      };
+    }
+    return {
+      dot: color.warn,
+      title: 'Key added — not verified yet',
+      subtitle: 'Tap "check" to confirm it works.',
+    };
+  })();
 
   return (
     <View style={styles.root}>
@@ -168,53 +247,133 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
             <Section label="CONNECTION">
               <Surface style={styles.connectedCard}>
                 <View style={styles.connectedRow}>
-                  <View style={[styles.connectedDot, { backgroundColor: color.ok }]} />
+                  <View style={[styles.connectedDot, { backgroundColor: connectionCard.dot }]} />
                   <View style={styles.flex}>
-                    <Text variant="body" tone="fg">Connected to Mistral</Text>
+                    <Text variant="body" tone="fg">{connectionCard.title}</Text>
                     <Text variant="bodySmall" tone="fgFaint">
-                      Your key is stored securely on this device.
+                      {connectionCard.subtitle}
                     </Text>
                   </View>
                 </View>
               </Surface>
-              <View style={styles.keyActionRow}>
-                <KeyValidationLine state={keyValidation} validating={validating} />
-                <Pressable
-                  onPress={onValidateKey}
-                  disabled={validating}
-                  accessibilityRole="button"
-                  accessibilityLabel="Check connection"
-                  style={({ pressed }) => [
-                    styles.verifyBtn,
-                    pressed && styles.verifyBtnPressed,
-                    validating && styles.verifyBtnDisabled,
-                  ]}>
-                  {validating ? (
-                    <ActivityIndicator color={color.fgMuted} size="small" />
-                  ) : (
-                    <Text variant="serifSmall" tone="fgMuted">check</Text>
-                  )}
-                </Pressable>
-              </View>
-              <Pressable
-                onPress={() => {
-                  haptics.tap();
-                  setApiKey('');
-                  setKeyValidation(null);
-                }}
-                hitSlop={10}
-                accessibilityRole="button"
-                accessibilityLabel="Change key"
-                style={({ pressed }) => [styles.replaceLink, pressed && styles.replaceLinkPressed]}>
-                <Text variant="serifSmall" tone="fgFaint">
-                  change key
-                </Text>
-              </Pressable>
+
+              {!editingKey && (
+                <>
+                  <View style={styles.keyActionRow}>
+                    <KeyValidationLine state={keyValidation} validating={validating} />
+                    <Pressable
+                      onPress={onValidateKey}
+                      disabled={validating}
+                      accessibilityRole="button"
+                      accessibilityLabel="Check connection"
+                      style={({ pressed }) => [
+                        styles.verifyBtn,
+                        pressed && styles.verifyBtnPressed,
+                        validating && styles.verifyBtnDisabled,
+                      ]}>
+                      {validating ? (
+                        <ActivityIndicator color={color.fgMuted} size="small" />
+                      ) : (
+                        <Text variant="serifSmall" tone="fgMuted">check</Text>
+                      )}
+                    </Pressable>
+                  </View>
+                  <Pressable
+                    onPress={onStartEditingKey}
+                    hitSlop={10}
+                    accessibilityRole="button"
+                    accessibilityLabel="Change key"
+                    style={({ pressed }) => [styles.replaceLink, pressed && styles.replaceLinkPressed]}>
+                    <Text variant="serifSmall" tone="fgFaint">
+                      change key
+                    </Text>
+                  </Pressable>
+                </>
+              )}
+
+              {editingKey && (
+                <View style={styles.editZone}>
+                  <Text variant="bodySmall" tone="fgMuted" style={styles.editHint}>
+                    Paste the new key. Your current key keeps working until the
+                    new one verifies.
+                  </Text>
+                  <Surface style={styles.editInputCard}>
+                    <TextInput
+                      value={draftKey}
+                      onChangeText={setDraftKey}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      spellCheck={false}
+                      style={styles.editInput}
+                      placeholder="Paste the new key here"
+                      placeholderTextColor={color.fgGhost}
+                    />
+                  </Surface>
+                  <View style={styles.editActions}>
+                    <Pressable
+                      onPress={onValidateDraft}
+                      disabled={validating || draftKey.trim() === ''}
+                      accessibilityRole="button"
+                      accessibilityLabel="Verify the new key"
+                      style={({ pressed }) => [
+                        styles.verifyBtn,
+                        pressed && styles.verifyBtnPressed,
+                        (validating || draftKey.trim() === '') && styles.verifyBtnDisabled,
+                      ]}>
+                      {validating ? (
+                        <ActivityIndicator color={color.fgMuted} size="small" />
+                      ) : (
+                        <Text variant="serifSmall" tone="fgMuted">verify &amp; replace</Text>
+                      )}
+                    </Pressable>
+                    <Pressable
+                      onPress={onCancelEditingKey}
+                      hitSlop={10}
+                      accessibilityRole="button"
+                      accessibilityLabel="Keep the current key"
+                      style={({ pressed }) => [styles.replaceLink, pressed && styles.replaceLinkPressed]}>
+                      <Text variant="serifSmall" tone="fgFaint">keep current key</Text>
+                    </Pressable>
+                  </View>
+                  <View style={styles.feedbackRow}>
+                    <KeyValidationLine state={keyValidation} validating={validating} />
+                  </View>
+                </View>
+              )}
             </Section>
           )}
 
           {!noKey && (
             <>
+              <Section label="TRANSLATION">
+                {TRANSLATION_MODELS.map(m => {
+                  const selected = m.id === translationModel;
+                  return (
+                    <Pressable
+                      key={m.id}
+                      onPress={() => {
+                        haptics.tick();
+                        setTranslationModel(m.id);
+                      }}
+                      accessibilityRole="radio"
+                      accessibilityLabel={m.label}
+                      accessibilityState={{ selected }}
+                      style={({ pressed }) => [
+                        styles.modelRow,
+                        pressed && styles.modelRowPressed,
+                        selected && styles.modelRowSelected,
+                      ]}>
+                      <View
+                        style={[styles.modelRadio, selected && styles.modelRadioSelected]}
+                      />
+                      <Text variant="body" tone={selected ? 'fg' : 'fgMuted'}>
+                        {m.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </Section>
+
               <Section label="CONVERSATION">
                 <Button
                   label="Clear history"
@@ -321,6 +480,60 @@ const styles = StyleSheet.create({
   },
   replaceLinkPressed: {
     opacity: 0.5,
+  },
+  editZone: {
+    marginTop: space.md,
+  },
+  editHint: {
+    marginBottom: space.sm,
+    paddingHorizontal: 4,
+  },
+  editInputCard: {
+    paddingVertical: 4,
+  },
+  editInput: {
+    color: color.fg,
+    fontSize: 15,
+    paddingHorizontal: space.sm,
+    paddingVertical: 12,
+    letterSpacing: 0.2,
+  },
+  editActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: space.sm,
+  },
+  feedbackRow: {
+    minHeight: 22,
+    marginTop: space.xs,
+    paddingHorizontal: 4,
+  },
+  modelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: space.md,
+    paddingVertical: 12,
+    borderRadius: radius.md,
+    marginBottom: 2,
+  },
+  modelRowPressed: {
+    backgroundColor: color.surface2,
+  },
+  modelRowSelected: {
+    backgroundColor: color.surface1,
+  },
+  modelRadio: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 1.5,
+    borderColor: color.hairlineStrong,
+    marginRight: space.sm,
+  },
+  modelRadioSelected: {
+    borderColor: color.ok,
+    backgroundColor: color.ok,
   },
   versionTag: {
     textAlign: 'center',

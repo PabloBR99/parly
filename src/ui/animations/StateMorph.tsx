@@ -1,11 +1,15 @@
 // StateMorph — a single small glyph that morphs between turn states.
 //
 // idle         → still dot
-// recording    → bars (waveform)
-// transcribing → traveling tick (parallel to recording cool-down)
+// recording    → live bars (waveform, animating)
+// transcribing → the same bars settling to rest — the mic is CLOSED, and the
+//                glyph must stop claiming capture or people keep talking
+//                into a dead mic
 // translating  → rotating ring
 // speaking     → expanding waves
-// done / error → faded
+// error        → ringed dot in the error tint (a 6 px dot is invisible at
+//                table distance)
+// done         → faded
 //
 // One unified glyph instead of 5 different ones makes the whole turn feel
 // like a continuous gesture rather than a stack of unrelated states.
@@ -39,16 +43,37 @@ export function StateMorph({
     case 'recording':
       return <Waveform active color={accent} bars={4} height={size} />;
     case 'transcribing':
-      return <Waveform active color={accent} bars={4} height={size} />;
+      // Bars settle to rest: capture has ended. Must NOT look like recording.
+      return <Waveform active={false} color={accent} bars={4} height={size} />;
     case 'translating':
       return <Spinner accent={accent} size={size} />;
     case 'speaking':
       return <SpeakingWave accent={accent} size={size} />;
     case 'error':
-      return <Dot color={palette.error} size={size * 0.32} />;
+      return <ErrorMark size={size} />;
     default:
       return <Dot color={palette.fgGhost} size={size * 0.28} />;
   }
+}
+
+/** A dot inside a ring, both in the error tint — legible at arm's length,
+ *  unlike the bare 6 px dot it replaces. */
+function ErrorMark({ size }: { size: number }): React.JSX.Element {
+  return (
+    <View
+      style={[
+        styles.center,
+        {
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          borderWidth: 1.5,
+          borderColor: palette.error,
+        },
+      ]}>
+      <Dot color={palette.error} size={size * 0.36} />
+    </View>
+  );
 }
 
 function Dot({ color, size }: { color: string; size: number }): React.JSX.Element {

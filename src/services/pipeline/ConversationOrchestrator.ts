@@ -33,6 +33,8 @@ import { useConversationStore } from '../../store/conversationStore';
 import type { HfActivity } from '../../store/conversationStore';
 import type { PersonId } from '../../app/types';
 import { log } from '../log/logStore';
+import { classifyError } from './errors';
+import { probeNetworkNow } from '../network/monitor';
 
 /** Tiny non-cryptographic ID generator. */
 function turnId(): string {
@@ -42,6 +44,8 @@ function turnId(): string {
 // ── Collaborator interfaces ──────────────────────────────────────────────────
 
 export interface AudioCapture {
+  /** Non-interactive permission check — must never show a dialog. */
+  hasPermission(): Promise<boolean>;
   requestPermission(): Promise<boolean>;
   startStreaming(onData: (base64Pcm: string) => void): void;
   stopStreaming(): Promise<void>;
@@ -62,6 +66,8 @@ export interface VoxtralLike {
   // Session-mode only (optional — not available in PTT mocks):
   flushUtterance?(timeoutMs?: number): Promise<{ text: string; language?: string }>;
   endSession?(): Promise<void>;
+  /** Drop text accumulated since the last flush (TTS echo scrubbing). */
+  resetUtterance?(): void;
 }
 
 export interface TranslatorLike {
@@ -74,16 +80,22 @@ export interface TranslatorLike {
     model?: string;
     signal?: AbortSignal;
     onFirstToken?: () => void;
+    /** Full translated text so far, on every delta — drives live display. */
+    onDelta?: (fullTextSoFar: string) => void;
     onSentence: (sentence: string) => void;
     onDone: (fullText: string) => void;
     onError: (err: Error) => void;
   }): Promise<void>;
 }
 
+/** Mirrors NativeTTSService.SpeakOutcome without importing the concrete
+ *  service — the orchestrator only depends on interfaces. */
+export type TTSSpeakOutcome = 'spoken' | 'no-voice' | 'error' | 'skipped';
+
 export interface TTSLike {
   init(): Promise<void>;
   prewarm(language: string): void;
-  speakChunk(text: string, language: string): Promise<void>;
+  speakChunk(text: string, language: string): Promise<TTSSpeakOutcome>;
   stop(): void;
 }
 
@@ -137,8 +149,17 @@ interface OrchestratorDeps {
 const DEFAULT_STT_MODEL = 'voxtral-mini-transcribe-realtime-2602';
 /** PCM samples per VAD frame (512 @ 16 kHz = 32 ms). */
 const VAD_FRAME_SAMPLES = 512;
-/** Cooldown after TTS finishes before re-enabling VAD (same as PTT hangover). */
+/** Grace period between PTT release and mic stop. People release the disc ON
+ *  the last syllable, not after it — without this, the word that matters most
+ *  gets clipped. The turn is already showing 'transcribing' during it. */
+const PTT_RELEASE_HANGOVER_MS = 250;
+/** Cooldown after TTS finishes before re-enabling VAD (matches
+ *  PTT_RELEASE_HANGOVER_MS). */
 const HF_COOLDOWN_MS = 250;
+/** Min interval between store writes driven by translation deltas. Deltas can
+ *  arrive faster than the UI can usefully paint; one write per ~80 ms keeps
+ *  text visibly streaming without hammering every subscriber. */
+const DELTA_WRITE_THROTTLE_MS = 80;
 /** Hard cap on accumulated VAD samples (1 s @ 16 kHz). Prevents heap growth
  *  if the inferencer wedges and stops draining. */
 const MAX_VAD_BUFFER_SAMPLES = 16_000;
@@ -149,11 +170,17 @@ export class ConversationOrchestrator {
   private activeTurnId: string | null = null;
   private currentArgs: BeginTurnArgs | null = null;
   private config: OrchestratorConfig | null = null;
-  private translatedAccumulator = '';
+  /** Guards the async permission check in beginTurn — the only await between
+   *  the idle check and state='recording', so two simultaneous presses can't
+   *  both pass the gate. */
+  private beginning = false;
   private ttsChunkPromises: Promise<void>[] = [];
   private translationAbort: AbortController | null = null;
   private turnCompletionPromise: Promise<void> | null = null;
   private resolveTurnCompletion: (() => void) | null = null;
+  /** Target languages we've already shown the "no voice installed" notice
+   *  for — once per language per session is enough. */
+  private voiceNoticeShown = new Set<string>();
 
   // HF state
   private hfEnabled = false;
@@ -224,7 +251,7 @@ export class ConversationOrchestrator {
       log.warn('[orch] beginTurn ignored — hands-free mode active');
       return;
     }
-    if (this.state !== 'idle') {
+    if (this.state !== 'idle' || this.beginning) {
       log.warn(`[orch] beginTurn ignored — state=${this.state}`);
       return;
     }
@@ -233,10 +260,36 @@ export class ConversationOrchestrator {
       throw new Error('Orchestrator not configured (missing API key)');
     }
     const cfg = this.config;
+    const store = (this.deps.conversationStore ?? useConversationStore).getState();
+    // A fresh press is the reader acting on the last notice — clear it.
+    store.setNotice(args.speakerId, null);
+
+    // Mic permission, lazily and in context (not fire-and-forget at launch).
+    // If the system dialog appears, this press has physically ended under it,
+    // so we never start recording on the same press — grant means the NEXT
+    // press works; denial gets a speaker-side notice with the fix.
+    this.beginning = true;
+    try {
+      let granted: boolean;
+      try {
+        granted = await this.deps.audioCapture.hasPermission();
+      } catch {
+        granted = true; // permission APIs unavailable — let the platform decide
+      }
+      if (!granted) {
+        const nowGranted = await this.deps.audioCapture.requestPermission().catch(() => false);
+        if (!nowGranted) {
+          store.setNotice(args.speakerId, { key: 'micPermission', kind: 'info' });
+        }
+        return;
+      }
+    } finally {
+      this.beginning = false;
+    }
+
     log.info(`[orch] beginTurn speaker=${args.speakerId} ${args.sourceLang}→${args.targetLang}`);
 
     const id = turnId();
-    const store = (this.deps.conversationStore ?? useConversationStore).getState();
     store.startTurn({
       id,
       speakerId: args.speakerId,
@@ -251,7 +304,6 @@ export class ConversationOrchestrator {
     this.state = 'recording';
     this.activeTurnId = id;
     this.currentArgs = args;
-    this.translatedAccumulator = '';
     this.ttsChunkPromises = [];
     this.turnCompletionPromise = new Promise<void>((resolve) => {
       this.resolveTurnCompletion = resolve;
@@ -278,13 +330,9 @@ export class ConversationOrchestrator {
         },
       );
     } catch (e) {
-      if ((this.state as OrchestratorState) === 'transcribing' && this.activeTurnId === id) {
-        log.info('[orch] handshake aborted by quick release — turn cancelled');
-        const store = (this.deps.conversationStore ?? useConversationStore).getState();
-        store.endTurn(id, { sourceText: '', translatedText: '', stage: 'done' });
-        this.completeTurn(id);
-        return;
-      }
+      // A quick release no longer aborts the handshake (the client flushes
+      // the queued audio when the session opens), so a rejection here is a
+      // real connection failure regardless of PTT state — surface it.
       log.error('[orch] Voxtral handshake rejected', e instanceof Error ? e : new Error(String(e)));
       void this.deps.audioCapture.stopStreaming().catch(() => {});
       this.failTurn(id, `Voxtral handshake failed: ${stringifyError(e)}`);
@@ -304,6 +352,10 @@ export class ConversationOrchestrator {
       store.updateTurn(id, { stage: 'transcribing' });
     }
 
+    // Release hangover: capture the syllable the release landed on. The UI
+    // already shows 'transcribing', so the extra 250 ms is honest.
+    await new Promise<void>((r) => setTimeout(r, PTT_RELEASE_HANGOVER_MS));
+
     try {
       await this.deps.audioCapture.stopStreaming();
     } catch (e) {
@@ -316,7 +368,11 @@ export class ConversationOrchestrator {
     }
   }
 
-  /** Abort the current PTT turn. */
+  /**
+   * Abort the current PTT turn — the user's own act (tapping the reading to
+   * stop it, backgrounding the app). Ends quietly as 'done' with whatever
+   * text already arrived: no error stage, no notice, no error haptic.
+   */
   async cancelTurn(): Promise<void> {
     if (this.state === 'idle') return;
     const id = this.activeTurnId;
@@ -324,7 +380,11 @@ export class ConversationOrchestrator {
     try { await this.deps.audioCapture.stopStreaming().catch(() => {}); } catch { /* noop */ }
     try { this.deps.voxtral.cancel(); } catch { /* noop */ }
     try { this.deps.tts.stop(); } catch { /* noop */ }
-    if (id) this.failTurn(id, 'Turn cancelled');
+    if (id) {
+      const store = (this.deps.conversationStore ?? useConversationStore).getState();
+      store.endTurn(id, { stage: 'done' });
+      this.completeTurn(id);
+    }
   }
 
   // ── Hands-Free API ────────────────────────────────────────────────────────
@@ -361,10 +421,7 @@ export class ConversationOrchestrator {
     // 2. Start audio capture with dual routing. Stop first to guarantee a clean
     //    state — a failed PTT turn may have left streaming=true (failTurn path).
     try { await this.deps.audioCapture.stopStreaming(); } catch { /* noop */ }
-    this.deps.audioCapture.startStreaming((base64Pcm) => {
-      this.deps.voxtral.feedAudio(base64Pcm);
-      this.feedAudioToVad(base64Pcm);
-    });
+    this.deps.audioCapture.startStreaming(this.hfOnAudio);
 
     // 3. Open persistent Voxtral session.
     await this.deps.voxtral.start(
@@ -471,10 +528,7 @@ export class ConversationOrchestrator {
     if (!this.hfEnabled || !this.hfPaused) return;
     log.info('[orch/hf] resuming — network online');
     try {
-      this.deps.audioCapture.startStreaming((base64Pcm) => {
-        this.deps.voxtral.feedAudio(base64Pcm);
-        this.feedAudioToVad(base64Pcm);
-      });
+      this.deps.audioCapture.startStreaming(this.hfOnAudio);
     } catch (e) {
       log.error('[orch/hf] resume audio capture failed', e instanceof Error ? e : new Error(String(e)));
       // Leave paused so UI can offer a manual disable.
@@ -490,6 +544,20 @@ export class ConversationOrchestrator {
   }
 
   // ── HF internal state machine ─────────────────────────────────────────────
+
+  /**
+   * Dual-path HF capture callback. While the phone is speaking (and during
+   * cooldown) the mic is hearing the phone's own TTS — that audio must NOT
+   * reach the Voxtral session, or the accumulator grows an echo prefix the
+   * router later detects as the other language (a feedback-loop ingredient).
+   * VOICE_COMMUNICATION's AEC is too device-dependent to rely on alone.
+   */
+  private readonly hfOnAudio = (base64Pcm: string): void => {
+    if (this.hfState !== 'hf-speaking' && this.hfState !== 'hf-cooldown') {
+      this.deps.voxtral.feedAudio(base64Pcm);
+    }
+    this.feedAudioToVad(base64Pcm);
+  };
 
   private handleHfSpeechStart(): void {
     if (!this.hfEnabled || this.hfPaused || this.hfState !== 'hf-idle') return;
@@ -569,6 +637,9 @@ export class ConversationOrchestrator {
       this.setHfState('hf-cooldown');
       await new Promise<void>((r) => setTimeout(r, HF_COOLDOWN_MS));
       if (this.hfEnabled && !this.hfPaused) {
+        // Scrub whatever leaked past the capture gate (chunks in flight when
+        // the state flipped) before listening for the next speaker.
+        this.deps.voxtral.resetUtterance?.();
         this.setHfState('hf-idle');
         this.deps.vad?.setActive(true);
       } else if (this.hfEnabled) {
@@ -669,10 +740,11 @@ export class ConversationOrchestrator {
     this.deps.vad?.setActive(false);
 
     const abort = new AbortController();
-    let translatedAcc = '';
+    const listenerId: PersonId = speakerId === 'person_a' ? 'person_b' : 'person_a';
     const ttsPromises: Promise<void>[] = [];
     let firstTokenAt: number | null = null;
     let firstTtsStartAt: number | null = null;
+    let lastDeltaWriteAt = 0;
 
     await this.deps.translator.translateStream({
       signal: abort.signal,
@@ -685,15 +757,26 @@ export class ConversationOrchestrator {
         if (firstTokenAt === null) firstTokenAt = Date.now();
         this.deps.tts.prewarm(targetLang);
       },
+      onDelta: (fullSoFar) => {
+        if (!this.hfEnabled) return;
+        const now = Date.now();
+        if (now - lastDeltaWriteAt < DELTA_WRITE_THROTTLE_MS) return;
+        lastDeltaWriteAt = now;
+        store.updateTurn(id, { translatedText: fullSoFar.trim() });
+      },
       onSentence: (sentence) => {
         if (!this.hfEnabled) { abort.abort(); return; }
         if (firstTtsStartAt === null) firstTtsStartAt = Date.now();
-        translatedAcc = (translatedAcc + ' ' + sentence).trim();
-        store.updateTurn(id, { translatedText: translatedAcc, stage: 'speaking' });
+        store.updateTurn(id, { stage: 'speaking' });
         ttsPromises.push(
-          this.deps.tts.speakChunk(sentence, targetLang).catch((e) => {
-            console.warn('[orch/hf] TTS chunk error:', e);
-          }),
+          this.deps.tts
+            .speakChunk(sentence, targetLang)
+            .then((outcome) => {
+              if (outcome === 'no-voice') this.noteNoVoice(targetLang, listenerId);
+            })
+            .catch((e) => {
+              console.warn('[orch/hf] TTS chunk error:', e);
+            }),
         );
       },
       onDone: (fullText) => {
@@ -702,6 +785,9 @@ export class ConversationOrchestrator {
       onError: (err) => {
         log.error('[orch/hf] translation error', err);
         store.endTurn(id, { stage: 'error', errorMessage: err.message });
+        const key = classifyError(err.message);
+        if (key) store.setNotice(speakerId, { key, kind: 'error' });
+        probeNetworkNow();
       },
     });
 
@@ -850,7 +936,10 @@ export class ConversationOrchestrator {
     const store = (this.deps.conversationStore ?? useConversationStore).getState();
     const trimmed = finalText.trim();
     if (trimmed.length === 0) {
+      // "Did it hear me?" must never be left open: an empty transcript gets
+      // a quiet speaker-side notice instead of vanishing without a trace.
       store.endTurn(turnId, { sourceText: '', translatedText: '', stage: 'done' });
+      store.setNotice(args.speakerId, { key: 'didntCatch', kind: 'info' });
       this.completeTurn(turnId);
       return;
     }
@@ -860,7 +949,9 @@ export class ConversationOrchestrator {
     const abort = new AbortController();
     this.translationAbort = abort;
 
+    const listenerId: PersonId = args.speakerId === 'person_a' ? 'person_b' : 'person_a';
     let translationFailed = false;
+    let lastDeltaWriteAt = 0;
 
     await this.deps.translator.translateStream({
       signal: abort.signal,
@@ -872,18 +963,25 @@ export class ConversationOrchestrator {
       onFirstToken: () => {
         this.deps.tts.prewarm(args.targetLang);
       },
+      // Stream text to the reader as it arrives — display never waits for a
+      // sentence boundary (that's the unit for TTS, not for eyes).
+      onDelta: (fullSoFar) => {
+        if (turnId !== this.activeTurnId) return;
+        const now = Date.now();
+        if (now - lastDeltaWriteAt < DELTA_WRITE_THROTTLE_MS) return;
+        lastDeltaWriteAt = now;
+        store.updateTurn(turnId, { translatedText: fullSoFar.trim() });
+      },
       onSentence: (sentence) => {
         if (turnId !== this.activeTurnId) return;
         if (this.state !== 'speaking') this.state = 'speaking';
-        this.translatedAccumulator =
-          (this.translatedAccumulator + ' ' + sentence).trim();
-        store.updateTurn(turnId, {
-          translatedText: this.translatedAccumulator,
-          stage: 'speaking',
-        });
+        store.updateTurn(turnId, { stage: 'speaking' });
         this.ttsChunkPromises.push(
           this.deps.tts
             .speakChunk(sentence, args.targetLang)
+            .then((outcome) => {
+              if (outcome === 'no-voice') this.noteNoVoice(args.targetLang, listenerId);
+            })
             .catch((err) => { console.warn('[Orchestrator] TTS chunk error:', err); }),
         );
       },
@@ -910,10 +1008,34 @@ export class ConversationOrchestrator {
     this.completeTurn(turnId);
   }
 
+  /** Once-per-language "no voice installed" notice, on the listener's half —
+   *  they're the one wondering why there is no audio. */
+  private noteNoVoice(targetLang: string, listenerId: PersonId): void {
+    const base = primarySubtag(targetLang);
+    if (this.voiceNoticeShown.has(base)) return;
+    this.voiceNoticeShown.add(base);
+    log.warn(`[orch] no TTS voice for ${targetLang} — text only`);
+    const store = (this.deps.conversationStore ?? useConversationStore).getState();
+    store.setNotice(listenerId, { key: 'noVoice', kind: 'info', lang: targetLang });
+  }
+
   private failTurn(turnId: string, message: string): void {
     if (turnId !== this.activeTurnId) return;
+    // The raw message goes to the log; the store gets a NoticeKey rendered in
+    // the SPEAKER's language on their own half — they are the one person who
+    // can act (press again, check Settings), and the old behavior handed the
+    // raw English error to the listener instead.
+    log.error(`[orch] turn failed: ${message}`);
     const store = (this.deps.conversationStore ?? useConversationStore).getState();
     store.endTurn(turnId, { stage: 'error', errorMessage: message });
+    const key = classifyError(message);
+    const speakerId = this.currentArgs?.speakerId;
+    if (key && speakerId) {
+      store.setNotice(speakerId, { key, kind: 'error' });
+    }
+    // A failed online request is the strongest offline signal we get —
+    // re-probe now instead of waiting out the 30 s cadence.
+    probeNetworkNow();
     try { this.translationAbort?.abort(); } catch { /* noop */ }
     try { this.deps.tts.stop(); } catch { /* noop */ }
     // Stop the mic so a subsequent enableHandsFree() can re-register the
@@ -928,7 +1050,6 @@ export class ConversationOrchestrator {
     this.state = 'idle';
     this.activeTurnId = null;
     this.currentArgs = null;
-    this.translatedAccumulator = '';
     this.ttsChunkPromises = [];
     this.translationAbort = null;
     const resolve = this.resolveTurnCompletion;

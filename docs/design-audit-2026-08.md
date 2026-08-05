@@ -1,5 +1,22 @@
 # Parly Design Audit — August 2026
 
+> **Implementation status (2026-08-05): all findings addressed.** C1–C6,
+> H1–H14, and P1–P12 are implemented on this branch; the suite is 120 tests
+> across 10 suites, all green, including the previously-unrunnable App suite.
+> Three deliberate deviations from the fixes as written below:
+> (1) **C1/C3** — notices carry a `NoticeKey` through the store and each half
+> renders it in its reader's language via `src/i18n/strings.ts` (32
+> languages), rather than storing English strings from a `humanize()` map;
+> (2) **H1** — translation deltas stream to `translatedText` but the stage
+> stays `translating` until the first sentence starts TTS ("speaking" before
+> audio would be dishonest in the other direction; the spinner complaint is
+> resolved by the streamed text itself);
+> (3) **H14** — only a *definitively invalid* key disables the discs; a
+> merely-unverified key stays usable while background validation races, so an
+> offline launch with a good stored key doesn't lock the table. H7's
+> interrupt landed on the translated text (listener side) only — the
+> speaker's disc stays a pure PTT control.
+
 Scope: full-repo review of pipeline correctness, perceived latency, the two-reader
 table context, failure states, onboarding, and UI polish. Method: every file in
 `src/` read in full, user flows traced end to end, README/PLAN cross-checked

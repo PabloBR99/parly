@@ -207,15 +207,21 @@ export function LanguagePickerSheet({
             <Text variant="caption" tone="fgFaint" style={styles.searchLabel}>
               CHOOSE LANGUAGE
             </Text>
-            <TextInput
-              style={styles.search}
-              placeholder="Search — English, Español, 日本語…"
-              placeholderTextColor={color.fgGhost}
-              value={filter}
-              onChangeText={setFilter}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
+            {/* No search field on the top-side sheet: the system keyboard
+                opens unrotated at the BOTTOM of the phone — the partner
+                physically cannot type from their seat. 32 languages
+                group-scroll fine. */}
+            {side !== 'top' && (
+              <TextInput
+                style={styles.search}
+                placeholder="Search — English, Español, 日本語…"
+                placeholderTextColor={color.fgGhost}
+                value={filter}
+                onChangeText={setFilter}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            )}
           </View>
           <ScrollView
             keyboardShouldPersistTaps="handled"
@@ -281,7 +287,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: '88%',
-    backgroundColor: '#0B0B0B',
+    backgroundColor: color.bg,
     borderLeftWidth: 1,
     borderRightWidth: 1,
     borderColor: color.hairline,

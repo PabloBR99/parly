@@ -39,10 +39,25 @@ interface CachedVoice {
   readonly language: string;
 }
 
+/**
+ * Result of a speakChunk call.
+ *  - 'spoken'   — played to completion (or intentionally stopped).
+ *  - 'no-voice' — the device has no voice for the requested language; the
+ *                 chunk was NOT read with a wrong-language voice (Spanish
+ *                 text in English phonemes is worse than silence). The
+ *                 orchestrator surfaces a per-language notice.
+ *  - 'error'    — the engine accepted the chunk but reported tts-error.
+ *  - 'skipped'  — empty text or the engine rejected the enqueue.
+ */
+export type SpeakOutcome = 'spoken' | 'no-voice' | 'error' | 'skipped';
+
 class NativeTTSService {
   private initialized = false;
   private voicesByLang = new Map<string, CachedVoice>();
   private currentLang: string | null = null;
+  /** Base languages for which every voice lookup + locale fallback failed —
+   *  cached so we don't retry the whole ladder on every chunk. */
+  private unavailableLangs = new Set<string>();
   private cancelAllPending: Set<() => void> = new Set();
 
   /** Load engine + cache voices. Idempotent. */
@@ -73,16 +88,22 @@ class NativeTTSService {
     }
   }
 
-  /** Apply the voice/language for the next utterance. Cached per language. */
-  private async applyLanguage(language: string): Promise<void> {
+  /**
+   * Apply the voice/language for the next utterance. Cached per language.
+   * Returns whether a voice (or locale) for this language was actually
+   * applied. On false, the PREVIOUS voice is still active — callers must
+   * not speak, or the text gets read in the wrong language's phonemes.
+   */
+  private async applyLanguage(language: string): Promise<boolean> {
     const baseLang = language.split(/[-_]/)[0].toLowerCase();
-    if (this.currentLang === baseLang) return;
+    if (this.currentLang === baseLang) return true;
+    if (this.unavailableLangs.has(baseLang)) return false;
     const cached = this.voicesByLang.get(baseLang);
     if (cached) {
       try {
         await Tts.setDefaultVoice(cached.id);
         this.currentLang = baseLang;
-        return;
+        return true;
       } catch {
         /* fall through to language fallback */
       }
@@ -91,9 +112,23 @@ class NativeTTSService {
     try {
       await Tts.setDefaultLanguage(locale);
       this.currentLang = baseLang;
+      return true;
     } catch {
-      try { await Tts.setDefaultLanguage(language); } catch { /* unsupported */ }
+      try {
+        await Tts.setDefaultLanguage(language);
+        this.currentLang = baseLang;
+        return true;
+      } catch {
+        this.unavailableLangs.add(baseLang);
+        return false;
+      }
     }
+  }
+
+  /** Whether a voice for `language` is known to be unavailable. Only
+   *  meaningful after an applyLanguage attempt (speakChunk/prewarm). */
+  hasVoiceFor(language: string): boolean {
+    return !this.unavailableLangs.has(language.split(/[-_]/)[0].toLowerCase());
   }
 
   /**
@@ -104,7 +139,8 @@ class NativeTTSService {
   prewarm(language: string): void {
     void (async () => {
       if (!this.initialized) await this.init();
-      await this.applyLanguage(language);
+      const voiceReady = await this.applyLanguage(language);
+      if (!voiceReady) return; // nothing to warm — and don't warm the wrong voice
       try {
         // Returns a Promise<utteranceId> — fire and forget.
         void Tts.speak(' ');
@@ -120,10 +156,11 @@ class NativeTTSService {
    * errors. Multiple consecutive calls queue in order — react-native-tts
    * native engine handles the queuing.
    */
-  async speakChunk(text: string, language: string): Promise<void> {
-    if (!text.trim()) return;
+  async speakChunk(text: string, language: string): Promise<SpeakOutcome> {
+    if (!text.trim()) return 'skipped';
     if (!this.initialized) await this.init();
-    await this.applyLanguage(language);
+    const voiceReady = await this.applyLanguage(language);
+    if (!voiceReady) return 'no-voice';
 
     // Tts.speak() resolves to the utteranceId once accepted by the native
     // engine. We then await its tts-finish/tts-cancel/tts-error event.
@@ -133,10 +170,10 @@ class NativeTTSService {
       utteranceId = (await (Tts as any).speak(text)) as string | number;
     } catch (e) {
       console.warn('[NativeTTSService] speak() rejected:', e);
-      return;
+      return 'skipped';
     }
 
-    return new Promise<void>((resolve) => {
+    return new Promise<SpeakOutcome>((resolve) => {
       let done = false;
       let playbackTimer: ReturnType<typeof setTimeout> | null = null;
       let startSub: { remove?(): void } | null = null;
@@ -144,7 +181,7 @@ class NativeTTSService {
       let cancelSub: { remove?(): void } | null = null;
       let errorSub: { remove?(): void } | null = null;
 
-      const finish = () => {
+      const finish = (outcome: SpeakOutcome) => {
         if (done) return;
         done = true;
         startSub?.remove?.();
@@ -154,16 +191,16 @@ class NativeTTSService {
         if (playbackTimer) clearTimeout(playbackTimer);
         clearTimeout(enqueueTimer);
         this.cancelAllPending.delete(forceCancel);
-        resolve();
+        resolve(outcome);
       };
-      const forceCancel = () => finish();
+      const forceCancel = () => finish('spoken');
       this.cancelAllPending.add(forceCancel);
 
       // Pre-playback fallback. Fires only if `tts-start` never arrives —
       // the chunk got dropped or the engine is stuck before producing any
       // audio for it. Generous enough to wait through a deep queue of
       // preceding chunks playing first.
-      const enqueueTimer = setTimeout(finish, ENQUEUE_TIMEOUT_MS);
+      const enqueueTimer = setTimeout(() => finish('skipped'), ENQUEUE_TIMEOUT_MS);
 
       const matches = (ev: unknown): boolean => {
         const id = (ev as { utteranceId?: unknown })?.utteranceId;
@@ -175,19 +212,21 @@ class NativeTTSService {
         // Playback for THIS chunk just began. Arm the playback cap from
         // here so the timer measures actual audio time, not queue wait.
         if (playbackTimer) clearTimeout(playbackTimer);
-        playbackTimer = setTimeout(finish, PLAYBACK_TIMEOUT_MS);
+        playbackTimer = setTimeout(() => finish('spoken'), PLAYBACK_TIMEOUT_MS);
       }) as unknown as { remove?(): void };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       finishSub = Tts.addEventListener('tts-finish', (ev: any) => {
-        if (matches(ev)) finish();
+        if (matches(ev)) finish('spoken');
       }) as unknown as { remove?(): void };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       cancelSub = Tts.addEventListener('tts-cancel', (ev: any) => {
-        if (matches(ev)) finish();
+        if (matches(ev)) finish('spoken');
       }) as unknown as { remove?(): void };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       errorSub = Tts.addEventListener('tts-error', (ev: any) => {
-        if (matches(ev)) finish();
+        // Report distinctly — resolving an engine failure as success was how
+        // "no audio, no explanation" shipped.
+        if (matches(ev)) finish('error');
       }) as unknown as { remove?(): void };
     });
   }
