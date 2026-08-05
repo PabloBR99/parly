@@ -76,8 +76,10 @@ jobs:
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon --stacktrace
         env:
-          # Skip proguard/shrinking on CI for faster + more predictable builds
-          ORG_GRADLE_PROJECT_enableProguardInReleaseBuilds: 'false'
+          # Only compile RN native code for the ABI the release APK actually
+          # packs (build.gradle filters release packaging to arm64-v8a).
+          # Overrides the 4-ABI default in gradle.properties for CI only.
+          ORG_GRADLE_PROJECT_reactNativeArchitectures: 'arm64-v8a'
           # Unique, identifiable version per build (see android/app/build.gradle).
           PARLY_VERSION_CODE: ${{ steps.version.outputs.version_code }}
           PARLY_VERSION_NAME: ${{ steps.version.outputs.version_name }}
