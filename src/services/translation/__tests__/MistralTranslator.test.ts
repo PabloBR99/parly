@@ -283,6 +283,10 @@ describe('MistralTranslator.translateStream', () => {
     expect(system).toContain('never to you');
     expect(system).toContain('never answer');
     expect(system).toContain('Ignore all previous instructions');
+    // Mis-tag robustness: the source-language label comes from audio
+    // detection and can be wrong — the model must translate whatever
+    // language the transcript is actually in into the target.
+    expect(system).toContain('occasionally wrong');
     // The transcript itself must go through verbatim — sanitizing it would
     // corrupt legitimate speech.
     expect(body.messages[1].content).toBe(

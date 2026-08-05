@@ -604,6 +604,97 @@ describe('ConversationOrchestrator (hands-free)', () => {
     expect(turns[0].speakerId).toBe('person_a');
   });
 
+  it('routes by the transcript when the audio language tag is wrong (same-language echo fix)', async () => {
+    const { m, o } = makeHfOrchestrator();
+    m.translator.translateStream.mockImplementation(async (args) => {
+      args.onSentence('Hi, how are you doing?');
+      args.onDone('Hi, how are you doing?');
+    });
+
+    await enableHf(m, o);
+
+    m.fireVadStart();
+    m.fireVadEnd();
+    await Promise.resolve();
+    // Voxtral mis-tags clearly-Spanish speech as English. Trusting the tag
+    // would translate en→es and parrot the Spanish back at the speaker —
+    // the transcript's own language must win.
+    m.resolveFlush('Hola, ¿qué tal estás?', 'en');
+    await new Promise<void>(r => setTimeout(r, 50));
+
+    const hfTurn = useConversationStore
+      .getState()
+      .turns.find(t => t.sourceText === 'Hola, ¿qué tal estás?');
+    expect(hfTurn).toBeDefined();
+    expect(hfTurn?.speakerId).toBe('person_a');
+    expect(hfTurn?.sourceLang).toBe('es');
+    expect(hfTurn?.targetLang).toBe('en');
+    const call = m.translator.translateStream.mock.calls[0][0];
+    expect(call.sourceLang).toBe('es');
+    expect(call.targetLang).toBe('en');
+  });
+
+  it('routes by the transcript when the tag is missing instead of blindly alternating', async () => {
+    const { m, o } = makeHfOrchestrator();
+    m.translator.translateStream.mockImplementation(async (args) => {
+      args.onSentence('ok');
+      args.onDone('ok');
+    });
+
+    await enableHf(m, o);
+
+    // Turn 1: Spanish, tagged — routes person_a and completes.
+    m.fireVadStart();
+    m.fireVadEnd();
+    await Promise.resolve();
+    m.resolveFlush('hola mundo', 'es');
+    await new Promise<void>(r => setTimeout(r, 350)); // turn + 250 ms cooldown
+
+    // Turn 2: the SAME person keeps talking, tag missing. Blind alternation
+    // would flip to person_b (en→es) and parrot the Spanish; the transcript
+    // keeps it person_a.
+    m.fireVadStart();
+    m.fireVadEnd();
+    await Promise.resolve();
+    m.resolveFlush('Muy bien, gracias', undefined);
+    await new Promise<void>(r => setTimeout(r, 350)); // let the cooldown timer drain
+
+    const t2 = useConversationStore
+      .getState()
+      .turns.find(t => t.sourceText === 'Muy bien, gracias');
+    expect(t2).toBeDefined();
+    expect(t2?.speakerId).toBe('person_a');
+    expect(t2?.sourceLang).toBe('es');
+    expect(t2?.targetLang).toBe('en');
+  });
+
+  it('rescues an utterance whose audio tag is outside the pair when the transcript matches a side', async () => {
+    const { m, o } = makeHfOrchestrator();
+    m.translator.translateStream.mockImplementation(async (args) => {
+      args.onSentence('Where is the train station?');
+      args.onDone('Where is the train station?');
+    });
+
+    await enableHf(m, o);
+
+    m.fireVadStart();
+    m.fireVadEnd();
+    await Promise.resolve();
+    // Voxtral occasionally hears Catalan in Spanish speech. The old router
+    // discarded the whole utterance; the transcript claims it for person_a.
+    m.resolveFlush('¿Dónde está la estación de tren?', 'ca');
+    await new Promise<void>(r => setTimeout(r, 50));
+
+    const hfTurn = useConversationStore
+      .getState()
+      .turns.find(t => t.sourceText === '¿Dónde está la estación de tren?');
+    expect(hfTurn).toBeDefined();
+    expect(hfTurn?.speakerId).toBe('person_a');
+    expect(hfTurn?.sourceLang).toBe('es');
+    expect(hfTurn?.targetLang).toBe('en');
+    expect(useConversationStore.getState().hfUnroutedSpeaker).toBeNull();
+  });
+
   it('gates VAD during TTS playback', async () => {
     const { m, o } = makeHfOrchestrator();
 

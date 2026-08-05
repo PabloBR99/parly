@@ -15,8 +15,9 @@
 // Hands-free (HF) mode:
 //   A single Voxtral WS (sessionMode) stays open across multiple utterances.
 //   Silero VAD fires speech_start / speech_end; on speech_end we call
-//   flushUtterance() to get the transcript, route by detected language, and
-//   dispatch through the existing Mistral → TTS pipeline.
+//   flushUtterance() to get the transcript, route by the transcript's own
+//   language (audio tag as fallback — see routeUtterance), and dispatch
+//   through the existing Mistral → TTS pipeline.
 //
 //   HF state machine:
 //     hf-idle → hf-capturing → hf-flushing → hf-routing → hf-speaking
@@ -34,6 +35,7 @@ import type { HfActivity } from '../../store/conversationStore';
 import type { PersonId } from '../../app/types';
 import { log } from '../log/logStore';
 import { classifyError } from './errors';
+import { classifyPairText } from './textLangId';
 import { probeNetworkNow } from '../network/monitor';
 
 /** Tiny non-cryptographic ID generator. */
@@ -124,6 +126,13 @@ export type HfState =
   | 'hf-routing'
   | 'hf-speaking'
   | 'hf-cooldown';
+
+/** How an HF utterance found its direction:
+ *  'text' — transcript content decided (audio tag agreed or abstained);
+ *  'text-override' — transcript contradicted and overrode the audio tag;
+ *  'matched' — audio tag decided, transcript abstained;
+ *  'fallback' — no evidence at all, speaker alternation. */
+export type HfRoutingKind = 'matched' | 'text' | 'text-override' | 'fallback';
 
 export interface BeginTurnArgs {
   readonly speakerId: PersonId;
@@ -678,7 +687,7 @@ export class ConversationOrchestrator {
     speakerId: PersonId;
     sourceLang: string;
     targetLang: string;
-    kind: 'matched' | 'fallback';
+    kind: HfRoutingKind;
   } | null {
     const pairA = this.hfPairA;
     const pairB = this.hfPairB;
@@ -686,28 +695,50 @@ export class ConversationOrchestrator {
 
     const store = (this.deps.conversationStore ?? useConversationStore).getState();
 
-    if (detectedLang) {
-      // Compare BCP-47 primary subtags so "es-MX" matches "es" symmetrically
-      // and a regional pair like (es, es-MX) doesn't always route to A.
-      const dl = primarySubtag(detectedLang);
-      const a  = primarySubtag(pairA);
-      const b  = primarySubtag(pairB);
+    // Compare BCP-47 primary subtags so "es-MX" matches "es" symmetrically
+    // and a regional pair like (es, es-MX) doesn't always route to A.
+    const a = primarySubtag(pairA);
+    const b = primarySubtag(pairB);
 
-      if (a !== b) {
-        if (dl === a) {
-          return { speakerId: 'person_a', sourceLang: pairA, targetLang: pairB, kind: 'matched' };
+    if (a !== b) {
+      const dl = detectedLang ? primarySubtag(detectedLang) : null;
+      const audioVote: 'a' | 'b' | null = dl === a ? 'a' : dl === b ? 'b' : null;
+
+      // The transcript is stronger routing evidence than the audio tag: it is
+      // the very text about to be translated, so ITS language decides which
+      // direction produces a real translation. The audio tag misfires often
+      // enough (Spanish tagged en, Catalan for Spanish, or missing entirely)
+      // that trusting it alone made HF "translate" Spanish into Spanish and
+      // parrot the speaker. Strong text evidence overrides a contradicting
+      // tag; weak evidence only fills in when the tag abstained — and both
+      // beat blind speaker alternation.
+      const textVote = classifyPairText(text, a, b);
+      const textSide =
+        textVote && (textVote.strength === 'strong' || audioVote === null)
+          ? textVote.side
+          : null;
+      const side = textSide ?? audioVote;
+
+      if (side) {
+        const kind: HfRoutingKind = textSide
+          ? audioVote && audioVote !== textSide
+            ? 'text-override'
+            : 'text'
+          : 'matched';
+        if (kind === 'text-override') {
+          log.warn(
+            `[orch/hf] transcript overrides audio tag lang=${detectedLang} → ${side === 'a' ? a : b} text="${text.slice(0, 30)}"`,
+          );
         }
-        if (dl === b) {
-          return { speakerId: 'person_b', sourceLang: pairB, targetLang: pairA, kind: 'matched' };
-        }
-      } else {
-        // Same primary subtag both sides — language alone can't disambiguate.
-        // Fall through to alternation.
+        return side === 'a'
+          ? { speakerId: 'person_a', sourceLang: pairA, targetLang: pairB, kind }
+          : { speakerId: 'person_b', sourceLang: pairB, targetLang: pairA, kind };
       }
 
-      if (a !== b) {
-        // Language not in pair — discard with visual feedback on the side
-        // whose turn it likely was (alternate from last routed).
+      if (detectedLang) {
+        // Audio says a language outside the pair AND the transcript claims
+        // neither side — discard with visual feedback on the side whose turn
+        // it likely was (alternate from last routed).
         log.info(`[orch/hf] unrouted utterance lang=${detectedLang} text="${text.slice(0, 30)}"`);
         const lastDone = [...store.turns].reverse().find(t => t.stage === 'done');
         const flashSide: PersonId = lastDone?.speakerId === 'person_a' ? 'person_b' : 'person_a';
@@ -719,8 +750,8 @@ export class ConversationOrchestrator {
       }
     }
 
-    // No language tag (or ambiguous same-subtag pair) — alternate from last
-    // routed turn. First turn defaults to person_a.
+    // No usable evidence (or ambiguous same-subtag pair) — alternate from
+    // last routed turn. First turn defaults to person_a.
     const lastDone = [...store.turns].reverse().find(t => t.stage === 'done');
     if (lastDone?.speakerId === 'person_a') {
       return { speakerId: 'person_b', sourceLang: pairB, targetLang: pairA, kind: 'fallback' };
@@ -739,7 +770,7 @@ export class ConversationOrchestrator {
       flushedAt: number;
       routedLanguage: string | null;
       configuredPair: [string, string];
-      routingResult: 'matched' | 'fallback';
+      routingResult: HfRoutingKind;
     },
   ): Promise<void> {
     const cfg = this.config;

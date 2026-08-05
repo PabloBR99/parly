@@ -41,7 +41,7 @@ The app needs a Mistral API key on first run. The in-app onboarding opens [conso
 | **VAD (hands-free)** | Silero VAD v5 via `onnxruntime-react-native` — 512-sample frames @ 16 kHz decide turn-taking on-device |
 | **Secret storage** | `react-native-keychain` — API key only, never leaves the device except in `Authorization: Bearer …` |
 | **Settings persistence** | Zustand `persist` over a `react-native-fs` file — language pair, model, key status survive restarts (the key itself stays in the keychain) |
-| **Tests** | Jest, 123 passing across orchestrator / Voxtral client / translator / audio capture / network monitor / VAD / app tree |
+| **Tests** | Jest, 143 passing across orchestrator / language routing / Voxtral client / translator / audio capture / network monitor / VAD / app tree |
 
 One on-device ML model ships in the APK: Silero VAD (`android/app/src/main/assets/silero_vad.onnx`, 2.3 MB), which drives hands-free turn detection locally — audio only leaves the device for STT. Everything else stays cloud (STT, translation) or OS-native (TTS). The only egress is `api.mistral.ai`.
 
