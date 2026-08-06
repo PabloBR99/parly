@@ -4,10 +4,18 @@
 
 Lay the phone flat on the table. Each half of the screen faces one speaker — rotated so both read upright. One person talks; the other reads the translation as it streams in and hears it spoken aloud moments later. Push-to-talk, or fully hands-free.
 
-
-<p align="center">
-  <img src="docs/demo.gif" width="280" alt="Live demo of a hands-free conversation: the Spanish half at the top rotated 180° asks 'Hola, ¿cómo te llamas?', the English half at the bottom shows the streaming translation 'Hi, what's your name?', and the reply flows back the other way." />
-</p>
+<div align="center">
+<table>
+  <tr>
+    <td align="center"><img src="docs/demo.gif" width="270" alt="Push-to-talk demo: the Spanish half at the top rotated 180° asks 'Hola, ¿cómo te llamas?', the English half at the bottom shows the streaming translation 'Hi, what's your name?', and the reply flows back the other way." /></td>
+    <td align="center"><img src="docs/demo-handsfree.gif" width="270" alt="Hands-free demo: with no button presses, a Spanish speaker asks where to find a pharmacy and the English half answers with streamed directions, voice activity detection taking the turns." /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Push-to-talk</b> — hold your disc, speak, release</sub></td>
+    <td align="center"><sub><b>Hands-free</b> — no buttons; VAD takes the turns</sub></td>
+  </tr>
+</table>
+</div>
 
 Built on [Mistral](https://mistral.ai)'s realtime APIs — Voxtral for streaming speech-to-text, chat completions for streaming translation — with the OS's own text-to-speech voices. Bring your own (free) Mistral API key; the app has no backend of its own.
 
@@ -20,6 +28,12 @@ Built on [Mistral](https://mistral.ai)'s realtime APIs — Voxtral for streaming
 - **Scrollable history** — each side can scroll back through the conversation in their own language, then jump back to live.
 - **Interruptible** — tap the translation while it's being spoken to skip the readback.
 - **Private by design** — no backend, no telemetry, no accounts. The only server the app ever talks to is `api.mistral.ai`, under your own key.
+
+## Languages
+
+English, Spanish, French, German, Italian, Portuguese, Dutch, Russian, Ukrainian, Polish, Czech, Greek, Turkish, Arabic, Hebrew, Persian, Hindi, Bengali, Urdu, Chinese, Japanese, Korean, Vietnamese, Thai, Indonesian, Swedish, Norwegian, Danish, Finnish, Romanian, Hungarian and Swahili — any pair, in either direction.
+
+Spoken output uses the voices installed on the device; if the OS has no voice for a language, Parly shows the text and tells the listener rather than reading it with a wrong-language voice.
 
 ## Getting started
 
