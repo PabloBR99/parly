@@ -5,7 +5,7 @@
 Lay the phone flat on the table. Each half of the screen faces one speaker — rotated so both read upright. One person talks; the other reads the translation as it streams in and hears it spoken aloud moments later. Push-to-talk, or fully hands-free.
 
 <p align="center">
-  <img src="docs/demo.gif" width="340" alt="Live demo of a hands-free conversation: the Spanish half at the top rotated 180° asks 'Hola, ¿cómo te llamas?', the English half at the bottom shows the streaming translation 'Hi, what's your name?', and the reply flows back the other way." />
+  <img src="docs/demo.gif" width="280" alt="Live demo of a hands-free conversation: the Spanish half at the top rotated 180° asks 'Hola, ¿cómo te llamas?', the English half at the bottom shows the streaming translation 'Hi, what's your name?', and the reply flows back the other way." />
 </p>
 
 Built on [Mistral](https://mistral.ai)'s realtime APIs — Voxtral for streaming speech-to-text, chat completions for streaming translation — with the OS's own text-to-speech voices. Bring your own (free) Mistral API key; the app has no backend of its own.
