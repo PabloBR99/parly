@@ -324,6 +324,12 @@ cd ios && rm -rf Pods Podfile.lock && bundle exec pod install && cd ..
 
 ---
 
+## Privacy
+
+Parly has no backend of its own. Microphone audio streams directly from your device to Mistral's servers for transcription (Voxtral realtime), and the transcribed text goes to Mistral's chat API for translation — all under **your** API key, governed by [Mistral's terms and privacy policy](https://mistral.ai/terms/). Parly itself stores nothing server-side: conversation history lives only in memory on the device and disappears when the session ends. Your API key is kept in the platform secure store (Android Keystore / iOS Keychain via react-native-keychain) and leaves the device only to authenticate against Mistral's API.
+
+---
+
 ## References
 
 - **Mistral Voxtral (audio realtime):** https://docs.mistral.ai/api/#tag/audio/operation/audio_transcriptions_realtime_v1_audio_transcriptions_realtime_get
@@ -332,3 +338,9 @@ cd ios && rm -rf Pods Podfile.lock && bundle exec pod install && cd ..
 - **react-native-keychain:** https://github.com/oblador/react-native-keychain
 - **Reanimated:** https://docs.swmansion.com/react-native-reanimated/
 - **React Native:** https://reactnative.dev
+
+---
+
+## License
+
+[MIT](LICENSE) © 2026 Pablo Bruno Romero
