@@ -36,6 +36,10 @@ interface SettingsState {
   readonly keyStatus: KeyStatus;
   readonly translationModel: TranslationModelId;
   readonly languagePairConfigured: boolean;
+  /** Whether this user has ever engaged the hands-free control. Until true,
+   *  the seam wave carries a labelled hint — an unlabelled 66×28 pill is
+   *  invisible to someone who was never told it exists. */
+  readonly hfDiscovered: boolean;
 }
 
 interface SettingsActions {
@@ -48,6 +52,7 @@ interface SettingsActions {
   setKeyStatus: (status: KeyStatus) => void;
   setTranslationModel: (model: TranslationModelId) => void;
   setLanguagePairConfigured: (v: boolean) => void;
+  setHfDiscovered: (v: boolean) => void;
 }
 
 const initialState: SettingsState = {
@@ -57,6 +62,7 @@ const initialState: SettingsState = {
   keyStatus: 'none',
   translationModel: 'mistral-small-latest',
   languagePairConfigured: false,
+  hfDiscovered: false,
 };
 
 // Persistence adapter over react-native-fs (already a dependency for the log
@@ -114,6 +120,8 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setLanguagePairConfigured: languagePairConfigured =>
         set({ languagePairConfigured }),
+
+      setHfDiscovered: hfDiscovered => set({ hfDiscovered }),
     }),
     {
       name: 'parly-settings',
@@ -125,6 +133,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         keyStatus: state.keyStatus,
         translationModel: state.translationModel,
         languagePairConfigured: state.languagePairConfigured,
+        hfDiscovered: state.hfDiscovered,
       }),
     },
   ),

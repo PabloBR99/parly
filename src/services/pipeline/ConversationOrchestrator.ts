@@ -19,6 +19,12 @@
 //   language (audio tag as fallback — see routeUtterance), and dispatch
 //   through the existing Mistral → TTS pipeline.
 //
+//   Long utterances: streaming partials render live via the store's hfLive
+//   field (side guessed from the text), the flush wait scales with how long
+//   the person spoke, a flush timeout salvages the partial transcript
+//   instead of dropping the utterance, and skipHfTurn() lets a reader cut a
+//   long TTS readback short.
+//
 //   HF state machine:
 //     hf-idle → hf-capturing → hf-flushing → hf-routing → hf-speaking
 //             ↑                                          |           |
@@ -165,6 +171,23 @@ const PTT_RELEASE_HANGOVER_MS = 250;
 /** Cooldown after TTS finishes before re-enabling VAD (matches
  *  PTT_RELEASE_HANGOVER_MS). */
 const HF_COOLDOWN_MS = 250;
+/** Base wait for a transcript final after flush/end. */
+const FINAL_BASE_TIMEOUT_MS = 3_000;
+/** Extra final-wait per ms of captured speech (¼×), and its cap. A fixed
+ *  3 s was tuned for one-liners; a 40 s monologue has a longer transcription
+ *  tail and deserves a longer leash before the salvage path kicks in. */
+const FINAL_TIMEOUT_SLOPE = 0.25;
+const FINAL_EXTRA_TIMEOUT_CAP_MS = 7_000;
+/** Min interval between hfLive store writes from streaming partials. */
+const HF_PARTIAL_WRITE_THROTTLE_MS = 150;
+
+/** Final-transcript timeout scaled by how long the person actually spoke. */
+function finalTimeoutFor(speechMs: number): number {
+  return (
+    FINAL_BASE_TIMEOUT_MS +
+    Math.min(FINAL_EXTRA_TIMEOUT_CAP_MS, Math.round(speechMs * FINAL_TIMEOUT_SLOPE))
+  );
+}
 /** Min interval between store writes driven by translation deltas. Deltas can
  *  arrive faster than the UI can usefully paint; one write per ~80 ms keeps
  *  text visibly streaming without hammering every subscriber. */
@@ -200,6 +223,17 @@ export class ConversationOrchestrator {
   private hfPairB: string | null = null;  // language code for person_b
   private vadBuffer: Int16Array = new Int16Array(0);
   private hfFirstAudioLogged = false;
+  /** When the current HF utterance's capture began — scales the flush wait. */
+  private hfCaptureStartAt: number | null = null;
+  /** When the current PTT hold began — scales the final-transcript wait. */
+  private pttRecordStartAt: number | null = null;
+  /** Live-partial routing guess, sticky within one utterance. */
+  private hfLiveSide: PersonId | null = null;
+  private hfLastPartialWriteAt = 0;
+  /** Abort handle for the in-flight HF translation (skip / disable). */
+  private hfTurnAbort: AbortController | null = null;
+  /** The reader cut this HF turn short — end it quietly as done. */
+  private hfSkipRequested = false;
 
   constructor(private readonly deps: OrchestratorDeps) {}
 
@@ -313,6 +347,7 @@ export class ConversationOrchestrator {
     this.state = 'recording';
     this.activeTurnId = id;
     this.currentArgs = args;
+    this.pttRecordStartAt = Date.now();
     this.ttsChunkPromises = [];
     this.turnCompletionPromise = new Promise<void>((resolve) => {
       this.resolveTurnCompletion = resolve;
@@ -355,6 +390,7 @@ export class ConversationOrchestrator {
   async endTurn(): Promise<void> {
     if (this.state !== 'recording') return;
     this.state = 'transcribing';
+    const heldMs = this.pttRecordStartAt !== null ? Date.now() - this.pttRecordStartAt : 0;
     const id = this.activeTurnId;
     if (id) {
       const store = (this.deps.conversationStore ?? useConversationStore).getState();
@@ -371,7 +407,10 @@ export class ConversationOrchestrator {
       console.warn('[Orchestrator] stopStreaming failed:', e);
     }
     try {
-      await this.deps.voxtral.end();
+      // Long holds get a proportionally longer wait for the final before the
+      // partial-salvage timeout: the tail of a monologue is the part the
+      // speaker cared enough to keep talking for.
+      await this.deps.voxtral.end(finalTimeoutFor(heldMs) + 2_000);
     } catch (e) {
       if (id) this.failTurn(id, `Voxtral end failed: ${stringifyError(e)}`);
     }
@@ -506,6 +545,13 @@ export class ConversationOrchestrator {
     store.setMode('ptt');
     store.setHfActiveSpeaker(null);
     store.setHfUnroutedSpeaker(null);
+    store.setHfLive(null);
+
+    // Abort any translation still streaming for an HF turn — its onSentence
+    // gate would abort eventually, but doing it here is immediate.
+    this.hfSkipRequested = true;
+    try { this.hfTurnAbort?.abort(); } catch { /* noop */ }
+    this.hfTurnAbort = null;
 
     // 2. Stop VAD subscription.
     this.hfVadUnsub?.();
@@ -548,6 +594,7 @@ export class ConversationOrchestrator {
     this.hfPaused = true;
     this.setHfState('hf-idle');
     this.vadBuffer = new Int16Array(0);
+    (this.deps.conversationStore ?? useConversationStore).getState().setHfLive(null);
     this.deps.vad?.setActive(false);
     try { await this.deps.audioCapture.stopStreaming(); } catch { /* noop */ }
   }
@@ -594,6 +641,8 @@ export class ConversationOrchestrator {
   private handleHfSpeechStart(): void {
     if (!this.hfEnabled || this.hfPaused || this.hfState !== 'hf-idle') return;
     log.info('[orch/hf] speech_start → capturing');
+    this.hfCaptureStartAt = Date.now();
+    this.hfLiveSide = null;
     this.setHfState('hf-capturing');
   }
 
@@ -602,15 +651,18 @@ export class ConversationOrchestrator {
     if (!this.deps.voxtral.flushUtterance) return;
 
     const vadEndAt = Date.now();
-    log.info('[orch/hf] speech_end → flushing');
+    const capturedMs = this.hfCaptureStartAt !== null ? vadEndAt - this.hfCaptureStartAt : 0;
+    log.info(`[orch/hf] speech_end → flushing (captured ${capturedMs} ms)`);
     this.setHfState('hf-flushing');
 
+    const store0 = (this.deps.conversationStore ?? useConversationStore).getState();
     let result: { text: string; language?: string };
     const flushSentAt = Date.now();
     try {
-      result = await this.deps.voxtral.flushUtterance(3_000);
+      result = await this.deps.voxtral.flushUtterance(finalTimeoutFor(capturedMs));
     } catch (e) {
       log.error('[orch/hf] flushUtterance failed', e instanceof Error ? e : new Error(String(e)));
+      store0.setHfLive(null);
       if (this.hfEnabled) {
         this.setHfState('hf-idle');
         await this.attemptHfReconnect();
@@ -618,6 +670,9 @@ export class ConversationOrchestrator {
       return;
     }
     const flushedAt = Date.now();
+
+    // The live partial's job ends where the routed turn begins.
+    store0.setHfLive(null);
 
     if (!this.hfEnabled) return;
 
@@ -794,6 +849,8 @@ export class ConversationOrchestrator {
     this.deps.vad?.setActive(false);
 
     const abort = new AbortController();
+    this.hfTurnAbort = abort;
+    this.hfSkipRequested = false;
     const listenerId: PersonId = speakerId === 'person_a' ? 'person_b' : 'person_a';
     const ttsPromises: Promise<void>[] = [];
     let firstTokenAt: number | null = null;
@@ -837,6 +894,9 @@ export class ConversationOrchestrator {
         store.updateTurn(id, { translatedText: fullText.trim() });
       },
       onError: (err) => {
+        // A reader-initiated skip aborts the stream mid-flight — that is the
+        // turn ending as intended, not an error to alarm anyone with.
+        if (this.hfSkipRequested) return;
         log.error('[orch/hf] translation error', err);
         store.endTurn(id, { stage: 'error', errorMessage: err.message });
         const key = classifyError(err.message);
@@ -846,6 +906,7 @@ export class ConversationOrchestrator {
     });
 
     await Promise.all(ttsPromises);
+    this.hfTurnAbort = null;
     const endAt = Date.now();
 
     if (store.turns.find(t => t.id === id)?.stage !== 'error') {
@@ -872,12 +933,51 @@ export class ConversationOrchestrator {
     log.info(`[hf_turn] ${JSON.stringify(payload)}`);
   }
 
-  private handleHfPartial(_text: string): void {
-    // No-op for now: HF partials arrive during 'hf-capturing', but we don't
-    // create the store turn until flushUtterance resolves and language has
-    // been routed. Writing partials to the previous (already-done) turn
-    // would flicker its sourceText. If we want live partials in HF, we need
-    // a separate transient store field rather than reusing activeTurnId.
+  /**
+   * Streaming HF partials → the transient `hfLive` store field (never a
+   * turn: turns don't exist until the utterance is flushed and routed).
+   * The side is the text classifier's live guess so the words appear on the
+   * SPEAKER's own half; a guess is sticky for the rest of the utterance so
+   * the caption doesn't hop across the seam mid-sentence. Until there is
+   * enough text to call a side, nothing renders — a caption on the wrong
+   * half is worse than a beat of silence.
+   */
+  private handleHfPartial(text: string): void {
+    if (!this.hfEnabled || this.hfPaused) return;
+    if (this.hfState !== 'hf-capturing' && this.hfState !== 'hf-flushing') return;
+    const trimmed = text.trim();
+    if (trimmed.length === 0) return;
+    const now = Date.now();
+    if (now - this.hfLastPartialWriteAt < HF_PARTIAL_WRITE_THROTTLE_MS) return;
+    this.hfLastPartialWriteAt = now;
+
+    if (this.hfLiveSide === null && this.hfPairA && this.hfPairB) {
+      const a = primarySubtag(this.hfPairA);
+      const b = primarySubtag(this.hfPairB);
+      if (a !== b) {
+        const vote = classifyPairText(trimmed, a, b);
+        if (vote) this.hfLiveSide = vote.side === 'a' ? 'person_a' : 'person_b';
+      }
+    }
+    (this.deps.conversationStore ?? useConversationStore)
+      .getState()
+      .setHfLive({ side: this.hfLiveSide, text: trimmed });
+  }
+
+  /**
+   * Cut the in-flight HF turn short — the reader tapped the streaming
+   * translation. Stops TTS, aborts the translation stream, and lets the
+   * turn end quietly as 'done' with whatever text already arrived; the
+   * machine then proceeds to cooldown and listens again. This is the door
+   * out of a long readback nobody needs spoken to the end.
+   */
+  skipHfTurn(): void {
+    if (!this.hfEnabled) return;
+    if (this.hfState !== 'hf-routing' && this.hfState !== 'hf-speaking') return;
+    log.info('[orch/hf] turn skipped by reader — stopping TTS');
+    this.hfSkipRequested = true;
+    try { this.hfTurnAbort?.abort(); } catch { /* noop */ }
+    try { this.deps.tts.stop(); } catch { /* noop */ }
   }
 
   private handleHfError(err: Error): void {
@@ -894,6 +994,7 @@ export class ConversationOrchestrator {
     // against a half-open or freshly-reconnected session.
     this.deps.vad?.setActive(false);
     this.vadBuffer = new Int16Array(0);
+    (this.deps.conversationStore ?? useConversationStore).getState().setHfLive(null);
     this.setHfState('hf-idle');
 
     log.info('[orch/hf] reconnecting in 500 ms');

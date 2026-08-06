@@ -1,7 +1,9 @@
-import React, { useEffect } from 'react';
-import type { LayoutChangeEvent } from 'react-native';
-import { Pressable, StyleSheet, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { LayoutChangeEvent, TextStyle } from 'react-native';
+import { Pressable, StyleSheet, Text as RNText, View } from 'react-native';
 import Animated, {
+  runOnJS,
+  useAnimatedRef,
   useAnimatedScrollHandler,
   useAnimatedStyle,
   useSharedValue,
@@ -41,12 +43,64 @@ function SourceLine({ label, text }: { readonly label: string; readonly text: st
   );
 }
 
+/** Keep the END of a growing live transcript visible — the head is old news. */
+function tailOf(text: string, max: number): string {
+  return text.length <= max ? text : `…${text.slice(-max)}`;
+}
+
+// ── History feed ────────────────────────────────────────────────────────────
+//
+// Each half carries the whole conversation, readable by ITS reader without
+// turning the phone: partner turns render their translation (already in the
+// reader's language), the reader's own turns render what they said (their
+// words, their language). The newest partner message keeps the hero
+// treatment; everything older recedes into a quieter, smaller register the
+// reader can scroll back through.
+
+interface FeedItem {
+  readonly id: string;
+  readonly kind: 'partner' | 'own';
+  readonly text: string;
+}
+
+/** Hero type steps down as the translation grows — a minute of speech at
+ *  34 pt is a wall, not a reading. */
+function heroFontFor(len: number): TextStyle {
+  if (len <= 150) return font.displayHero;
+  if (len <= 380) return font.display;
+  return font.displayCompact;
+}
+
+const HistoryLine = React.memo(function HistoryLine({
+  kind,
+  text,
+}: {
+  readonly kind: 'partner' | 'own';
+  readonly text: string;
+}): React.JSX.Element {
+  // Partner history keeps the sans "reading" voice, smaller and dimmer;
+  // the reader's own words take the serif chrome voice — a quote of
+  // themselves, not a reading.
+  return kind === 'partner' ? (
+    <RNText style={styles.historyPartner}>{text}</RNText>
+  ) : (
+    <Text variant="serif" tone="fgFaint" style={styles.historyOwn}>
+      {text}
+    </Text>
+  );
+});
+
+/** Scroll slack (px) beyond which the reader counts as "away from live". */
+const DETACH_SLACK_PX = 56;
+
 // ── SpeakerHalf ─────────────────────────────────────────────────────────────
 
 export interface SpeakerHalfProps {
   readonly speakerId: PersonId;
   readonly speakerLanguage: string;
   readonly partnerLanguage: string;
+  /** Full conversation — each half derives its own reader's view. */
+  readonly turns: readonly Turn[];
   readonly activeTurn: Turn | null;
   readonly incomingTurn: Turn | null;
   /** Notice addressed to THIS half's reader, rendered in their language.
@@ -64,7 +118,8 @@ export interface SpeakerHalfProps {
   readonly onPressOut: () => void;
   /** Fired on a single tap in HF mode — typically exits hands-free. */
   readonly onTap?: () => void;
-  /** Tap on the streaming/spoken translation — interrupts the turn. */
+  /** Tap on the streaming/spoken translation — interrupts (PTT) or skips
+   *  the rest of the readback (HF). */
   readonly onInterrupt?: () => void;
   readonly onChangeLanguage: () => void;
 }
@@ -73,6 +128,7 @@ export function SpeakerHalf({
   speakerId,
   speakerLanguage,
   partnerLanguage,
+  turns,
   activeTurn,
   incomingTurn,
   notice,
@@ -95,6 +151,7 @@ export function SpeakerHalf({
 
   const conversationMode = useConversationStore(s => s.mode);
   const hfUnroutedSpeaker = useConversationStore(s => s.hfUnroutedSpeaker);
+  const hfLive = useConversationStore(s => s.hfLive);
 
   // Derive disc mode from conversation mode. In HF the disc never reacts
   // per-speaker — we don't know who is talking until audio is transcribed and
@@ -125,34 +182,85 @@ export function SpeakerHalf({
     opacity: unroutedFade.value,
   }));
 
-  const incomingText = incomingTurn?.translatedText ?? '';
+  // The reader's feed: chronological, all in their language. Own turns join
+  // only once done (while active they live in the source slot); partner
+  // turns join the moment translated text starts streaming.
+  const feed = useMemo<FeedItem[]>(() => {
+    const items: FeedItem[] = [];
+    for (const turn of turns) {
+      if (turn.speakerId === speakerId) {
+        if (turn.stage === 'done' && turn.sourceText.trim().length > 0) {
+          items.push({ id: turn.id, kind: 'own', text: turn.sourceText.trim() });
+        }
+      } else if (turn.translatedText.trim().length > 0) {
+        items.push({ id: turn.id, kind: 'partner', text: turn.translatedText.trim() });
+      }
+    }
+    return items;
+  }, [turns, speakerId]);
+
+  let lastPartnerIdx = -1;
+  for (let i = feed.length - 1; i >= 0; i--) {
+    if (feed[i].kind === 'partner') { lastPartnerIdx = i; break; }
+  }
+  const hasHero = lastPartnerIdx !== -1;
+  const heroLen = hasHero ? feed[lastPartnerIdx].text.length : 0;
+
   const incomingStage = incomingTurn?.stage ?? null;
-  const hasIncomingText = incomingText.length > 0;
 
   const ownSource = activeTurn?.sourceText ?? '';
   const partnerSource = incomingTurn?.sourceText ?? '';
 
   const reveal = useSharedValue(0);
   useEffect(() => {
-    reveal.value = hasIncomingText
+    reveal.value = hasHero
       ? withTiming(1, { duration: motion.normal, easing: Easing.out(Easing.quad) })
       : withTiming(0, { duration: motion.fast });
-  }, [hasIncomingText, reveal]);
+  }, [hasHero, reveal]);
 
   const bigStyle = useAnimatedStyle(() => ({
     opacity: reveal.value,
     transform: [{ translateY: (1 - reveal.value) * 6 }],
   }));
 
+  // ── Scroll position: stick to the live end unless the reader wanders ─────
+  const scrollRef = useAnimatedRef<Animated.ScrollView>();
   const scrollY = useSharedValue(0);
   const contentH = useSharedValue(0);
   const viewH = useSharedValue(0);
+  const detachedSV = useSharedValue(0);
+  const stickRef = useRef(true);
+  const [detached, setDetachedState] = useState(false);
+  const setDetached = useCallback((d: boolean) => {
+    stickRef.current = !d;
+    setDetachedState(d);
+  }, []);
 
   const scrollHandler = useAnimatedScrollHandler({
-    onScroll: (e) => { scrollY.value = e.contentOffset.y; },
+    onScroll: (e) => {
+      scrollY.value = e.contentOffset.y;
+      const slack = e.contentSize.height - (e.contentOffset.y + e.layoutMeasurement.height);
+      const isDetached = slack > DETACH_SLACK_PX;
+      if (isDetached !== (detachedSV.value === 1)) {
+        detachedSV.value = isDetached ? 1 : 0;
+        runOnJS(setDetached)(isDetached);
+      }
+    },
   });
-  const onContentSizeChange = (_w: number, h: number) => { contentH.value = h; };
+  const onContentSizeChange = (_w: number, h: number) => {
+    contentH.value = h;
+    // Streaming text grows the content every few frames; while the reader is
+    // at (or near) the live end, keep them pinned there. A reader who has
+    // scrolled up to consult history is never yanked — the ↓ chip waits.
+    if (stickRef.current) {
+      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
+    }
+  };
   const onScrollViewLayout = (e: LayoutChangeEvent) => { viewH.value = e.nativeEvent.layout.height; };
+  const jumpToLatest = useCallback(() => {
+    scrollRef.current?.scrollToEnd({ animated: true });
+    setDetached(false);
+  }, [scrollRef, setDetached]);
 
   const topFadeStyle = useAnimatedStyle(() => {
     if (contentH.value <= viewH.value + 1) return { opacity: 0 };
@@ -167,25 +275,38 @@ export function SpeakerHalf({
   const stageForMorph: TurnStage | null = activeTurn?.stage ?? incomingStage ?? null;
   const showMorph = stageForMorph !== null && stageForMorph !== 'done';
 
-  // A tap on the live translation interrupts the turn — the half-duplex lock
-  // needs a door-open button once the machine holds the floor.
+  // A tap on the live translation interrupts the turn (PTT) or skips the
+  // rest of the readback (HF) — the half-duplex lock needs a door-open
+  // button once the machine holds the floor.
   const interruptible =
     onInterrupt !== undefined &&
     (incomingStage === 'translating' || incomingStage === 'speaking');
 
-  const sourceNode =
-    activeTurn !== null && ownSource.length > 0 ? (
-      <SourceLine label={speakerLang.endonym} text={ownSource} />
-    ) : activeTurn === null && partnerSource.length > 0 && incomingText.length > 0 ? (
-      <SourceLine label={partnerLang.endonym} text={partnerSource} />
-    ) : null;
+  // Live hands-free partial — the words appear on the speaker's own half
+  // while they are still talking, so a long turn never looks like a dead
+  // phone. Attribution comes from the text classifier's live guess.
+  const hfLiveHere =
+    conversationMode === 'hf' &&
+    activeTurn === null &&
+    hfLive !== null &&
+    hfLive.side === speakerId &&
+    hfLive.text.length > 0;
+
+  const sourceNode = hfLiveHere ? (
+    <SourceLine label={speakerLang.endonym} text={tailOf(hfLive.text, 110)} />
+  ) : activeTurn !== null && ownSource.length > 0 ? (
+    <SourceLine label={speakerLang.endonym} text={ownSource} />
+  ) : activeTurn === null && partnerSource.length > 0 && hasHero ? (
+    <SourceLine label={partnerLang.endonym} text={partnerSource} />
+  ) : null;
 
   return (
     <View style={styles.root}>
       <View style={styles.sourceSlot}>{sourceNode}</View>
 
-      <View style={[styles.big, hasIncomingText && styles.bigWithText]}>
+      <View style={[styles.big, feed.length > 0 && styles.bigWithText]}>
         <Animated.ScrollView
+          ref={scrollRef}
           onScroll={scrollHandler}
           onContentSizeChange={onContentSizeChange}
           onLayout={onScrollViewLayout}
@@ -194,18 +315,23 @@ export function SpeakerHalf({
           contentContainerStyle={styles.bigScrollContent}
           showsVerticalScrollIndicator={false}
           bounces={false}>
-          {hasIncomingText && (
-            <Pressable
-              onPress={interruptible ? onInterrupt : undefined}
-              disabled={!interruptible}
-              accessibilityRole={interruptible ? 'button' : undefined}
-              accessibilityLabel={interruptible ? 'Stop this translation' : undefined}>
-              <Animated.Text style={[styles.bigText, bigStyle]}>
-                {incomingText}
-              </Animated.Text>
-            </Pressable>
+          {feed.map((item, idx) =>
+            idx === lastPartnerIdx ? (
+              <Pressable
+                key={item.id}
+                onPress={interruptible ? onInterrupt : undefined}
+                disabled={!interruptible}
+                accessibilityRole={interruptible ? 'button' : undefined}
+                accessibilityLabel={interruptible ? 'Stop this translation' : undefined}>
+                <Animated.Text style={[styles.bigText, heroFontFor(heroLen), bigStyle]}>
+                  {item.text}
+                </Animated.Text>
+              </Pressable>
+            ) : (
+              <HistoryLine key={item.id} kind={item.kind} text={item.text} />
+            ),
           )}
-          {!hasIncomingText && firstRun && !activeTurn && !firstHfRun && (
+          {feed.length === 0 && firstRun && !activeTurn && !firstHfRun && (
             <View style={styles.welcome}>
               <Text variant="serifHero" tone="fgFaint" style={styles.welcomeHeadline}>
                 {t.holdToSpeak}
@@ -223,7 +349,7 @@ export function SpeakerHalf({
               </View>
             </View>
           )}
-          {!hasIncomingText && firstHfRun && !activeTurn && (
+          {feed.length === 0 && firstHfRun && !activeTurn && (
             <View style={styles.welcome}>
               <Text variant="serifHero" tone="fgFaint" style={styles.welcomeHeadline}>
                 {t.justSpeak}
@@ -255,6 +381,16 @@ export function SpeakerHalf({
             style={styles.fadeGradient}
           />
         </Animated.View>
+        {detached && (
+          <Pressable
+            style={styles.jumpChip}
+            onPress={jumpToLatest}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Jump to latest">
+            <RNText style={styles.jumpArrow}>↓</RNText>
+          </Pressable>
+        )}
       </View>
 
       <View style={styles.identityRow}>
@@ -279,6 +415,11 @@ export function SpeakerHalf({
         {hfUnroutedHere && (
           <Text variant="serif" tone="fgMuted" style={styles.microcopy}>
             {t.unrouted}
+          </Text>
+        )}
+        {hfLiveHere && !showMorph && (
+          <Text variant="serif" tone="fgMuted" style={styles.microcopy}>
+            {t.listening}
           </Text>
         )}
         {showMorph && (
@@ -374,10 +515,39 @@ const styles = StyleSheet.create({
   },
   bigText: {
     color: color.fg,
-    ...font.displayHero,
+  },
+  historyPartner: {
+    fontFamily: font.sansFamily,
+    fontSize: 17,
+    lineHeight: 24,
+    fontWeight: '300',
+    letterSpacing: -0.2,
+    color: color.fgMuted,
+    marginBottom: space.md,
+  },
+  historyOwn: {
+    marginBottom: space.md,
   },
   noticeText: {
     marginTop: space.sm,
+  },
+  jumpChip: {
+    position: 'absolute',
+    right: 0,
+    bottom: space.xs,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: color.bgElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.hairlineStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  jumpArrow: {
+    color: color.fgMuted,
+    fontSize: 15,
+    lineHeight: 18,
   },
 
   identityRow: {

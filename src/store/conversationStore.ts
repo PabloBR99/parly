@@ -29,6 +29,19 @@ export interface Turn {
 export type HfActivity = 'idle' | 'listening' | 'speaking';
 
 /**
+ * Live partial transcript while a hands-free utterance is still being
+ * captured. `side` is the classifier's best guess at who is talking (from
+ * the transcript's own language) — null until there is enough text to call
+ * it. Cleared the moment the utterance is flushed and routed into a real
+ * turn. Without this, a long hands-free monologue shows a dead screen for
+ * its entire duration.
+ */
+export interface HfLivePartial {
+  readonly side: PersonId | null;
+  readonly text: string;
+}
+
+/**
  * Keys for the per-speaker notice pane. The store carries a KEY, not a
  * sentence: each half renders the notice in its reader's language
  * (`i18n/strings.ts`), because the two people at the table do not share one.
@@ -69,6 +82,8 @@ interface ConversationState {
   readonly hfUnroutedSpeaker: PersonId | null;
   /** What the hands-free control is doing right now — drives the seam wave. */
   readonly hfActivity: HfActivity;
+  /** Streaming transcript of the hands-free utterance being captured. */
+  readonly hfLive: HfLivePartial | null;
   /** Per-speaker notice shown on that speaker's own half, in their language. */
   readonly notices: { readonly [K in PersonId]: SpeakerNotice | null };
 }
@@ -82,6 +97,7 @@ interface ConversationActions {
   setHfActiveSpeaker: (id: PersonId | null) => void;
   setHfUnroutedSpeaker: (id: PersonId | null) => void;
   setHfActivity: (activity: HfActivity) => void;
+  setHfLive: (live: HfLivePartial | null) => void;
   setNotice: (speaker: PersonId, notice: SpeakerNotice | null) => void;
 }
 
@@ -94,6 +110,7 @@ export const useConversationStore = create<ConversationState & ConversationActio
   hfActiveSpeaker: null,
   hfUnroutedSpeaker: null,
   hfActivity: 'idle',
+  hfLive: null,
   notices: emptyNotices,
 
   startTurn: turn =>
@@ -118,7 +135,7 @@ export const useConversationStore = create<ConversationState & ConversationActio
       activeTurnId: state.activeTurnId === id ? null : state.activeTurnId,
     })),
 
-  clear: () => set({ turns: [], activeTurnId: null, notices: emptyNotices }),
+  clear: () => set({ turns: [], activeTurnId: null, hfLive: null, notices: emptyNotices }),
 
   setMode: mode => set({ mode }),
 
@@ -127,6 +144,8 @@ export const useConversationStore = create<ConversationState & ConversationActio
   setHfUnroutedSpeaker: id => set({ hfUnroutedSpeaker: id }),
 
   setHfActivity: activity => set({ hfActivity: activity }),
+
+  setHfLive: hfLive => set({ hfLive }),
 
   setNotice: (speaker, notice) =>
     set(state => ({ notices: { ...state.notices, [speaker]: notice } })),

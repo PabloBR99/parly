@@ -29,6 +29,8 @@ export interface SurfaceStrings {
   readonly tapToExit: string;
   // Hands-free unrouted blink (one word).
   readonly unrouted: string;
+  // Seam-control hint label, shown until the reader first uses hands-free.
+  readonly handsFree: string;
   // Notice sentences. `noVoice` contains a {lang} placeholder.
   readonly notices: Readonly<Record<NoticeKey, string>>;
 }
@@ -40,6 +42,7 @@ const en: SurfaceStrings = {
   justSpeak: 'Just speak.',
   tapToExit: 'Tap any disc to exit.',
   unrouted: 'again?',
+  handsFree: 'hands-free',
   notices: {
     connectionDropped: 'Connection dropped. Press and hold to try again.',
     keyInvalid: 'The key stopped working. Open Settings to check it.',
@@ -61,6 +64,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Solo habla.',
     tapToExit: 'Toca un disco para salir.',
     unrouted: '¿otra vez?',
+    handsFree: 'manos libres',
     notices: {
       connectionDropped: 'Se cortó la conexión. Mantén pulsado para intentarlo de nuevo.',
       keyInvalid: 'La clave dejó de funcionar. Revísala en Ajustes.',
@@ -79,6 +83,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Parlez, simplement.',
     tapToExit: 'Touchez un disque pour quitter.',
     unrouted: 'encore ?',
+    handsFree: 'mains libres',
     notices: {
       connectionDropped: 'Connexion perdue. Maintenez pour réessayer.',
       keyInvalid: 'La clé ne fonctionne plus. Vérifiez-la dans les réglages.',
@@ -97,6 +102,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Einfach sprechen.',
     tapToExit: 'Zum Beenden eine Scheibe antippen.',
     unrouted: 'nochmal?',
+    handsFree: 'Freisprechen',
     notices: {
       connectionDropped: 'Verbindung abgebrochen. Zum Wiederholen gedrückt halten.',
       keyInvalid: 'Der Schlüssel funktioniert nicht mehr. In den Einstellungen prüfen.',
@@ -115,6 +121,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Parla e basta.',
     tapToExit: 'Tocca un disco per uscire.',
     unrouted: 'di nuovo?',
+    handsFree: 'mani libere',
     notices: {
       connectionDropped: 'Connessione persa. Tieni premuto per riprovare.',
       keyInvalid: 'La chiave non funziona più. Controllala nelle impostazioni.',
@@ -133,6 +140,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'É só falar.',
     tapToExit: 'Toque num disco para sair.',
     unrouted: 'de novo?',
+    handsFree: 'mãos livres',
     notices: {
       connectionDropped: 'A conexão caiu. Segure para tentar de novo.',
       keyInvalid: 'A chave parou de funcionar. Verifique nos ajustes.',
@@ -151,6 +159,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Spreek gewoon.',
     tapToExit: 'Tik op een schijf om te stoppen.',
     unrouted: 'nog eens?',
+    handsFree: 'handsfree',
     notices: {
       connectionDropped: 'Verbinding verbroken. Houd ingedrukt om opnieuw te proberen.',
       keyInvalid: 'De sleutel werkt niet meer. Controleer hem in de instellingen.',
@@ -169,6 +178,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Просто говорите.',
     tapToExit: 'Коснитесь диска, чтобы выйти.',
     unrouted: 'ещё раз?',
+    handsFree: 'свободные руки',
     notices: {
       connectionDropped: 'Связь прервалась. Удерживайте, чтобы попробовать снова.',
       keyInvalid: 'Ключ перестал работать. Проверьте его в настройках.',
@@ -187,6 +197,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Просто говоріть.',
     tapToExit: 'Торкніться диска, щоб вийти.',
     unrouted: 'ще раз?',
+    handsFree: 'вільні руки',
     notices: {
       connectionDropped: "Зв'язок перервався. Утримуйте, щоб спробувати ще раз.",
       keyInvalid: 'Ключ перестав працювати. Перевірте його в налаштуваннях.',
@@ -205,6 +216,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Po prostu mów.',
     tapToExit: 'Dotknij dysku, aby wyjść.',
     unrouted: 'jeszcze raz?',
+    handsFree: 'wolne ręce',
     notices: {
       connectionDropped: 'Połączenie przerwane. Przytrzymaj, aby spróbować ponownie.',
       keyInvalid: 'Klucz przestał działać. Sprawdź go w ustawieniach.',
@@ -223,6 +235,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Prostě mluvte.',
     tapToExit: 'Klepnutím na disk ukončíte.',
     unrouted: 'ještě jednou?',
+    handsFree: 'volné ruce',
     notices: {
       connectionDropped: 'Spojení se přerušilo. Podržte a zkuste to znovu.',
       keyInvalid: 'Klíč přestal fungovat. Zkontrolujte ho v nastavení.',
@@ -241,6 +254,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Απλώς μιλήστε.',
     tapToExit: 'Αγγίξτε έναν δίσκο για έξοδο.',
     unrouted: 'ξανά;',
+    handsFree: 'χωρίς χέρια',
     notices: {
       connectionDropped: 'Η σύνδεση χάθηκε. Κρατήστε πατημένο για να δοκιμάσετε ξανά.',
       keyInvalid: 'Το κλειδί σταμάτησε να λειτουργεί. Ελέγξτε το στις ρυθμίσεις.',
@@ -259,6 +273,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Sadece konuşun.',
     tapToExit: 'Çıkmak için bir diske dokunun.',
     unrouted: 'tekrar?',
+    handsFree: 'eller serbest',
     notices: {
       connectionDropped: 'Bağlantı koptu. Tekrar denemek için basılı tutun.',
       keyInvalid: 'Anahtar çalışmayı durdurdu. Ayarlardan kontrol edin.',
@@ -277,6 +292,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'تحدّث فقط.',
     tapToExit: 'المس أحد القرصين للخروج.',
     unrouted: 'مرة أخرى؟',
+    handsFree: 'حر اليدين',
     notices: {
       connectionDropped: 'انقطع الاتصال. اضغط مطوّلًا للمحاولة مجددًا.',
       keyInvalid: 'توقف المفتاح عن العمل. تحقق منه في الإعدادات.',
@@ -295,6 +311,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'פשוט דברו.',
     tapToExit: 'געו בדיסק כדי לצאת.',
     unrouted: 'שוב?',
+    handsFree: 'דיבורית',
     notices: {
       connectionDropped: 'החיבור נותק. לחצו לחיצה ארוכה כדי לנסות שוב.',
       keyInvalid: 'המפתח הפסיק לעבוד. בדקו אותו בהגדרות.',
@@ -313,6 +330,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'فقط صحبت کنید.',
     tapToExit: 'برای خروج روی یک دیسک بزنید.',
     unrouted: 'دوباره؟',
+    handsFree: 'هندزفری',
     notices: {
       connectionDropped: 'اتصال قطع شد. برای تلاش دوباره نگه دارید.',
       keyInvalid: 'کلید دیگر کار نمی‌کند. آن را در تنظیمات بررسی کنید.',
@@ -331,6 +349,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'बस बोलिए।',
     tapToExit: 'बाहर निकलने के लिए किसी डिस्क को छुएँ।',
     unrouted: 'फिर से?',
+    handsFree: 'हैंड्स-फ़्री',
     notices: {
       connectionDropped: 'कनेक्शन टूट गया। फिर से कोशिश करने के लिए दबाकर रखें।',
       keyInvalid: 'कुंजी काम नहीं कर रही। सेटिंग्स में जाँचें।',
@@ -349,6 +368,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'শুধু কথা বলুন।',
     tapToExit: 'বেরোতে একটি ডিস্কে আলতো চাপুন।',
     unrouted: 'আবার?',
+    handsFree: 'হ্যান্ডস-ফ্রি',
     notices: {
       connectionDropped: 'সংযোগ বিচ্ছিন্ন হয়েছে। আবার চেষ্টা করতে চেপে ধরে রাখুন।',
       keyInvalid: 'কী কাজ করছে না। সেটিংসে গিয়ে দেখুন।',
@@ -367,6 +387,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'بس بولیں۔',
     tapToExit: 'باہر نکلنے کے لیے کسی ڈسک کو چھوئیں۔',
     unrouted: 'دوبارہ؟',
+    handsFree: 'ہینڈز فری',
     notices: {
       connectionDropped: 'رابطہ منقطع ہو گیا۔ دوبارہ کوشش کے لیے دبا کر رکھیں۔',
       keyInvalid: 'کلید کام نہیں کر رہی۔ ترتیبات میں جانچیں۔',
@@ -385,6 +406,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: '直接说话就好。',
     tapToExit: '点按圆盘退出。',
     unrouted: '再说一次？',
+    handsFree: '免提',
     notices: {
       connectionDropped: '连接中断了。按住重试。',
       keyInvalid: '密钥失效了。请在设置中检查。',
@@ -403,6 +425,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'そのまま話してください。',
     tapToExit: 'ディスクをタップで終了。',
     unrouted: 'もう一度？',
+    handsFree: 'ハンズフリー',
     notices: {
       connectionDropped: '接続が切れました。長押しでもう一度お試しください。',
       keyInvalid: 'キーが使えなくなりました。設定で確認してください。',
@@ -421,6 +444,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: '그냥 말하세요.',
     tapToExit: '디스크를 탭하면 종료됩니다.',
     unrouted: '다시요?',
+    handsFree: '핸즈프리',
     notices: {
       connectionDropped: '연결이 끊어졌어요. 길게 눌러 다시 시도하세요.',
       keyInvalid: '키가 작동하지 않아요. 설정에서 확인하세요.',
@@ -439,6 +463,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Cứ nói thôi.',
     tapToExit: 'Chạm vào đĩa để thoát.',
     unrouted: 'lần nữa?',
+    handsFree: 'rảnh tay',
     notices: {
       connectionDropped: 'Mất kết nối. Nhấn giữ để thử lại.',
       keyInvalid: 'Khóa không còn hoạt động. Kiểm tra trong cài đặt.',
@@ -457,6 +482,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'พูดได้เลย',
     tapToExit: 'แตะจานเพื่อออก',
     unrouted: 'อีกครั้ง?',
+    handsFree: 'แฮนด์ฟรี',
     notices: {
       connectionDropped: 'การเชื่อมต่อหลุด กดค้างเพื่อลองใหม่',
       keyInvalid: 'คีย์ใช้งานไม่ได้แล้ว ตรวจสอบในการตั้งค่า',
@@ -475,6 +501,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Langsung bicara saja.',
     tapToExit: 'Ketuk salah satu cakram untuk keluar.',
     unrouted: 'sekali lagi?',
+    handsFree: 'bebas genggam',
     notices: {
       connectionDropped: 'Koneksi terputus. Tekan dan tahan untuk mencoba lagi.',
       keyInvalid: 'Kunci tidak berfungsi lagi. Periksa di pengaturan.',
@@ -493,6 +520,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Bara tala.',
     tapToExit: 'Tryck på en skiva för att avsluta.',
     unrouted: 'igen?',
+    handsFree: 'handsfree',
     notices: {
       connectionDropped: 'Anslutningen bröts. Håll intryckt för att försöka igen.',
       keyInvalid: 'Nyckeln slutade fungera. Kontrollera den i inställningarna.',
@@ -511,6 +539,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Bare snakk.',
     tapToExit: 'Trykk på en skive for å avslutte.',
     unrouted: 'igjen?',
+    handsFree: 'handsfree',
     notices: {
       connectionDropped: 'Tilkoblingen ble brutt. Hold inne for å prøve igjen.',
       keyInvalid: 'Nøkkelen sluttet å virke. Sjekk den i innstillingene.',
@@ -529,6 +558,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Bare tal.',
     tapToExit: 'Tryk på en skive for at afslutte.',
     unrouted: 'igen?',
+    handsFree: 'håndfri',
     notices: {
       connectionDropped: 'Forbindelsen røg. Hold nede for at prøve igen.',
       keyInvalid: 'Nøglen holdt op med at virke. Tjek den i indstillingerne.',
@@ -547,6 +577,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Puhu vain.',
     tapToExit: 'Poistu napauttamalla kiekkoa.',
     unrouted: 'uudestaan?',
+    handsFree: 'handsfree',
     notices: {
       connectionDropped: 'Yhteys katkesi. Pidä pohjassa ja yritä uudelleen.',
       keyInvalid: 'Avain lakkasi toimimasta. Tarkista se asetuksista.',
@@ -565,6 +596,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Doar vorbește.',
     tapToExit: 'Atinge un disc ca să ieși.',
     unrouted: 'încă o dată?',
+    handsFree: 'mâini libere',
     notices: {
       connectionDropped: 'Conexiunea s-a întrerupt. Ține apăsat ca să încerci din nou.',
       keyInvalid: 'Cheia nu mai funcționează. Verific-o în setări.',
@@ -583,6 +615,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Csak beszélj.',
     tapToExit: 'Kilépéshez érints meg egy korongot.',
     unrouted: 'még egyszer?',
+    handsFree: 'kéz nélkül',
     notices: {
       connectionDropped: 'Megszakadt a kapcsolat. Tartsd nyomva az újrapróbáláshoz.',
       keyInvalid: 'A kulcs már nem működik. Ellenőrizd a beállításokban.',
@@ -601,6 +634,7 @@ const TABLE: Record<string, SurfaceStrings> = {
     justSpeak: 'Ongea tu.',
     tapToExit: 'Gusa diski ili kutoka.',
     unrouted: 'tena?',
+    handsFree: 'bila mikono',
     notices: {
       connectionDropped: 'Muunganisho umekatika. Shikilia ili kujaribu tena.',
       keyInvalid: 'Ufunguo umeacha kufanya kazi. Ukague kwenye mipangilio.',

@@ -447,6 +447,38 @@ describe('VoxtralRealtimeClient', () => {
       }
     });
 
+    it('flushUtterance() salvages the accumulated partial on timeout instead of dropping the utterance', async () => {
+      jest.useFakeTimers();
+      try {
+        const fake = createFakeWs();
+        const svc = new VoxtralRealtimeClient(fake.factory);
+        const rec = recording();
+
+        await handshake(fake, svc, rec, { sessionMode: true });
+
+        // A long utterance streamed in fine — only the final frame is late.
+        fake.ws.fire('message', JSON.stringify({ type: 'transcription.language', language: 'es' }));
+        fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'una parrafada larga ' }));
+        fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'que no debe perderse' }));
+
+        const flushPromise = svc.flushUtterance(3_000);
+        jest.advanceTimersByTime(4_000);
+
+        const result = await flushPromise;
+        expect(result.text).toBe('una parrafada larga que no debe perderse');
+        expect(result.language).toBe('es');
+        // The session survives, and the accumulator is reset so a late
+        // transcription.done can't re-deliver the same words.
+        expect(svc.currentState).toBe('streaming');
+        fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'siguiente' }));
+        const next = svc.flushUtterance(3_000);
+        fake.ws.fire('message', JSON.stringify({ type: 'transcription.done', text: 'siguiente' }));
+        await expect(next).resolves.toEqual({ text: 'siguiente', language: undefined });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('flushUtterance() rejects if WS closes while pending', async () => {
       const fake = createFakeWs();
       const svc = new VoxtralRealtimeClient(fake.factory);

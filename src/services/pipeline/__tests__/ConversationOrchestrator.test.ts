@@ -695,6 +695,101 @@ describe('ConversationOrchestrator (hands-free)', () => {
     expect(useConversationStore.getState().hfUnroutedSpeaker).toBeNull();
   });
 
+  it('streams live partials into hfLive with the classifier-guessed side, and clears on dispatch', async () => {
+    const { m, o } = makeHfOrchestrator();
+    m.translator.translateStream.mockImplementation(async (args) => {
+      args.onSentence('Hi, how are you?');
+      args.onDone('Hi, how are you?');
+    });
+
+    await enableHf(m, o);
+
+    // While the speaker is still talking, partials must reach the screen —
+    // a long monologue with a dead display reads as a hung app.
+    m.fireVadStart();
+    m.fireVoxtralPartial('Hola, ¿qué tal estás?');
+    const live = useConversationStore.getState().hfLive;
+    expect(live).not.toBeNull();
+    expect(live?.text).toBe('Hola, ¿qué tal estás?');
+    expect(live?.side).toBe('person_a'); // clearly-Spanish text → pair side A
+
+    m.fireVadEnd();
+    await Promise.resolve();
+    m.resolveFlush('Hola, ¿qué tal estás?', 'es');
+    await new Promise<void>(r => setTimeout(r, 50));
+
+    // The routed turn takes over — the live partial's job is done.
+    expect(useConversationStore.getState().hfLive).toBeNull();
+  });
+
+  it('skipHfTurn() cuts a long readback: stops TTS, ends the turn as done, no error notice', async () => {
+    const { m, o } = makeHfOrchestrator();
+
+    let ttsResolve: (() => void) | undefined;
+    m.tts.speakChunk.mockImplementation(
+      () => new Promise<TTSSpeakOutcome>(r => { ttsResolve = () => r('spoken'); }),
+    );
+    // The real TTS service resolves in-flight chunks on stop(); mirror that.
+    m.tts.stop.mockImplementation(() => { ttsResolve?.(); });
+
+    m.translator.translateStream.mockImplementation(async (args) => {
+      args.onDelta?.('A very long translated readback.');
+      args.onSentence('A very long translated readback.');
+      // Stream keeps going until the reader aborts it.
+      await new Promise<void>((resolve) => {
+        args.signal?.addEventListener('abort', () => {
+          args.onError(new Error('Translation cancelled'));
+          resolve();
+        });
+      });
+    });
+
+    await enableHf(m, o);
+
+    m.fireVadStart();
+    m.fireVadEnd();
+    await Promise.resolve();
+    m.resolveFlush('una parrafada muy larga', 'es');
+    await new Promise<void>(r => setTimeout(r, 20));
+    expect(o.getHfState()).toBe('hf-speaking');
+
+    o.skipHfTurn();
+    await new Promise<void>(r => setTimeout(r, 350)); // dispatch tail + cooldown
+
+    expect(m.tts.stop).toHaveBeenCalled();
+    const turn = useConversationStore
+      .getState()
+      .turns.find(t => t.sourceText === 'una parrafada muy larga');
+    // A reader-initiated skip is a normal ending, not a failure.
+    expect(turn?.stage).toBe('done');
+    expect(turn?.translatedText).toBe('A very long translated readback.');
+    expect(useConversationStore.getState().notices.person_a).toBeNull();
+    expect(useConversationStore.getState().notices.person_b).toBeNull();
+    // The machine listens again.
+    expect(o.getHfState()).toBe('hf-idle');
+    expect(o.isHandsFreeActive()).toBe(true);
+  });
+
+  it('scales the flush wait with capture duration (never below the 3 s base)', async () => {
+    const { m, o } = makeHfOrchestrator();
+    m.translator.translateStream.mockImplementation(async (args) => {
+      args.onSentence('Hello.');
+      args.onDone('Hello.');
+    });
+
+    await enableHf(m, o);
+
+    m.fireVadStart();
+    m.fireVadEnd();
+    await Promise.resolve();
+    m.resolveFlush('hola', 'es');
+    await new Promise<void>(r => setTimeout(r, 50));
+
+    const timeoutArg = (m.voxtral.flushUtterance as jest.Mock).mock.calls[0][0] as number;
+    expect(timeoutArg).toBeGreaterThanOrEqual(3_000);
+    expect(timeoutArg).toBeLessThanOrEqual(10_000);
+  });
+
   it('gates VAD during TTS playback', async () => {
     const { m, o } = makeHfOrchestrator();
 

@@ -410,7 +410,12 @@ export class VoxtralRealtimeClient {
   /**
    * Session-mode only: send input_audio.flush and resolve with the next
    * transcription.done. The WS stays open for the next utterance.
-   * Rejects if transcription.done doesn't arrive within timeoutMs.
+   *
+   * On timeout, the accumulated partial transcript is SALVAGED: long
+   * utterances have long transcription tails, and rejecting used to throw
+   * away a whole minute of speech over a slow final frame. The partial is
+   * everything but the last few hundred milliseconds — translating it beats
+   * silence every time. Rejects only when nothing at all accumulated.
    */
   async flushUtterance(timeoutMs = 3_000): Promise<{ text: string; language?: string }> {
     if (this.state !== 'streaming') {
@@ -428,6 +433,17 @@ export class VoxtralRealtimeClient {
       this.flushReject = reject;
       this.flushTimer = setTimeout(() => {
         this.clearFlushPending();
+        const salvaged = this.accumulatedText.trim();
+        if (salvaged.length > 0) {
+          log.warn(`[voxtral] flush timeout after ${timeoutMs} ms — salvaging ${salvaged.length}-char partial`);
+          const language = this.detectedLanguage;
+          // Reset like transcription.done would, so the late done (if it
+          // ever lands) doesn't re-deliver this text into the next turn.
+          this.accumulatedText = '';
+          this.detectedLanguage = undefined;
+          resolve({ text: salvaged, language });
+          return;
+        }
         reject(new Error(`flushUtterance timeout after ${timeoutMs} ms`));
       }, timeoutMs);
 

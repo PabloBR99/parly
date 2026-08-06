@@ -161,6 +161,16 @@ export const font = {
     fontWeight: '300' as const,
     letterSpacing: -0.6,
   },
+  // Compact display — the hero voice for LONG translations. A minute of
+  // speech at hero size turns the half into a wall; stepping down keeps a
+  // long reading glanceable without leaving the display family.
+  displayCompact: {
+    fontFamily: sansFamily,
+    fontSize: 22,
+    lineHeight: 30,
+    fontWeight: '300' as const,
+    letterSpacing: -0.3,
+  },
   // Editorial hero — used for setup-screen headlines and chrome-y display
   // text. Serif italic, big, generous line-height. The literary voice of
   // Dusk's setup surfaces (LanguagePair, eventually Settings hero, etc).

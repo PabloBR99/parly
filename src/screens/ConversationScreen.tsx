@@ -12,6 +12,7 @@ import { validateMistralApiKey } from '../services/auth/validateApiKey';
 import type { PersonId } from '../app/types';
 import type { RootStackParamList } from '../navigation/types';
 import { HANDS_FREE_ENABLED } from '../app/featureFlags';
+import { stringsFor } from '../i18n/strings';
 import {
   DuskBackdrop,
   LanguagePickerSheet,
@@ -45,6 +46,8 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   const keyStatus = useSettingsStore(s => s.keyStatus);
   const setKeyStatus = useSettingsStore(s => s.setKeyStatus);
   const translationModel = useSettingsStore(s => s.translationModel);
+  const hfDiscovered = useSettingsStore(s => s.hfDiscovered);
+  const setHfDiscovered = useSettingsStore(s => s.setHfDiscovered);
   const turns = useConversationStore(s => s.turns);
   const activeTurnId = useConversationStore(s => s.activeTurnId);
   const conversationMode = useConversationStore(s => s.mode);
@@ -216,10 +219,15 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
     });
   };
 
-  // Tap on the live translation → stop this turn (both discs unlock).
+  // Tap on the live translation → in PTT, stop this turn (both discs
+  // unlock); in HF, skip the rest of the readback — a long translation
+  // nobody needs spoken to the end shouldn't hold the conversation hostage.
   const handleInterrupt = useCallback(() => {
-    if (isHfActive) return;
     haptics.tick();
+    if (isHfActive) {
+      getOrchestrator().skipHfTurn();
+      return;
+    }
     void getOrchestrator().cancelTurn().catch(err => {
       console.warn('[Conversation] cancelTurn failed:', err);
     });
@@ -233,6 +241,9 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   }, [isHfActive]);
 
   const handleToggleHf = useCallback(() => {
+    // Any deliberate press on the seam control proves the reader found it —
+    // retire the discoverability hint for good.
+    if (!hfDiscovered) setHfDiscovered(true);
     if (isHfActive) {
       void getOrchestrator().disableHandsFree().catch(err => {
         console.warn('[Conversation] disableHandsFree failed:', err);
@@ -245,7 +256,7 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
           console.warn('[Conversation] enableHandsFree failed:', err);
         });
     }
-  }, [isHfActive, personA.language, personB.language]);
+  }, [isHfActive, personA.language, personB.language, hfDiscovered, setHfDiscovered]);
 
   const onPickLanguage = (code: string) => {
     if (pickerSlot === 'partner') setPersonLanguage('B', code);
@@ -305,6 +316,7 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
             speakerId="person_b"
             speakerLanguage={personB.language}
             partnerLanguage={personA.language}
+            turns={turns}
             activeTurn={topActiveTurn}
             incomingTurn={topIncomingTurn}
             notice={notices.person_b}
@@ -330,6 +342,7 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
           speakerId="person_a"
           speakerLanguage={personA.language}
           partnerLanguage={personB.language}
+          turns={turns}
           activeTurn={bottomActiveTurn}
           incomingTurn={bottomIncomingTurn}
           notice={notices.person_a}
@@ -370,6 +383,10 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
         <SeamControl
           mode={hfMode}
           activity={hfActivity}
+          // Until first use, the wave carries its name — one label per
+          // reader, each in their own language, the top one flipped.
+          hintTop={hfDiscovered ? null : stringsFor(personB.language).handsFree}
+          hintBottom={hfDiscovered ? null : stringsFor(personA.language).handsFree}
           onToggle={handleToggleHf}
         />
       )}

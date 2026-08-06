@@ -21,6 +21,7 @@
 
 import React, { useEffect } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
+import { Text } from './Text';
 import Animated, {
   cancelAnimation,
   Easing,
@@ -43,6 +44,16 @@ interface SeamControlProps {
   readonly mode: SeamControlMode;
   /** Splits the "on" look into a lively (listening) vs calm (speaking) wave. */
   readonly activity?: SeamActivity;
+  /**
+   * Discoverability hints — the control's name, one label per reader, shown
+   * only while off and only until the user first engages hands-free. The
+   * wave alone is beautiful but mute: a first-time user has no reason to
+   * tap an unlabelled 66×28 pill. `hintTop` renders above the pill rotated
+   * 180° (the partner's reading direction); `hintBottom` below, upright.
+   * Both breathe in step with the invite halo.
+   */
+  readonly hintTop?: string | null;
+  readonly hintBottom?: string | null;
   readonly onToggle: () => void;
 }
 
@@ -135,7 +146,13 @@ function Bar({ height, color, period, delay, low }: BarProps): React.JSX.Element
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
-export function SeamControl({ mode, activity = 'idle', onToggle }: SeamControlProps): React.JSX.Element {
+export function SeamControl({
+  mode,
+  activity = 'idle',
+  hintTop = null,
+  hintBottom = null,
+  onToggle,
+}: SeamControlProps): React.JSX.Element {
   const resolved = resolve(mode, activity);
   const isOff = resolved === 'reposo';
   const isPaused = resolved === 'paused';
@@ -238,6 +255,10 @@ export function SeamControl({ mode, activity = 'idle', onToggle }: SeamControlPr
   }));
   const inviteStyle = useAnimatedStyle(() => ({ opacity: invite.value }));
   const glowStyle = useAnimatedStyle(() => ({ opacity: glow.value }));
+  // Hint labels breathe with the invite halo — same rhythm, gentler floor,
+  // so the name and the "tappable" signal read as one gesture.
+  const hintStyle = useAnimatedStyle(() => ({ opacity: 0.4 + 0.6 * invite.value }));
+  const showHints = isOff && (hintTop !== null || hintBottom !== null);
 
   // Per-bar params for the resolved state.
   const bars = Array.from({ length: BAR_COUNT }, (_, i) => {
@@ -266,6 +287,23 @@ export function SeamControl({ mode, activity = 'idle', onToggle }: SeamControlPr
         style={styles.press}>
         {/* Invite halo — a 1 px ring 4 px outside the pill, breathing when off. */}
         <Animated.View style={[styles.invite, inviteStyle]} pointerEvents="none" />
+
+        {/* Discoverability hints — one label per reader, gone forever after
+            first use. */}
+        {showHints && hintTop !== null && (
+          <Animated.View style={[styles.hintAbove, hintStyle]} pointerEvents="none">
+            <Text variant="serifSmall" style={styles.hintText} numberOfLines={1}>
+              {hintTop}
+            </Text>
+          </Animated.View>
+        )}
+        {showHints && hintBottom !== null && (
+          <Animated.View style={[styles.hintBelow, hintStyle]} pointerEvents="none">
+            <Text variant="serifSmall" style={styles.hintText} numberOfLines={1}>
+              {hintBottom}
+            </Text>
+          </Animated.View>
+        )}
 
         {/* The pill. The recessed-glass feel is a real inset box-shadow
             (inset 0 1px 2px rgba(0,0,0,.45)) declared in styles.pill, matching
@@ -342,6 +380,29 @@ const styles = StyleSheet.create({
   glow: {
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  // Hint labels sit just outside the pill on both sides of the seam. The
+  // wide left/right box keeps the (nowrap) label centred on the pill without
+  // the label's width affecting the anchor's layout.
+  hintAbove: {
+    position: 'absolute',
+    bottom: '100%',
+    left: -120,
+    right: -120,
+    marginBottom: 10,
+    alignItems: 'center',
+    transform: [{ rotate: '180deg' }],
+  },
+  hintBelow: {
+    position: 'absolute',
+    top: '100%',
+    left: -120,
+    right: -120,
+    marginTop: 10,
+    alignItems: 'center',
+  },
+  hintText: {
+    color: 'rgba(255,255,255,0.72)',
   },
   barRow: {
     flexDirection: 'row',
