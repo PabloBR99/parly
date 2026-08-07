@@ -8,7 +8,7 @@ Lay the phone flat on the table. Each half of the screen faces one speaker — r
 <table>
   <tr>
     <td align="center"><img src="docs/demo.gif" width="270" alt="Push-to-talk demo: the Spanish half at the top rotated 180° asks 'Hola, ¿cómo te llamas?', the English half at the bottom shows the streaming translation 'Hi, what's your name?', and the reply flows back the other way." /></td>
-    <td align="center"><img src="docs/demo-handsfree.gif" width="270" alt="Hands-free demo: with no button presses, a Spanish speaker asks where to find a pharmacy and the English half answers with streamed directions, voice activity detection taking the turns." /></td>
+    <td align="center"><img src="docs/demo-handsfree.gif" width="270" alt="Hands-free demo: the welcome cards read 'Just speak.' — with no button presses, 'Hi, what's your name?' streams onto the Spanish half as 'Hola, ¿cómo te llamas?' and the reply flows back, voice activity detection taking the turns." /></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Push-to-talk</b> — hold your disc, speak, release</sub></td>
