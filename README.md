@@ -7,14 +7,16 @@ Lay the phone flat on the table. Each half of the screen faces one speaker — r
 <div align="center">
 <table>
   <tr>
-    <td align="center"><img src="docs/demo.gif" width="270" alt="Push-to-talk demo: the Spanish half at the top rotated 180° asks 'Hola, ¿cómo te llamas?', the English half at the bottom shows the streaming translation 'Hi, what's your name?', and the reply flows back the other way." /></td>
-    <td align="center"><img src="docs/demo-handsfree.gif" width="270" alt="Hands-free demo: the welcome cards read 'Just speak.' — with no button presses, 'Hi, what's your name?' streams onto the Spanish half as 'Hola, ¿cómo te llamas?' and the reply flows back, voice activity detection taking the turns." /></td>
+    <td align="center" width="50%"><img src="docs/demo.gif" width="270" alt="Push-to-talk demo: the Spanish half at the top rotated 180° asks 'Hola, ¿cómo te llamas?', the English half at the bottom shows the streaming translation 'Hi, what's your name?', and the reply flows back the other way." /></td>
+    <td align="center" width="50%"><img src="docs/demo-handsfree.gif" width="270" alt="Hands-free demo: the welcome cards read 'Just speak.' — with no button presses, 'Hi, what's your name?' streams onto the Spanish half as 'Hola, ¿cómo te llamas?' and the reply flows back, voice activity detection taking the turns." /></td>
   </tr>
   <tr>
-    <td align="center"><sub><b>Push-to-talk</b> — hold your disc, speak, release</sub></td>
-    <td align="center"><sub><b>Hands-free</b> — no buttons; VAD takes the turns. <a href="docs/demo-handsfree.mp4">🔊 Watch with sound</a></sub></td>
+    <td align="center" width="50%"><sub><b>Push-to-talk</b> — hold, speak, release</sub></td>
+    <td align="center" width="50%"><sub><b>Hands-free</b> — VAD takes the turns</sub></td>
   </tr>
 </table>
+
+<sub><a href="docs/demo-handsfree.mp4">🔊 Watch the hands-free demo with sound</a></sub>
 </div>
 
 Built on [Mistral](https://mistral.ai)'s realtime APIs — Voxtral for streaming speech-to-text, chat completions for streaming translation — with the OS's own text-to-speech voices. Bring your own (free) Mistral API key; the app has no backend of its own.
