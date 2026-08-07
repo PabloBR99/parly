@@ -4,9 +4,11 @@
 
 Lay the phone flat on the table. Each half of the screen faces one speaker — rotated so both read upright. One person talks; the other reads the translation as it streams in and hears it spoken aloud moments later. Push-to-talk, or fully hands-free.
 
-<!-- DEMO VIDEO: replace this line by dragging demo-handsfree2-clean.mp4 into GitHub's web editor -->
+<p align="center">
+  <img src="docs/demo-handsfree.gif" width="280" alt="Hands-free demo: the welcome cards read 'Just speak.' — with no button presses, 'Hi, what's your name?' streams onto the Spanish half as 'Hola, ¿cómo te llamas?' and the reply flows back, voice activity detection taking the turns." />
+</p>
 
-<p align="center"><sub><b>Hands-free mode</b> — no buttons; just speak, and VAD takes the turns. Sound on 🔊</sub></p>
+<p align="center"><sub><b>Hands-free mode</b> — no buttons; just speak, and VAD takes the turns. <a href="docs/demo-handsfree.mp4">🔊 Watch with sound</a></sub></p>
 
 Built on [Mistral](https://mistral.ai)'s realtime APIs — Voxtral for streaming speech-to-text, chat completions for streaming translation — with the OS's own text-to-speech voices. Bring your own (free) Mistral API key; the app has no backend of its own.
 
