@@ -9,15 +9,34 @@
 //
 // Why a wave, and no text?
 //   The shape tells you the state. Off (reposo): a flat, dim equaliser that
-//   breathes a faint invite halo — "tappable". On + capturing (escuchando):
-//   a lively, uneven wave with a soft inner glow — "your voice is going in".
-//   On + TTS (traduciendo): a calm, synchronised swell — "the voice is going
-//   out". Offline (paused): dimmed and still. No caption — the wave is the
-//   word.
+//   breathes a faint invite halo — "tappable". On + listening (escuchando):
+//   a wave driven by the actual microphone — "the room is going in". On + TTS
+//   (traduciendo): a calm, synchronised swell — "the voice is going out".
+//   Offline (paused): dimmed and still. No caption — the wave is the word.
+//
+// Why the listening wave is real:
+//   A canned loop is a lie the user can catch. Speak and nothing changes; stay
+//   silent and it keeps dancing — and the one question hands-free has to answer
+//   at a glance ("is it hearing me?") goes unanswered. So `escuchando` reads the
+//   live level off `audioLevelBus`, which is fed by the very frames the VAD uses
+//   to take turns. The bars ARE the turn detector's input, drawn.
+//   `traduciendo` stays synthetic on purpose: the OS text-to-speech engine
+//   exposes no output level, and mirroring the mic there would be visualising
+//   the phone's own voice — the exact echo the half-duplex gate exists to
+//   prevent.
+//
+// The shape:
+//   A ripple radiating outward from the centre bar, with the height arching
+//   toward the middle like a waveform envelope. Outward-from-the-seam is the
+//   app's spatial grammar — this control sits on the line between two people,
+//   and energy leaves it in both directions at once.
 //
 // Implementation note: each bar is an Animated.View whose `scaleY` is driven
 // by a shared value (rock-solid on Android — far smoother than animating
-// height). The pill's background + border cross-fade via interpolateColor.
+// height). The live wave is computed on the UI thread from two shared values —
+// a free-running phase clock and the mic level — so a whole utterance costs
+// zero React renders. The pill's background + border cross-fade via
+// interpolateColor.
 
 import React, { useEffect } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -32,10 +51,12 @@ import Animated, {
   withSpring,
   withSequence,
   withTiming,
+  type SharedValue,
 } from 'react-native-reanimated';
 import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { motion } from '../theme';
 import { haptics } from '../haptics';
+import { useAudioLevel } from '../animations/useAudioLevel';
 
 export type SeamControlMode = 'off' | 'on' | 'paused';
 export type SeamActivity = 'idle' | 'listening' | 'speaking';
@@ -69,15 +90,43 @@ function resolve(mode: SeamControlMode, activity: SeamActivity): Resolved {
 // ── Geometry ───────────────────────────────────────────────────────────────
 const PILL_W = 66;
 const PILL_H = 28;
-const BAR_COUNT = 7;
+export const BAR_COUNT = 7;
 
-// Per-bar motion (lifted verbatim from the design handoff).
-// escuchando — organic, uneven; each bar its own tempo + phase.
-const WAVE_PERIODS = [820, 950, 720, 1000, 780, 900, 850]; // ms (full cycle)
-const WAVE_DELAYS = [0, 100, 200, 40, 260, 140, 320];       // ms
-// traduciendo — a gentle, synchronised swell; one tempo, staggered phase.
-const CALM_PERIOD = 1500;                                   // ms (full cycle)
-const CALM_DELAYS = [0, 80, 160, 240, 320, 400, 480];       // ms
+// ── Wave motion ──────────────────────────────────────────────────────────────
+// Both live states share one free-running phase clock and one formula; they
+// differ only in the constants below. A single clock is what lets the wave
+// cross from listening to speaking without a seam.
+const TAU = Math.PI * 2;
+const CENTRE = (BAR_COUNT - 1) / 2;
+/** ms for the ripple to travel one full cycle, per state. */
+const RIPPLE_PERIOD: Record<'escuchando' | 'traduciendo', number> = {
+  escuchando: 1150,
+  traduciendo: 1500,
+};
+/** Tiny per-bar phase offsets so the two sides aren't a perfect mirror —
+ *  symmetry reads as machinery, a hair of drift reads as breath. */
+const DETUNE = [0, 0.16, -0.11, 0, 0.13, -0.15, 0.07];
+
+export interface WaveShape {
+  /** Height held with no signal at all, as a fraction of the bar. */
+  readonly floor: number;
+  /** How much of the ripple shows through at rest. */
+  readonly swing: number;
+  /** 0 = ignore the mic entirely, 1 = fully level-driven. */
+  readonly reactivity: number;
+  /** Radians of ripple per bar out from the centre — bigger = tighter wave. */
+  readonly spread: number;
+}
+
+export const WAVE_SHAPE: Record<'escuchando' | 'traduciendo', WaveShape> = {
+  // Listening: a silent room still gets a slow, visible roll — clearly taller
+  // and brighter than the flat 4 px of `reposo`, so "armed" reads from across
+  // the table. The mic owns everything above that, which is roughly two thirds
+  // of the bar: quiet speech is unmistakable, a shout fills it.
+  escuchando: { floor: 0.28, swing: 0.16, reactivity: 1, spread: 1.05 },
+  // Speaking: a slow, near-synchronised swell with no mic input at all.
+  traduciendo: { floor: 0.5, swing: 0.5, reactivity: 0, spread: 0.62 },
+};
 
 // Bar geometry per resolved state.
 const BAR_HEIGHT: Record<Resolved, number> = {
@@ -93,56 +142,96 @@ const BAR_COLOR: Record<Resolved, string> = {
   paused: 'rgba(255,255,255,0.28)',
 };
 
-// ── Bar ──────────────────────────────────────────────────────────────────────
-interface BarProps {
-  readonly height: number;
-  readonly color: string;
-  /** Full cycle in ms; 0 = no animation (rest at full height). */
-  readonly period: number;
-  readonly delay: number;
-  /** Resting scaleY at the bottom of the cycle (0.28 wave, 0.5 calm). */
-  readonly low: number;
-}
+// ── Bars ─────────────────────────────────────────────────────────────────────
 
-function Bar({ height, color, period, delay, low }: BarProps): React.JSX.Element {
-  const v = useSharedValue(1);
+/** The off / offline bar: flat, still, settling in on state change. */
+function StillBar({ height, color }: { height: number; color: string }): React.JSX.Element {
+  const v = useSharedValue(0);
 
   useEffect(() => {
     cancelAnimation(v);
-    if (period > 0) {
-      const half = period / 2;
-      // NOTE: do NOT use withDelay here. `withDelay(d, withRepeat(...))`
-      // freezes the value at `low` on this Reanimated 4 + worklets release
-      // build (the inner repeat never ticks). Instead, stagger the entrance
-      // with a leading withTiming, then oscillate with a self-contained
-      // withSequence repeat — the same withDelay-free shape proven in
-      // Waveform.tsx. This also removes any dependency on a separately-set
-      // start value (the old `v.value = low` double-assignment was fragile).
-      v.value = withSequence(
-        // Match the prototype's CSS entrance: snap to the 0% keyframe (low)
-        // and hold there during the per-bar animation-delay, then oscillate.
-        withTiming(low, { duration: 0 }),
-        withTiming(low, { duration: delay }),
-        withRepeat(
-          withSequence(
-            withTiming(1, { duration: half, easing: Easing.inOut(Easing.sin) }),
-            withTiming(low, { duration: half, easing: Easing.inOut(Easing.sin) }),
-          ),
-          -1,
-          false,
-        ),
-      );
-    } else {
-      v.value = withTiming(1, { duration: 220, easing: Easing.out(Easing.quad) });
-    }
+    v.value = withTiming(1, { duration: 220, easing: Easing.out(Easing.quad) });
     return () => cancelAnimation(v);
-  }, [period, delay, low, v]);
+  }, [v]);
 
   const style = useAnimatedStyle(() => ({ transform: [{ scaleY: v.value }] }));
 
-  return (
-    <Animated.View style={[styles.bar, { height, backgroundColor: color }, style]} />
-  );
+  return <Animated.View style={[styles.bar, { height, backgroundColor: color }, style]} />;
+}
+
+interface WaveBarProps {
+  readonly index: number;
+  readonly height: number;
+  readonly color: string;
+  /** Free-running 0→1 sawtooth shared by every bar. */
+  readonly phase: SharedValue<number>;
+  /** Smoothed mic level, 0..1. Ignored when `reactivity` is 0. */
+  readonly level: SharedValue<number>;
+  readonly floor: number;
+  readonly swing: number;
+  readonly reactivity: number;
+  readonly spread: number;
+}
+
+/**
+ * The whole wave, as one expression: bar `index`'s height as a fraction of the
+ * bar, given the clock and the mic.
+ *
+ * Runs on the UI thread (it is a worklet), and is exported so the shape can be
+ * unit-tested without a renderer — this is the only place in the app where a
+ * silent arithmetic slip would show up as "the wave looks wrong on my phone"
+ * and nowhere else.
+ *
+ * Guarantees, for any 0 ≤ level ≤ 1 and any phase: the result stays within
+ * (0, 1], so a bar can never invert or overflow its box.
+ */
+export function waveAmplitude(
+  index: number,
+  phase: number,
+  level: number,
+  floor: number,
+  swing: number,
+  reactivity: number,
+  spread: number,
+): number {
+  'worklet';
+  const dist = Math.abs(index - CENTRE);
+  // The ripple leaves the centre bar and travels out to both edges.
+  const ripple = Math.sin(phase * TAU - dist * spread + DETUNE[index]);
+  const r = 0.5 + 0.5 * ripple; // 0..1
+  // Height arches toward the middle, the way a voice does on an oscilloscope —
+  // a flat-topped block reads as a progress bar, not a voice.
+  const arch = 1 - 0.16 * dist;
+  const rest = floor + swing * r;
+  return rest + (1 - rest) * level * reactivity * arch * (0.42 + 0.58 * r);
+}
+
+/**
+ * One bar of the live wave. The style recomputes on the UI thread whenever the
+ * phase clock ticks or a new mic sample lands — never in React.
+ */
+function WaveBar({
+  index,
+  height,
+  color,
+  phase,
+  level,
+  floor,
+  swing,
+  reactivity,
+  spread,
+}: WaveBarProps): React.JSX.Element {
+  const style = useAnimatedStyle(() => {
+    const amp = waveAmplitude(index, phase.value, level.value, floor, swing, reactivity, spread);
+    return {
+      transform: [{ scaleY: amp }],
+      // Peaks brighten as well as grow: two channels for the same signal is
+      // what separates a loud syllable from a merely tall one.
+      opacity: 0.62 + 0.38 * amp,
+    };
+  });
+
+  return <Animated.View style={[styles.bar, { height, backgroundColor: color }, style]} />;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -157,12 +246,18 @@ export function SeamControl({
   const isOff = resolved === 'reposo';
   const isPaused = resolved === 'paused';
   const isOn = resolved === 'escuchando' || resolved === 'traduciendo';
+  // Both on-states run the wave formula; off/paused bars are flat and still.
+  const wave = resolved === 'escuchando' || resolved === 'traduciendo' ? resolved : null;
+  // The mic is only worth watching while we're the ones listening. In
+  // 'traduciendo' the phone is the one making the noise.
+  const level = useAudioLevel(resolved === 'escuchando');
 
   const enter = useSharedValue(0);
   const press = useSharedValue(0);
   const pop = useSharedValue(1);
   const invite = useSharedValue(0);   // breathing halo (off only)
   const glow = useSharedValue(0);     // inner glow (on only)
+  const phase = useSharedValue(0);    // free-running wave clock (on only)
   // Pill tone: -1 paused, 0 off, 1 on. Drives bg + border cross-fade.
   const tone = useSharedValue(0);
 
@@ -227,6 +322,25 @@ export function SeamControl({
     return () => cancelAnimation(glow);
   }, [isOn, glow]);
 
+  // The wave clock. One linear sawtooth for all seven bars — the ripple's shape
+  // lives in the per-bar formula, not in per-bar animations, so nothing can
+  // drift out of step. Reset to 0 before (re)starting: withRepeat replays from
+  // whatever the value happened to be when it began, and a cancelled clock left
+  // mid-cycle would stretch the first lap.
+  // (Do NOT reach for withDelay to stagger bars here — `withDelay(d,
+  // withRepeat(...))` freezes on this Reanimated 4 + worklets build.)
+  useEffect(() => {
+    cancelAnimation(phase);
+    if (wave === null) return;
+    phase.value = 0;
+    phase.value = withRepeat(
+      withTiming(1, { duration: RIPPLE_PERIOD[wave], easing: Easing.linear }),
+      -1,
+      false,
+    );
+    return () => cancelAnimation(phase);
+  }, [wave, phase]);
+
   const handlePress = () => {
     haptics.tap();
     onToggle();
@@ -238,7 +352,15 @@ export function SeamControl({
     transform: [
       { translateX: -PILL_W / 2 },
       { translateY: -PILL_H / 2 },
-      { scale: (0.86 + 0.14 * enter.value) * pop.value * (1 - 0.06 * press.value) },
+      {
+        scale:
+          (0.86 + 0.14 * enter.value) *
+          pop.value *
+          (1 - 0.06 * press.value) *
+          // The whole control swells a hair on a loud syllable. Small enough
+          // that you feel it rather than watch it.
+          (1 + 0.045 * level.value),
+      },
     ],
   }));
   const pillStyle = useAnimatedStyle(() => ({
@@ -254,22 +376,23 @@ export function SeamControl({
     ),
   }));
   const inviteStyle = useAnimatedStyle(() => ({ opacity: invite.value }));
-  const glowStyle = useAnimatedStyle(() => ({ opacity: glow.value }));
+  // The inner glow keeps its slow breath and takes the mic level on top, so
+  // the pill lights from within as the room gets louder.
+  const glowStyle = useAnimatedStyle(() => ({
+    opacity: Math.min(1, glow.value + 0.55 * level.value),
+  }));
+  // A ring that pushes outward with the voice — the seam's own way of showing
+  // sound leaving the centre of the table. Invisible in silence.
+  const pulseStyle = useAnimatedStyle(() => ({
+    opacity: 0.34 * level.value,
+    transform: [{ scale: 1 + 0.12 * level.value }],
+  }));
   // Hint labels breathe with the invite halo — same rhythm, gentler floor,
   // so the name and the "tappable" signal read as one gesture.
   const hintStyle = useAnimatedStyle(() => ({ opacity: 0.4 + 0.6 * invite.value }));
   const showHints = isOff && (hintTop !== null || hintBottom !== null);
 
-  // Per-bar params for the resolved state.
-  const bars = Array.from({ length: BAR_COUNT }, (_, i) => {
-    if (resolved === 'escuchando') {
-      return { period: WAVE_PERIODS[i], delay: WAVE_DELAYS[i], low: 0.28 };
-    }
-    if (resolved === 'traduciendo') {
-      return { period: CALM_PERIOD, delay: CALM_DELAYS[i], low: 0.5 };
-    }
-    return { period: 0, delay: 0, low: 1 }; // reposo / paused — flat, still
-  });
+  const shape = wave === null ? null : WAVE_SHAPE[wave];
 
   return (
     <Animated.View style={[styles.anchor, wrapStyle]} pointerEvents="box-none">
@@ -287,6 +410,10 @@ export function SeamControl({
         style={styles.press}>
         {/* Invite halo — a 1 px ring 4 px outside the pill, breathing when off. */}
         <Animated.View style={[styles.invite, inviteStyle]} pointerEvents="none" />
+
+        {/* Level ring — same geometry as the invite halo (they are never on at
+            the same time), pushed outward by the voice in the room. */}
+        {isOn && <Animated.View style={[styles.pulse, pulseStyle]} pointerEvents="none" />}
 
         {/* Discoverability hints — one label per reader, gone forever after
             first use. */}
@@ -322,18 +449,27 @@ export function SeamControl({
             </Svg>
           </Animated.View>
 
-          {/* The wave. */}
+          {/* The wave. Live states share the phase clock and the mic level;
+              reposo/paused are flat and still. */}
           <View style={styles.barRow}>
-            {bars.map((b, i) => (
-              <Bar
-                key={i}
-                height={BAR_HEIGHT[resolved]}
-                color={BAR_COLOR[resolved]}
-                period={b.period}
-                delay={b.delay}
-                low={b.low}
-              />
-            ))}
+            {Array.from({ length: BAR_COUNT }, (_, i) =>
+              shape === null ? (
+                <StillBar key={i} height={BAR_HEIGHT[resolved]} color={BAR_COLOR[resolved]} />
+              ) : (
+                <WaveBar
+                  key={i}
+                  index={i}
+                  height={BAR_HEIGHT[resolved]}
+                  color={BAR_COLOR[resolved]}
+                  phase={phase}
+                  level={level}
+                  floor={shape.floor}
+                  swing={shape.swing}
+                  reactivity={shape.reactivity}
+                  spread={shape.spread}
+                />
+              ),
+            )}
           </View>
         </Animated.View>
       </Pressable>
@@ -360,6 +496,16 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.14)',
+  },
+  pulse: {
+    position: 'absolute',
+    top: -4,
+    left: -4,
+    right: -4,
+    bottom: -4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.55)',
   },
   pill: {
     width: PILL_W,

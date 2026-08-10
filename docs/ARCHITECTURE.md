@@ -54,6 +54,7 @@ hf-idle ─► hf-capturing ─► hf-flushing ─► hf-routing ─► hf-speak
 - **Turn-taking:** a pause longer than 600 ms ends the utterance and dispatches it. Live partials render on the speaker's half while they talk.
 - **Routing:** the turn's direction is decided from the *transcript text* (script/stopword classification), not just Voxtral's audio language tag — this is what prevents same-language echo loops when the tag misfires.
 - **Echo gating:** while the phone speaks (and for a 250 ms cooldown after), mic audio is not fed to the transcriber and the VAD is disarmed, so the phone never transcribes its own voice. On re-arm, the transcriber's utterance buffer is reset to scrub anything that leaked in flight. This is deliberate: hardware echo cancellation (`VOICE_COMMUNICATION`) is too device-dependent to rely on.
+- **The wave is the meter:** the same 512-sample frames that drive turn detection also carry a loudness measurement (RMS → dBFS → envelope follower) that is published on `services/audio/audioLevelBus` and drawn as the seam control's wave. It travels the pub/sub bus rather than the store because 31 updates/s through Zustand would re-render the whole two-sided surface to move seven 2 px bars. The gate above applies to the meter too — audio the phone is hearing from its own speaker moves nothing, so the wave can never visualise the app's own voice.
 - **The trade-off:** speech during playback is not captured (half-duplex by design). Tapping the streaming translation skips the readback and returns to listening in ~250 ms.
 
 ## Key design decisions
@@ -77,6 +78,8 @@ hf-idle ─► hf-capturing ─► hf-flushing ─► hf-routing ─► hf-speak
 **Spatial logic:** the phone lies flat between two speakers. Each person's PTT sits at *their physical edge* of the device — partner's at the top (the whole top half is wrapped in `rotate(180deg)`), user's at the bottom — so thumbs land naturally. There is no divider line; the space between the two halves is the seam, and the hands-free toggle lives on it.
 
 **Bilingual by construction:** each half renders *all* of its chrome — stage microcopy, notices, welcome copy, the network pill, the hands-free hint — in that half's reader's language (`src/i18n/strings.ts`, 32 languages). There is no shared "app language".
+
+**Honest instruments:** the hands-free control on the seam is a seven-bar wave that ripples outward from its centre — the app's spatial grammar, energy leaving the encounter line in both directions. While it is listening, the bar heights are the microphone: a silent room gets a slow low roll ("armed"), a voice fills them. It is deliberately *not* a canned loop, because the one question hands-free has to answer at a glance is "is it hearing me?", and a decorative animation answers it wrongly. While the phone is speaking, the wave switches to a synthetic swell — the OS speech engine exposes no output level, and mirroring the mic there would be drawing the phone's own voice.
 
 **Felt rhythm:** haptics mark each stage transition (press → recording → transcribing → translating → first spoken token → done/error) so the user knows where the machine is without reading the screen. Status microcopy beside the state glyph says it in words (`escuchando` on the Spanish half, `聞いています` on the Japanese half).
 

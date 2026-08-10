@@ -39,6 +39,7 @@
 import { useConversationStore } from '../../store/conversationStore';
 import type { HfActivity } from '../../store/conversationStore';
 import type { PersonId } from '../../app/types';
+import { frameRms, publishAudioFrame, resetAudioLevel } from '../audio/audioLevelBus';
 import { log } from '../log/logStore';
 import { classifyError } from './errors';
 import { classifyPairText } from './textLangId';
@@ -261,6 +262,10 @@ export class ConversationOrchestrator {
       : next === 'hf-speaking' ? 'speaking'
       : 'idle';
     (this.deps.conversationStore ?? useConversationStore).getState().setHfActivity(activity);
+    // The moment the phone takes the floor, the mic stops being a source of
+    // truth about the room — drop the meter to silence rather than letting it
+    // decay from whatever the last human syllable measured.
+    if (next === 'hf-speaking') resetAudioLevel();
   }
 
   /** Whether hands-free mode is currently active. */
@@ -482,6 +487,7 @@ export class ConversationOrchestrator {
     this.setHfState('hf-idle');
     this.vadBuffer = new Int16Array(0);
     this.hfFirstAudioLogged = false;
+    resetAudioLevel();
 
     const store = (this.deps.conversationStore ?? useConversationStore).getState();
     store.setMode('hf');
@@ -578,6 +584,7 @@ export class ConversationOrchestrator {
     this.hfPairA = null;
     this.hfPairB = null;
     this.vadBuffer = new Int16Array(0);
+    resetAudioLevel();
 
     log.info('[orch/hf] disabled');
   }
@@ -594,6 +601,7 @@ export class ConversationOrchestrator {
     this.hfPaused = true;
     this.setHfState('hf-idle');
     this.vadBuffer = new Int16Array(0);
+    resetAudioLevel();
     (this.deps.conversationStore ?? useConversationStore).getState().setHfLive(null);
     this.deps.vad?.setActive(false);
     try { await this.deps.audioCapture.stopStreaming(); } catch { /* noop */ }
@@ -632,10 +640,14 @@ export class ConversationOrchestrator {
    * VOICE_COMMUNICATION's AEC is too device-dependent to rely on alone.
    */
   private readonly hfOnAudio = (base64Pcm: string): void => {
-    if (this.hfState !== 'hf-speaking' && this.hfState !== 'hf-cooldown') {
+    // One question decides both consumers: is this the room talking, or the
+    // phone hearing itself? Only the room may reach the transcriber, and only
+    // the room may drive the seam wave.
+    const fromTheRoom = this.hfState !== 'hf-speaking' && this.hfState !== 'hf-cooldown';
+    if (fromTheRoom) {
       this.deps.voxtral.feedAudio(base64Pcm);
     }
-    this.feedAudioToVad(base64Pcm);
+    this.feedAudioToVad(base64Pcm, fromTheRoom);
   };
 
   private handleHfSpeechStart(): void {
@@ -1024,7 +1036,16 @@ export class ConversationOrchestrator {
 
   // ── VAD audio routing ─────────────────────────────────────────────────────
 
-  private feedAudioToVad(base64Pcm: string): void {
+  /**
+   * Decode one capture chunk and drain it into the VAD as 512-sample frames.
+   *
+   * `fromTheRoom` also gates the audio-level meter: the same frames that feed
+   * turn detection carry the loudness that drives the seam wave, so the level
+   * is published here rather than in a second decode pass. Frame cadence IS
+   * meter cadence — 32 ms, ~31 updates/s, which is what makes the wave track
+   * a voice instead of lagging behind it.
+   */
+  private feedAudioToVad(base64Pcm: string, fromTheRoom: boolean): void {
     if (!this.deps.vad || !this.hfEnabled || this.hfPaused) return;
 
     if (!this.hfFirstAudioLogged) {
@@ -1056,6 +1077,7 @@ export class ConversationOrchestrator {
 
     while (this.vadBuffer.length >= VAD_FRAME_SAMPLES) {
       const frame = this.vadBuffer.slice(0, VAD_FRAME_SAMPLES);
+      if (fromTheRoom) publishAudioFrame(frameRms(frame));
       try {
         this.deps.vad.feedFrame(frame);
       } catch (e) {

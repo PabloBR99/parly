@@ -1,10 +1,13 @@
 // Waveform — a row of bars whose heights breathe in a phase-shifted sine
-// while the speaker is recording. Pure visual cue; not driven by mic level
-// because the audio capture path doesn't surface live RMS, and approximating
-// it from native callbacks would add render churn for a marginal payoff.
+// while the speaker is recording. Pure visual cue: it encodes INTENT ("the mic
+// is open, your voice is being captured"), not volume.
 //
-// We instead encode INTENT: "the mic is open, your voice is being captured."
-// The phase shift between bars makes it feel alive without mocking volume.
+// Why not the live level, when SeamControl has it? Hands-free already decodes
+// every capture chunk to PCM to feed the VAD, so its meter is free (see
+// services/audio/audioLevelBus). Push-to-talk forwards base64 straight to
+// Voxtral and never touches the samples — metering it would mean adding a
+// decode + RMS pass to the PTT hot path for a bar that is already saying the
+// one thing it needs to say. The person holding the disc knows they're talking.
 
 import React, { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';

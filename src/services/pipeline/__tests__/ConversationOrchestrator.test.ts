@@ -13,6 +13,19 @@ import {
   type VadLike,
 } from '../ConversationOrchestrator';
 import { useConversationStore } from '../../../store/conversationStore';
+import { getAudioLevel, resetAudioLevel } from '../../audio/audioLevelBus';
+
+/** One 512-sample VAD frame of a sine at `amplitude` (0..1), base64 PCM16. */
+function pcmFrame(amplitude: number): string {
+  const pcm = new Int16Array(512);
+  for (let i = 0; i < pcm.length; i++) {
+    pcm[i] = Math.round(amplitude * 32767 * Math.sin(i * 0.19));
+  }
+  const bytes = new Uint8Array(pcm.buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
 
 // ── Helper mocks ─────────────────────────────────────────────────────────────
 
@@ -102,6 +115,7 @@ function makeMocks() {
 }
 
 beforeEach(() => {
+  resetAudioLevel();
   useConversationStore.getState().clear();
   useConversationStore.getState().setMode('ptt');
   useConversationStore.getState().setHfActiveSpeaker(null);
@@ -856,6 +870,77 @@ describe('ConversationOrchestrator (hands-free)', () => {
     expect(m.voxtral.resetUtterance).toHaveBeenCalled();
     onData('AAAA');
     expect(m.voxtral.feedAudio).toHaveBeenCalled();
+  });
+
+  it('drives the audio level meter from live mic frames, and stops at silence', async () => {
+    const { m, o } = makeHfOrchestrator();
+    await enableHf(m, o);
+    const onData = m.audioCapture.startStreaming.mock.calls[0][0] as (b64: string) => void;
+
+    expect(getAudioLevel()).toBe(0);
+
+    for (let i = 0; i < 10; i++) onData(pcmFrame(0.3));
+    const loud = getAudioLevel();
+    expect(loud).toBeGreaterThan(0.5);
+
+    for (let i = 0; i < 10; i++) onData(pcmFrame(0.001));
+    expect(getAudioLevel()).toBeLessThan(loud);
+  });
+
+  it('never lets the meter visualise the phone’s own TTS', async () => {
+    const { m, o } = makeHfOrchestrator();
+
+    let ttsResolve: (() => void) | undefined;
+    m.tts.speakChunk.mockImplementation(
+      () => new Promise<TTSSpeakOutcome>(r => { ttsResolve = () => r('spoken'); }),
+    );
+    m.translator.translateStream.mockImplementation(async (args) => {
+      args.onSentence('Hello.');
+      args.onDone('Hello.');
+    });
+
+    await enableHf(m, o);
+    const onData = m.audioCapture.startStreaming.mock.calls[0][0] as (b64: string) => void;
+
+    // A real utterance lights the meter up.
+    for (let i = 0; i < 10; i++) onData(pcmFrame(0.3));
+    expect(getAudioLevel()).toBeGreaterThan(0.5);
+
+    m.fireVadStart();
+    m.fireVadEnd();
+    await Promise.resolve();
+    m.resolveFlush('hola', 'es');
+    await new Promise<void>(r => setTimeout(r, 20));
+
+    // hf-speaking: the meter drops the instant the phone takes the floor, and
+    // the loud audio the mic now hears (its own speaker) moves nothing.
+    expect(getAudioLevel()).toBe(0);
+    for (let i = 0; i < 10; i++) onData(pcmFrame(0.5));
+    expect(getAudioLevel()).toBe(0);
+
+    ttsResolve?.();
+    await new Promise<void>(r => setTimeout(r, 300)); // cooldown elapses
+
+    // Re-armed: the room drives the wave again.
+    for (let i = 0; i < 10; i++) onData(pcmFrame(0.3));
+    expect(getAudioLevel()).toBeGreaterThan(0.5);
+  });
+
+  it('pauseHandsFree and disableHandsFree leave the meter at rest', async () => {
+    const { m, o } = makeHfOrchestrator();
+    await enableHf(m, o);
+    const onData = m.audioCapture.startStreaming.mock.calls[0][0] as (b64: string) => void;
+
+    for (let i = 0; i < 10; i++) onData(pcmFrame(0.3));
+    await o.pauseHandsFree();
+    expect(getAudioLevel()).toBe(0);
+
+    await o.resumeHandsFree();
+    for (let i = 0; i < 10; i++) onData(pcmFrame(0.3));
+    expect(getAudioLevel()).toBeGreaterThan(0.5);
+
+    await o.disableHandsFree();
+    expect(getAudioLevel()).toBe(0);
   });
 
   it('disableHandsFree() cleans up VAD, audio, Voxtral and resets store', async () => {
