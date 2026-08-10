@@ -138,6 +138,7 @@ export interface VadLike {
     onSpeechStart: () => void,
     onSpeechEnd: (lastSpeechAt: number) => void,
     onSpeechPause?: (lastSpeechAt: number) => void,
+    onSpeechResume?: () => void,
   ): () => void;
   setActive(active: boolean): void;
   resetState(): void;
@@ -249,6 +250,22 @@ type FastPathBlock = 'none' | 'no-transcript' | 'still-arriving' | 'routing-uncl
  * more after a long pause, then stop guessing and wait for the real ending.
  */
 const MAX_SPECULATIONS_PER_UTTERANCE = 2;
+
+/**
+ * How many consecutive utterances must arrive with NO audio language tag
+ * before the shortcuts stop insisting on strong text evidence.
+ *
+ * The strict gate exists to protect a second opinion: skipping the server's
+ * final also skips its `transcription.language`, so a weak text vote might be
+ * acting on evidence the tag would have overruled. Measured on device, Voxtral
+ * returns no tag at all (`routedLanguage: null`, every turn) — at which point
+ * the gate is guarding a fallback that never arrives, and refusing every
+ * shortcut for nothing. Once the server has been silent about the language
+ * this many times, a weak vote is accepted: it is exactly what routing falls
+ * back to anyway when the tag is absent. A tag arriving resets the count and
+ * strictness returns immediately.
+ */
+const UNTAGGED_UTTERANCES_TO_TRUST_TEXT = 2;
 
 /** Callbacks a real turn attaches to a translation already in flight. */
 interface TranslationSink {
@@ -365,6 +382,13 @@ export class ConversationOrchestrator {
   /** Translation started ahead of the turn being certain — see the type. */
   private hfSpec: SpeculativeTranslation | null = null;
   private hfSpecCount = 0;
+  /** Consecutive utterances whose transcript carried no audio language tag. */
+  private hfUntaggedStreak = 0;
+  /** When the room went quiet, while a pause hint is outstanding. */
+  private hfPauseHintAt: number | null = null;
+  /** Fires when the transcript stops growing after a pause hint — see
+   *  `armSettleCheck`. */
+  private hfSettleTimer: ReturnType<typeof setTimeout> | null = null;
   /** The reader cut this HF turn short — end it quietly as done. */
   private hfSkipRequested = false;
 
@@ -665,6 +689,7 @@ export class ConversationOrchestrator {
       () => this.handleHfSpeechStart(),
       (lastSpeechAt) => void this.handleHfSpeechEnd(lastSpeechAt),
       (lastSpeechAt) => this.handleHfSpeechPause(lastSpeechAt),
+      () => this.handleHfSpeechResume(),
     );
 
     // Reset RNN state so stale state from a previous session doesn't suppress
@@ -705,6 +730,7 @@ export class ConversationOrchestrator {
     this.hfSkipRequested = true;
     try { this.hfTurnAbort?.abort(); } catch { /* noop */ }
     this.hfTurnAbort = null;
+    this.clearSettleCheck();
     this.cancelSpeculation();
 
     // 2. Stop VAD subscription.
@@ -749,6 +775,7 @@ export class ConversationOrchestrator {
     this.hfPaused = true;
     this.setHfState('hf-idle');
     this.vadBuffer = new Int16Array(0);
+    this.clearSettleCheck();
     this.cancelSpeculation();
     resetAudioLevel();
     (this.deps.conversationStore ?? useConversationStore).getState().setHfLive(null);
@@ -807,6 +834,7 @@ export class ConversationOrchestrator {
     this.hfPartialText = '';
     this.hfPartialAt = 0;
     this.hfSpecCount = 0;
+    this.clearSettleCheck();
     this.cancelSpeculation();
     this.setHfState('hf-capturing');
   }
@@ -965,7 +993,12 @@ export class ConversationOrchestrator {
     const a = primarySubtag(pairA);
     const b = primarySubtag(pairB);
     if (a === b) return { text: null, blocked: 'routing-unclear' };
-    if (classifyPairText(text, a, b)?.strength !== 'strong') {
+    const vote = classifyPairText(text, a, b);
+    if (!vote) return { text: null, blocked: 'routing-unclear' };
+    if (
+      vote.strength !== 'strong' &&
+      this.hfUntaggedStreak < UNTAGGED_UTTERANCES_TO_TRUST_TEXT
+    ) {
       return { text: null, blocked: 'routing-unclear' };
     }
     return { text, blocked: 'none' };
@@ -979,23 +1012,68 @@ export class ConversationOrchestrator {
    */
   private handleHfSpeechPause(lastSpeechAt: number): void {
     if (!this.hfEnabled || this.hfPaused || this.hfState !== 'hf-capturing') return;
-    const now = Date.now();
+    this.hfPauseHintAt = lastSpeechAt;
+    this.armSettleCheck();
+  }
+
+  /** The speaker was not finished. Everything the pause hint set in motion was
+   *  about an utterance that is still being spoken. */
+  private handleHfSpeechResume(): void {
+    if (this.hfPauseHintAt === null) return;
+    this.clearSettleCheck();
+    this.cancelSpeculation();
+  }
+
+  private clearSettleCheck(): void {
+    this.hfPauseHintAt = null;
+    if (this.hfSettleTimer !== null) {
+      clearTimeout(this.hfSettleTimer);
+      this.hfSettleTimer = null;
+    }
+  }
+
+  /**
+   * Wait for the transcript to stop growing, then act.
+   *
+   * The pause hint cannot be acted on the moment it fires: Voxtral buffers
+   * TARGET_STREAMING_DELAY_MS of audio, so at 400 ms of silence the words the
+   * speaker just said are still in flight. Measured on device, that is exactly
+   * why every shortcut declined — the timer asked its question before the
+   * answer existed. So the hint only arms this check, each delta re-arms it,
+   * and it fires the instant the transcript goes quiet, which is the earliest
+   * moment we actually know what was said.
+   */
+  private armSettleCheck(): void {
+    if (this.hfPauseHintAt === null) return;
+    if (this.hfSettleTimer !== null) clearTimeout(this.hfSettleTimer);
+    const quietFor = Date.now() - this.hfPartialAt;
+    this.hfSettleTimer = setTimeout(
+      () => {
+        this.hfSettleTimer = null;
+        this.onTranscriptSettled();
+      },
+      Math.max(0, PARTIAL_SETTLED_MS - quietFor),
+    );
+  }
+
+  private onTranscriptSettled(): void {
+    const pausedAt = this.hfPauseHintAt;
+    if (pausedAt === null) return;
+    if (!this.hfEnabled || this.hfPaused || this.hfState !== 'hf-capturing') return;
 
     // Whatever happens to the turn, the translation can start now. It is the
-    // longest link in the chain by a wide margin, so the silence still being
-    // waited out below is time it can spend in flight instead.
+    // longest link in the chain, so the silence still being waited out below
+    // is time it can spend in flight instead.
     const stable = this.hfPartialText;
-    if (stable.length >= FAST_PATH_MIN_CHARS && now - this.hfPartialAt >= PARTIAL_SETTLED_MS) {
-      this.startSpeculativeTranslation(stable);
-    }
+    if (stable.length >= FAST_PATH_MIN_CHARS) this.startSpeculativeTranslation(stable);
 
     if (!this.deps.voxtral.commitUtterance) return;
-    const settled = this.settledTranscript(now);
+    const settled = this.settledTranscript(Date.now());
     if (settled === null || !CLOSED_THOUGHT_RE.test(settled)) return;
     log.info('[orch/hf] early endpoint — transcript closed a sentence');
     // Cancel the hangover that would otherwise deliver a second ending.
     this.deps.vad?.endUtterance?.();
-    void this.handleHfSpeechEnd(lastSpeechAt, 'punctuation');
+    void this.handleHfSpeechEnd(pausedAt, 'punctuation');
   }
 
   private async handleHfSpeechEnd(
@@ -1012,6 +1090,7 @@ export class ConversationOrchestrator {
     const speechEndAt = lastSpeechAt ?? vadEndAt;
     const capturedMs = this.hfCaptureStartAt !== null ? vadEndAt - this.hfCaptureStartAt : 0;
     log.info(`[orch/hf] speech_end (${endpoint}) → flushing (captured ${capturedMs} ms)`);
+    this.clearSettleCheck();
     this.setHfState('hf-flushing');
 
     const store0 = (this.deps.conversationStore ?? useConversationStore).getState();
@@ -1042,6 +1121,10 @@ export class ConversationOrchestrator {
       }
     }
     const flushedAt = Date.now();
+    if (result.language) this.hfUntaggedStreak = 0;
+    else if (this.hfUntaggedStreak < UNTAGGED_UTTERANCES_TO_TRUST_TEXT) {
+      this.hfUntaggedStreak++;
+    }
 
     // The live partial's job ends where the routed turn begins.
     store0.setHfLive(null);
@@ -1090,6 +1173,7 @@ export class ConversationOrchestrator {
       endpoint,
       transcriptSource: settled !== null ? 'settled-partial' : 'server-final',
       fastPathBlock,
+      untaggedStreak: this.hfUntaggedStreak,
       routedLanguage: language ?? null,
       configuredPair: [pairA ?? '', pairB ?? ''],
       routingResult: routingKind,
@@ -1203,6 +1287,7 @@ export class ConversationOrchestrator {
       endpoint: HfEndpoint;
       transcriptSource: 'settled-partial' | 'server-final';
       fastPathBlock: FastPathBlock;
+      untaggedStreak: number;
       routedLanguage: string | null;
       configuredPair: [string, string];
       routingResult: HfRoutingKind;
@@ -1343,6 +1428,7 @@ export class ConversationOrchestrator {
       endpoint: telemetry.endpoint,
       transcript: telemetry.transcriptSource,
       fastPathBlock: telemetry.fastPathBlock,
+      untaggedStreak: telemetry.untaggedStreak,
       translation: adopted !== null ? 'speculative' : 'fresh',
       // How much of the request flew before the turn was even certain.
       translationLead: adopted !== null ? finalAt - adopted.startedAt : 0,
@@ -1398,6 +1484,9 @@ export class ConversationOrchestrator {
     // through a throttle, a sentence still arriving would look finished.
     this.hfPartialText = trimmed;
     this.hfPartialAt = now;
+    // The transcript just grew, so it has not settled after all — push the
+    // check back rather than acting on a half-delivered sentence.
+    if (this.hfPauseHintAt !== null) this.armSettleCheck();
     if (now - this.hfLastPartialWriteAt < HF_PARTIAL_WRITE_THROTTLE_MS) return;
     this.hfLastPartialWriteAt = now;
 
@@ -1444,6 +1533,7 @@ export class ConversationOrchestrator {
     // against a half-open or freshly-reconnected session.
     this.deps.vad?.setActive(false);
     this.vadBuffer = new Int16Array(0);
+    this.clearSettleCheck();
     this.cancelSpeculation();
     (this.deps.conversationStore ?? useConversationStore).getState().setHfLive(null);
     this.setHfState('hf-idle');

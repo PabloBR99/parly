@@ -100,14 +100,18 @@ function makeMocks() {
   let vadStart: (() => void) | null = null;
   let vadEnd: ((lastSpeechAt: number) => void) | null = null;
   let vadPause: ((lastSpeechAt: number) => void) | null = null;
+  let vadResume: (() => void) | null = null;
   const vad: jest.Mocked<VadLike> = {
     initialize: jest.fn().mockResolvedValue(undefined),
     feedFrame: jest.fn(),
-    subscribe: jest.fn().mockImplementation((onStart, onEnd, onPause) => {
+    subscribe: jest.fn().mockImplementation((onStart, onEnd, onPause, onResume) => {
       vadStart = onStart;
       vadEnd = onEnd;
       vadPause = onPause ?? null;
-      return () => { vadStart = null; vadEnd = null; vadPause = null; };
+      vadResume = onResume ?? null;
+      return () => {
+        vadStart = null; vadEnd = null; vadPause = null; vadResume = null;
+      };
     }),
     setActive: jest.fn(),
     resetState: jest.fn(),
@@ -132,6 +136,7 @@ function makeMocks() {
     fireVadStart: () => vadStart?.(),
     fireVadEnd: (lastSpeechAt = Date.now()) => vadEnd?.(lastSpeechAt),
     fireVadPause: (lastSpeechAt = Date.now()) => vadPause?.(lastSpeechAt),
+    fireVadResume: () => vadResume?.(),
     resolveFlush: (text: string, language?: string) => {
       accumulated = '';
       accumulatedLang = undefined;
@@ -1522,5 +1527,134 @@ describe('ConversationOrchestrator (translating ahead of the ending)', () => {
     await o.disableHandsFree();
 
     expect(streams[0].signal?.aborted).toBe(true);
+  });
+});
+
+// ── Acting when the transcript arrives, not when a timer says so ─────────────
+//
+// The first device measurements showed every shortcut declining. Two causes,
+// both pinned here: the pause hint asked its question before Voxtral had
+// delivered the words, and the routing gate held out for an audio language tag
+// that this server never sends.
+
+describe('ConversationOrchestrator (waiting for evidence, not for clocks)', () => {
+  function makeOrchestrator() {
+    const m = makeMocks();
+    const o = new ConversationOrchestrator(m);
+    o.configure({ apiKey: 'sk-test', translationModel: 'mistral-small-latest' });
+    const streams: TranslateArgs[] = [];
+    m.translator.translateStream.mockImplementation((args: TranslateArgs) => {
+      streams.push(args);
+      return new Promise<void>(() => {});
+    });
+    return { m, o, streams };
+  }
+
+  const tick = () => new Promise<void>(r => setTimeout(r, 40));
+  const settle = () => new Promise<void>(r => setTimeout(r, 220));
+  const SPANISH = 'Buenos días, quería preguntarte una cosa';
+
+  it('holds the pause hint open until the words actually land', async () => {
+    const { m, o, streams } = makeOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVoxtralPartial(SPANISH);
+    // The hint arrives while that delta is still warm — Voxtral buffers audio,
+    // so silence in the room does not mean the sentence has been delivered.
+    m.fireVadPause();
+    await tick();
+    expect(streams).toHaveLength(0);
+
+    // It goes quiet: now we know what was said, and only now do we act.
+    await settle();
+    expect(streams).toHaveLength(1);
+    expect(streams[0].sourceText).toBe(SPANISH);
+  });
+
+  it('drops everything the hint started when the speaker carries on', async () => {
+    const { m, o, streams } = makeOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVoxtralPartial(SPANISH);
+    m.fireVadPause();
+    m.fireVadResume();
+    await settle();
+
+    expect(streams).toHaveLength(0);
+    expect(o.getHfState()).toBe('hf-capturing');
+  });
+
+  it('stops holding out for an audio tag the server never sends', async () => {
+    const { m, o } = makeOrchestrator();
+    m.translator.translateStream.mockImplementation(async (args: TranslateArgs) => {
+      args.onSentence('Hello.');
+      args.onDone('Hello.');
+    });
+    await o.enableHandsFree('es', 'en');
+
+    // 'Hola.' is Spanish on a single signal — a weak vote, which normally
+    // defers to the audio tag as a second opinion.
+    const speak = async () => {
+      m.fireVadStart();
+      m.fireVoxtralPartial('Hola.');
+      await settle();
+      m.fireVadEnd();
+      await Promise.resolve();
+      m.resolveFlush('Hola.'); // no language — as observed on device
+      await new Promise<void>(r => setTimeout(r, 350));
+    };
+
+    await speak();
+    await speak();
+    // Two utterances, no tag either time: the second opinion is not coming.
+    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(2);
+    expect(m.voxtral.commitUtterance).not.toHaveBeenCalled();
+
+    await speak();
+    // Same weak evidence, now acted on — it is what routing falls back to
+    // anyway once the tag is absent.
+    expect(m.voxtral.commitUtterance).toHaveBeenCalledTimes(1);
+    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(2);
+  });
+
+  it('goes strict again the moment a tag does arrive', async () => {
+    const { m, o } = makeOrchestrator();
+    m.translator.translateStream.mockImplementation(async (args: TranslateArgs) => {
+      args.onSentence('Hello.');
+      args.onDone('Hello.');
+    });
+    await o.enableHandsFree('es', 'en');
+
+    // Two untagged utterances unlock the shortcut.
+    for (let i = 0; i < 2; i++) {
+      m.fireVadStart();
+      m.fireVoxtralPartial('Hola.');
+      await settle();
+      m.fireVadEnd();
+      await Promise.resolve();
+      m.resolveFlush('Hola.');
+      await new Promise<void>(r => setTimeout(r, 350));
+    }
+
+    // The next one takes the shortcut — and the server tags it after all.
+    // Voxtral sends `transcription.language` mid-stream, so the shortcut can
+    // still see a tag; it does not have to give up watching to go faster.
+    m.fireVadStart();
+    m.fireVoxtralPartial('Hola.', 'es');
+    await settle();
+    m.fireVadEnd();
+    await new Promise<void>(r => setTimeout(r, 350));
+    expect(m.voxtral.commitUtterance).toHaveBeenCalledTimes(1);
+
+    // The second opinion is real after all, so weak evidence defers again.
+    m.fireVadStart();
+    m.fireVoxtralPartial('Hola.');
+    await settle();
+    m.fireVadEnd();
+    await Promise.resolve();
+    expect(m.voxtral.commitUtterance).toHaveBeenCalledTimes(1);
+    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(3);
   });
 });

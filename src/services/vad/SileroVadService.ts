@@ -73,6 +73,9 @@ interface VadSubscriber {
    *  latency measurement starts there. */
   onSpeechEnd: (lastSpeechAt: number) => void;
   onSpeechPause?: (lastSpeechAt: number) => void;
+  /** Speech came back after a pause hint — whatever the hint set in motion
+   *  was about an utterance that is not over. Only fires after a hint. */
+  onSpeechResume?: () => void;
 }
 
 // Minimal ONNX Runtime surface we depend on — lets tests inject a stub.
@@ -110,6 +113,7 @@ export class SileroVadService {
   private speaking = false;
   private hangoverTimer: ReturnType<typeof setTimeout> | null = null;
   private pauseTimer: ReturnType<typeof setTimeout> | null = null;
+  private pauseHintEmitted = false;
   private lastSpeechAt = 0;
   private active = true;
   private subscribers: VadSubscriber[] = [];
@@ -168,8 +172,9 @@ export class SileroVadService {
     onSpeechStart: () => void,
     onSpeechEnd: (lastSpeechAt: number) => void,
     onSpeechPause?: (lastSpeechAt: number) => void,
+    onSpeechResume?: () => void,
   ): Unsubscribe {
-    const sub: VadSubscriber = { onSpeechStart, onSpeechEnd, onSpeechPause };
+    const sub: VadSubscriber = { onSpeechStart, onSpeechEnd, onSpeechPause, onSpeechResume };
     this.subscribers.push(sub);
     return () => {
       this.subscribers = this.subscribers.filter(s => s !== sub);
@@ -194,6 +199,7 @@ export class SileroVadService {
    */
   endUtterance(): void {
     this.clearSilenceTimers();
+    this.pauseHintEmitted = false;
     this.speaking = false;
   }
 
@@ -202,6 +208,7 @@ export class SileroVadService {
    *  affecting speech detection in the new session. */
   resetState(): void {
     this.clearSilenceTimers();
+    this.pauseHintEmitted = false;
     this.state = new Float32Array(STATE_SIZE);
     this.speaking = false;
     this.frameCount = 0;
@@ -213,6 +220,7 @@ export class SileroVadService {
 
   destroy(): void {
     this.clearSilenceTimers();
+    this.pauseHintEmitted = false;
     this.subscribers = [];
     this.session = null;
     this.initialized = false;
@@ -292,6 +300,10 @@ export class SileroVadService {
     if (isSpeech) {
       this.lastSpeechAt = Date.now();
       this.clearSilenceTimers();
+      if (this.pauseHintEmitted) {
+        this.pauseHintEmitted = false;
+        this.emit('resume', this.lastSpeechAt);
+      }
       if (!this.speaking) {
         this.speaking = true;
         this.emit('start', this.lastSpeechAt);
@@ -305,12 +317,14 @@ export class SileroVadService {
       if (this.pauseHintMs > 0 && this.pauseHintMs < this.hangoverMs) {
         this.pauseTimer = setTimeout(() => {
           this.pauseTimer = null;
+          this.pauseHintEmitted = true;
           this.emit('pause', since);
         }, this.pauseHintMs);
       }
       this.hangoverTimer = setTimeout(() => {
         this.hangoverTimer = null;
         this.clearPauseTimer();
+        this.pauseHintEmitted = false;
         this.speaking = false;
         this.emit('end', since);
       }, this.hangoverMs);
@@ -332,11 +346,12 @@ export class SileroVadService {
     }
   }
 
-  private emit(event: 'start' | 'pause' | 'end', lastSpeechAt: number): void {
+  private emit(event: 'start' | 'pause' | 'resume' | 'end', lastSpeechAt: number): void {
     for (const sub of this.subscribers) {
       try {
         if (event === 'start') sub.onSpeechStart();
         else if (event === 'pause') sub.onSpeechPause?.(lastSpeechAt);
+        else if (event === 'resume') sub.onSpeechResume?.();
         else sub.onSpeechEnd(lastSpeechAt);
       } catch (e) {
         log.error('[vad] subscriber error', e instanceof Error ? e : new Error(String(e)));

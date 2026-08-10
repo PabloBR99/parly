@@ -355,3 +355,65 @@ describe('SileroVadService — pause hint', () => {
     }
   });
 });
+
+describe('SileroVadService — resuming after a pause hint', () => {
+  async function feed(svc: SileroVadService, frames: Int16Array[]): Promise<void> {
+    for (const f of frames) svc.feedFrame(f);
+    for (let i = 0; i < 8 * frames.length; i++) await Promise.resolve();
+  }
+
+  it('tells subscribers when speech comes back, so work started on the hint can be undone', async () => {
+    jest.useFakeTimers();
+    try {
+      const svc = new SileroVadService(
+        { speechProbThreshold: 0.5, pauseHintMs: 400, silenceHangoverMs: 600 },
+        makeSessionFactory(makeOrtSession([0.9, 0.1, 0.9])),
+      );
+      await svc.initialize();
+
+      const events: string[] = [];
+      svc.subscribe(
+        () => events.push('start'),
+        () => events.push('end'),
+        () => events.push('pause'),
+        () => events.push('resume'),
+      );
+
+      await feed(svc, [voice(), silence()]);
+      jest.advanceTimersByTime(450);
+      expect(events).toEqual(['start', 'pause']);
+
+      await feed(svc, [voice()]);
+      expect(events).toEqual(['start', 'pause', 'resume']);
+
+      // And it does not repeat itself while they keep talking.
+      await feed(svc, [voice()]);
+      expect(events.filter(e => e === 'resume')).toHaveLength(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('stays silent about resuming when no hint was ever offered', async () => {
+    jest.useFakeTimers();
+    try {
+      const svc = new SileroVadService(
+        { speechProbThreshold: 0.5, pauseHintMs: 400, silenceHangoverMs: 600 },
+        makeSessionFactory(makeOrtSession([0.9, 0.1, 0.9])),
+      );
+      await svc.initialize();
+
+      const events: string[] = [];
+      svc.subscribe(() => {}, () => events.push('end'), () => events.push('pause'), () => events.push('resume'));
+
+      await feed(svc, [voice(), silence()]);
+      jest.advanceTimersByTime(200); // a gap far shorter than the hint
+      await feed(svc, [voice()]);
+      jest.advanceTimersByTime(1_000);
+
+      expect(events).toEqual([]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
