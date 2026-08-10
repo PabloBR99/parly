@@ -533,5 +533,57 @@ describe('VoxtralRealtimeClient', () => {
 
       await expect(svc.flushUtterance()).rejects.toThrow(/sessionMode/);
     });
+
+    it('commitUtterance() hands back the streamed text and closes the segment', async () => {
+      const fake = createFakeWs();
+      const svc = new VoxtralRealtimeClient(fake.factory);
+      const rec = recording();
+
+      await handshake(fake, svc, rec, { sessionMode: true });
+      fake.ws.fire('message', JSON.stringify({ type: 'transcription.language', language: 'es' }));
+      fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'Buenos ' }));
+      fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'días.' }));
+
+      const taken = svc.commitUtterance();
+
+      expect(taken).toEqual({ text: 'Buenos días.', language: 'es' });
+      // The server still has to close the segment — we simply do not wait.
+      expect(fake.ws.sent.map(s => JSON.parse(s).type)).toContain('input_audio.flush');
+      // And the connection stays open for whoever speaks next.
+      expect(svc.currentState).toBe('streaming');
+    });
+
+    it('a late final for a committed segment never eats the next speaker', async () => {
+      const fake = createFakeWs();
+      const svc = new VoxtralRealtimeClient(fake.factory);
+      const rec = recording();
+
+      await handshake(fake, svc, rec, { sessionMode: true });
+      fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'Buenos días.' }));
+      svc.commitUtterance();
+
+      // The next speaker is already talking when the server's answer to the
+      // committed segment finally lands.
+      fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'Good ' }));
+      fake.ws.fire('message', JSON.stringify({ type: 'transcription.done', text: 'Buenos días.' }));
+      fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'morning.' }));
+
+      // Their words survived the late done intact.
+      expect(rec.partials.at(-1)).toBe('Good morning.');
+      expect(svc.commitUtterance().text).toBe('Good morning.');
+    });
+
+    it('a normal final still clears the accumulator when nothing was committed', async () => {
+      const fake = createFakeWs();
+      const svc = new VoxtralRealtimeClient(fake.factory);
+      const rec = recording();
+
+      await handshake(fake, svc, rec, { sessionMode: true });
+      fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'Buenos días.' }));
+      fake.ws.fire('message', JSON.stringify({ type: 'transcription.done', text: 'Buenos días.' }));
+      fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'Y tú?' }));
+
+      expect(rec.partials.at(-1)).toBe('Y tú?');
+    });
   });
 });

@@ -14,6 +14,7 @@ import {
 } from '../ConversationOrchestrator';
 import { useConversationStore } from '../../../store/conversationStore';
 import { getAudioLevel, resetAudioLevel } from '../../audio/audioLevelBus';
+import { log } from '../../log/logStore';
 
 /** One 512-sample VAD frame of a sine at `amplitude` (0..1), base64 PCM16. */
 function pcmFrame(amplitude: number): string {
@@ -47,6 +48,10 @@ function makeMocks() {
 
   let voxtralCallbacks: VoxtralCallbacks | null = null;
   let flushResolver: FlushResolver | null = null;
+  // Mirrors the real client's accumulator: partials build it up, and either
+  // flushUtterance or commitUtterance hands it over and clears it.
+  let accumulated = '';
+  let accumulatedLang: string | undefined;
 
   const voxtral: jest.Mocked<VoxtralLike> = {
     start: jest.fn().mockImplementation(async (_opts, cbs: VoxtralCallbacks) => {
@@ -56,7 +61,16 @@ function makeMocks() {
     end: jest.fn().mockResolvedValue(undefined),
     cancel: jest.fn(),
     endSession: jest.fn().mockResolvedValue(undefined),
-    resetUtterance: jest.fn(),
+    resetUtterance: jest.fn().mockImplementation(() => {
+      accumulated = '';
+      accumulatedLang = undefined;
+    }),
+    commitUtterance: jest.fn().mockImplementation(() => {
+      const taken = { text: accumulated, language: accumulatedLang };
+      accumulated = '';
+      accumulatedLang = undefined;
+      return taken;
+    }),
     flushUtterance: jest.fn().mockImplementation(() => {
       return new Promise<{ text: string; language?: string }>((resolve) => {
         flushResolver = resolve;
@@ -68,10 +82,13 @@ function makeMocks() {
   const tts: jest.Mocked<TTSLike> = {
     init: jest.fn().mockResolvedValue(undefined),
     prewarm: jest.fn(),
-    speakChunk: jest.fn().mockImplementation((text: string, language: string) => {
-      ttsCalls.push({ text, language });
-      return Promise.resolve<TTSSpeakOutcome>('spoken');
-    }),
+    speakChunk: jest
+      .fn()
+      .mockImplementation((text: string, language: string, onStart?: () => void) => {
+        ttsCalls.push({ text, language });
+        onStart?.();
+        return Promise.resolve<TTSSpeakOutcome>('spoken');
+      }),
     stop: jest.fn(),
   };
 
@@ -81,17 +98,20 @@ function makeMocks() {
   };
 
   let vadStart: (() => void) | null = null;
-  let vadEnd: (() => void) | null = null;
+  let vadEnd: ((lastSpeechAt: number) => void) | null = null;
+  let vadPause: ((lastSpeechAt: number) => void) | null = null;
   const vad: jest.Mocked<VadLike> = {
     initialize: jest.fn().mockResolvedValue(undefined),
     feedFrame: jest.fn(),
-    subscribe: jest.fn().mockImplementation((onStart, onEnd) => {
+    subscribe: jest.fn().mockImplementation((onStart, onEnd, onPause) => {
       vadStart = onStart;
       vadEnd = onEnd;
-      return () => { vadStart = null; vadEnd = null; };
+      vadPause = onPause ?? null;
+      return () => { vadStart = null; vadEnd = null; vadPause = null; };
     }),
     setActive: jest.fn(),
     resetState: jest.fn(),
+    endUtterance: jest.fn(),
     destroy: jest.fn(),
   };
 
@@ -102,12 +122,19 @@ function makeMocks() {
     translator,
     ttsCalls,
     vad,
-    fireVoxtralPartial: (text: string) => voxtralCallbacks?.onPartial(text),
+    fireVoxtralPartial: (text: string, lang?: string) => {
+      accumulated = text;
+      if (lang !== undefined) accumulatedLang = lang;
+      voxtralCallbacks?.onPartial(text);
+    },
     fireVoxtralFinal: (text: string, lang?: string) => voxtralCallbacks?.onFinal(text, lang),
     fireVoxtralError: (msg: string) => voxtralCallbacks?.onError(new Error(msg)),
     fireVadStart: () => vadStart?.(),
-    fireVadEnd: () => vadEnd?.(),
+    fireVadEnd: (lastSpeechAt = Date.now()) => vadEnd?.(lastSpeechAt),
+    fireVadPause: (lastSpeechAt = Date.now()) => vadPause?.(lastSpeechAt),
     resolveFlush: (text: string, language?: string) => {
+      accumulated = '';
+      accumulatedLang = undefined;
       flushResolver?.({ text, language });
       flushResolver = null;
     },
@@ -1149,5 +1176,166 @@ describe('ConversationOrchestrator (hands-free)', () => {
     // VAD was paused (setActive(false)) BEFORE the reconnect's voxtral.start fired.
     expect(pauseOrder).toBeDefined();
     expect(pauseOrder!).toBeLessThan(reconnectStartOrder);
+  });
+});
+
+// ── Latency: the two shortcuts out of a turn ─────────────────────────────────
+//
+// Both trade a wait for evidence, and both must refuse when the evidence is
+// thin. The tests below pin the refusals as hard as the shortcuts: a turn that
+// arrives fast on the wrong half, or missing its last word, is worse than a
+// turn that arrives late.
+
+describe('ConversationOrchestrator (hands-free latency)', () => {
+  function makeHfOrchestrator() {
+    const m = makeMocks();
+    const o = new ConversationOrchestrator(m);
+    o.configure({ apiKey: 'sk-test', translationModel: 'mistral-small-latest' });
+    m.translator.translateStream.mockImplementation(async (args) => {
+      args.onFirstToken?.();
+      args.onSentence('Good morning.');
+      args.onDone('Good morning.');
+    });
+    return { m, o };
+  }
+
+  /** Let the streamed transcript go quiet for longer than PARTIAL_SETTLED_MS. */
+  const settle = () => new Promise<void>(r => setTimeout(r, 200));
+
+  it('dispatches from the settled transcript without waiting for the server final', async () => {
+    const { m, o } = makeHfOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVoxtralPartial('Buenos días, ¿qué tal estás?');
+    await settle();
+    m.fireVadEnd();
+    await new Promise<void>(r => setTimeout(r, 50));
+
+    // The round trip was closed in the background, never awaited.
+    expect(m.voxtral.commitUtterance).toHaveBeenCalledTimes(1);
+    expect(m.voxtral.flushUtterance).not.toHaveBeenCalled();
+
+    const turn = useConversationStore.getState().turns.at(-1);
+    expect(turn?.sourceText).toBe('Buenos días, ¿qué tal estás?');
+    expect(turn?.speakerId).toBe('person_a');
+    expect(turn?.targetLang).toBe('en');
+    expect(m.ttsCalls[0]).toEqual({ text: 'Good morning.', language: 'en' });
+  });
+
+  it('waits for the server final when the transcript is still arriving', async () => {
+    const { m, o } = makeHfOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVoxtralPartial('Buenos días, ¿qué tal');
+    // No settle: a delta landed just now, so the sentence may still be growing
+    // and its tail is exactly what the fast path would drop.
+    m.fireVadEnd();
+    await Promise.resolve();
+
+    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(1);
+    expect(m.voxtral.commitUtterance).not.toHaveBeenCalled();
+
+    m.resolveFlush('Buenos días, ¿qué tal estás?', 'es');
+    await new Promise<void>(r => setTimeout(r, 50));
+    expect(useConversationStore.getState().turns.at(-1)?.sourceText).toBe(
+      'Buenos días, ¿qué tal estás?',
+    );
+  });
+
+  it('waits for the server final when the transcript alone cannot route the turn', async () => {
+    const { m, o } = makeHfOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    // Settled and punctuated, but a bare proper noun belongs to neither
+    // language — without the final there is no audio tag to fall back on.
+    m.fireVoxtralPartial('Barcelona.');
+    await settle();
+    m.fireVadEnd();
+    await Promise.resolve();
+
+    expect(m.voxtral.commitUtterance).not.toHaveBeenCalled();
+    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends the turn on the pause hint once the transcript closes a sentence', async () => {
+    const { m, o } = makeHfOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVoxtralPartial('Buenos días, ¿qué tal estás?');
+    await settle();
+    m.fireVadPause();
+    await new Promise<void>(r => setTimeout(r, 50));
+
+    // The turn ran without the hangover ever expiring...
+    expect(useConversationStore.getState().turns.at(-1)?.sourceText).toBe(
+      'Buenos días, ¿qué tal estás?',
+    );
+    // ...and the hangover was cancelled, so it cannot deliver a second ending.
+    expect(m.vad.endUtterance).toHaveBeenCalledTimes(1);
+
+    // A late speech_end for the same utterance changes nothing.
+    const turnsBefore = useConversationStore.getState().turns.length;
+    m.fireVadEnd();
+    await new Promise<void>(r => setTimeout(r, 20));
+    expect(useConversationStore.getState().turns.length).toBe(turnsBefore);
+  });
+
+  it('ignores the pause hint mid-sentence — that is what the hangover is for', async () => {
+    const { m, o } = makeHfOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    // A breath after a clause. Ending here would split the utterance, and the
+    // half spoken next is lost behind the readback of the first.
+    m.fireVoxtralPartial('Buenos días, quería preguntarte');
+    await settle();
+    m.fireVadPause();
+    await new Promise<void>(r => setTimeout(r, 20));
+
+    expect(m.vad.endUtterance).not.toHaveBeenCalled();
+    expect(m.voxtral.commitUtterance).not.toHaveBeenCalled();
+    expect(o.getHfState()).toBe('hf-capturing');
+    expect(useConversationStore.getState().turns).toHaveLength(0);
+  });
+
+  it('warms both voices of the pair at enable, before anyone has spoken', async () => {
+    const { m, o } = makeHfOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    const warmed = m.tts.prewarm.mock.calls.map(c => c[0]);
+    expect(warmed).toContain('es');
+    expect(warmed).toContain('en');
+  });
+
+  it('reports the wait from real silence to real audio, not from the hangover', async () => {
+    const { m, o } = makeHfOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    const lines: string[] = [];
+    const spy = jest.spyOn(log, 'info').mockImplementation((msg: string) => { lines.push(msg); });
+
+    m.fireVadStart();
+    m.fireVoxtralPartial('Buenos días, ¿qué tal estás?');
+    await settle();
+    // Silence began 600 ms before the VAD conceded the turn.
+    m.fireVadEnd(Date.now() - 600);
+    await new Promise<void>(r => setTimeout(r, 50));
+    spy.mockRestore();
+
+    const emitted = lines.find(l => l.startsWith('[hf_turn]'));
+    expect(emitted).toBeDefined();
+    const payload = JSON.parse(emitted!.replace('[hf_turn] ', ''));
+    expect(payload.transcript).toBe('settled-partial');
+    expect(payload.endpoint).toBe('silence');
+    // The hangover is counted as part of the wait, because the listener waited
+    // through it. Measuring from vadEnd would hide the largest fixed cost.
+    expect(payload.endpointDelay).toBeGreaterThanOrEqual(590);
+    expect(payload.speechEndToAudio).toBeGreaterThanOrEqual(payload.endpointDelay);
+    // The round trip we removed shows up as ~0, not as a missing field.
+    expect(payload.flushToFinal).toBeLessThan(20);
   });
 });

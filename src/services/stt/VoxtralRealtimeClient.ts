@@ -24,8 +24,10 @@
 // Session mode (hands-free):
 //   When sessionMode=true, a single WS survives multiple utterances.
 //   After each transcription.done the connection stays open; callers use
-//   flushUtterance() to request a transcript for the latest speech segment
-//   and endSession() to close the connection gracefully.
+//   flushUtterance() to request a transcript for the latest speech segment,
+//   commitUtterance() to take the transcript already streamed and close the
+//   segment without waiting for the round trip, and endSession() to close the
+//   connection gracefully.
 //
 // Notes on React Native WebSocket:
 //   - Third argument to `new WebSocket(url, protocols, options)` supports
@@ -123,6 +125,12 @@ export class VoxtralRealtimeClient {
    *  any terminal cleanup). Resolved from the event handlers — no polling. */
   private finalWaiters: Array<() => void> = [];
   private generation = 0;
+
+  /** Segments closed locally by commitUtterance() whose transcription.done has
+   *  not landed yet. A late done belongs to a segment whose text the caller
+   *  already took, so it must be consumed WITHOUT clearing the accumulator —
+   *  by then the next speaker may already be in it. */
+  private pendingCommits = 0;
 
   // Session-mode flush resolution (one pending flush at a time).
   private flushResolve: ((result: { text: string; language?: string }) => void) | null = null;
@@ -280,9 +288,16 @@ export class VoxtralRealtimeClient {
               this.clearFlushPending();
               resolve({ text: finalText, language: flushedLang });
             }
-            // Reset accumulator for the next utterance — keep WS open.
-            this.accumulatedText = '';
-            this.detectedLanguage = undefined;
+            if (this.pendingCommits > 0) {
+              // This done closes a segment commitUtterance() already handed
+              // out. Consume it; the accumulator now belongs to whoever spoke
+              // next, and wiping it here would swallow their first words.
+              this.pendingCommits--;
+            } else {
+              // Reset accumulator for the next utterance — keep WS open.
+              this.accumulatedText = '';
+              this.detectedLanguage = undefined;
+            }
           } else {
             this.cleanup();
           }
@@ -457,6 +472,43 @@ export class VoxtralRealtimeClient {
   }
 
   /**
+   * Session-mode only: close the current segment and hand back the transcript
+   * we ALREADY have, without waiting for the server's transcription.done.
+   *
+   * Why this exists:
+   *   flushUtterance() is a round trip — flush out, done back — worth several
+   *   hundred milliseconds on the front of every hands-free reply. But by the
+   *   time the caller decides the utterance is over, the deltas have normally
+   *   already delivered every word of it: the server buffers
+   *   TARGET_STREAMING_DELAY_MS of audio, and the silence the caller waited
+   *   through is longer than that. The final that comes back is then the same
+   *   sentence with tidier punctuation. Paying a round trip for punctuation is
+   *   a bad trade in a conversation.
+   *
+   * The flush is still SENT — the server has to close the segment so the next
+   * speaker starts clean — we simply do not block on its answer.
+   *
+   * The caller owns the risk: only commit when the transcript has visibly
+   * stopped growing. Anything still arriving is the tail of the sentence, and
+   * this drops it.
+   */
+  commitUtterance(): { text: string; language?: string } {
+    const text = this.accumulatedText;
+    const language = this.detectedLanguage;
+    this.accumulatedText = '';
+    this.detectedLanguage = undefined;
+    if (this.state === 'streaming') {
+      this.pendingCommits++;
+      try {
+        this.ws?.send(JSON.stringify({ type: 'input_audio.flush' }));
+      } catch (e) {
+        log.warn(`[voxtral] commit flush failed to send: ${String(e)}`);
+      }
+    }
+    return { text, language };
+  }
+
+  /**
    * Session-mode only: send input_audio.end and close the WebSocket.
    * Use this instead of end() to terminate a session-mode connection.
    */
@@ -477,6 +529,10 @@ export class VoxtralRealtimeClient {
   resetUtterance(): void {
     this.accumulatedText = '';
     this.detectedLanguage = undefined;
+    // Bound the commit ledger: a done that never arrived must not make the
+    // next real one skip its reset. This runs between utterances, where
+    // "forget everything outstanding" is exactly right.
+    this.pendingCommits = 0;
   }
 
   /** Abort without waiting for final. No onFinal fired. */
@@ -551,6 +607,7 @@ export class VoxtralRealtimeClient {
     this.state = 'closed';
     this.callbacks = null;
     this.preSessionChunkQueue = [];
+    this.pendingCommits = 0;
     this.sessionMode = false;
   }
 }

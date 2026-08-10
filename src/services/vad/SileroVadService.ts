@@ -7,6 +7,14 @@
 // with a configurable silence hangover so short gaps (breathing, pauses) don't
 // fragment an utterance.
 //
+// Endpointing is two-stage. `onSpeechPause` fires early (pauseHintMs) and
+// `onSpeechEnd` late (silenceHangoverMs). Silence alone is weak evidence that
+// someone finished talking — strong enough only after a long wait, which is
+// why the hangover is the largest fixed latency in hands-free. The pause hint
+// exists so a subscriber holding better evidence (a transcript that just
+// closed a sentence) can end the turn without paying for the hangover, while
+// anything ambiguous still waits it out.
+//
 // Setup:
 //   1. `npm install onnxruntime-react-native`
 //   2. Download silero_vad.onnx into:
@@ -35,6 +43,17 @@ export interface VadConfig {
   /** How long silence must persist after speech before onSpeechEnd fires (ms). */
   readonly silenceHangoverMs?: number;
   /**
+   * How long silence must persist before `onSpeechPause` fires (ms) — an
+   * early, non-committal "they might have finished" hint, emitted well before
+   * the full hangover. The hangover is a blunt instrument: it has to be long
+   * enough to survive a mid-sentence breath, which makes it dead air on the
+   * front of every single response. The pause hint lets a listener that has
+   * BETTER evidence than silence — a transcript that just closed a sentence —
+   * end the turn early, while everyone else still waits out the hangover.
+   * Must be shorter than the hangover; ignored otherwise.
+   */
+  readonly pauseHintMs?: number;
+  /**
    * RMS energy threshold for energy-based speech detection (0-1). When > 0,
    * a frame is considered speech if EITHER the model prob exceeds
    * speechProbThreshold OR the RMS exceeds this value. Acts as a fallback when
@@ -49,7 +68,11 @@ type Unsubscribe = () => void;
 
 interface VadSubscriber {
   onSpeechStart: () => void;
-  onSpeechEnd: () => void;
+  /** `lastSpeechAt` is when the final speech frame was seen — the instant the
+   *  room actually went quiet, not when the hangover expired. Every honest
+   *  latency measurement starts there. */
+  onSpeechEnd: (lastSpeechAt: number) => void;
+  onSpeechPause?: (lastSpeechAt: number) => void;
 }
 
 // Minimal ONNX Runtime surface we depend on — lets tests inject a stub.
@@ -86,6 +109,8 @@ export class SileroVadService {
   private state: Float32Array = new Float32Array(STATE_SIZE);
   private speaking = false;
   private hangoverTimer: ReturnType<typeof setTimeout> | null = null;
+  private pauseTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastSpeechAt = 0;
   private active = true;
   private subscribers: VadSubscriber[] = [];
   private inferenceRunning = false;
@@ -98,12 +123,14 @@ export class SileroVadService {
 
   private readonly threshold: number;
   private readonly hangoverMs: number;
+  private readonly pauseHintMs: number;
   private readonly energyThreshold: number;
   private readonly sessionFactory: OrtSessionFactory;
 
   constructor(config: VadConfig = {}, sessionFactory?: OrtSessionFactory) {
     this.threshold = config.speechProbThreshold ?? 0.08;
     this.hangoverMs = config.silenceHangoverMs ?? 800;
+    this.pauseHintMs = config.pauseHintMs ?? 0;
     this.energyThreshold = config.energySpeechThreshold ?? 0.05;
     this.sessionFactory = sessionFactory ?? defaultOrtSessionFactory;
   }
@@ -137,8 +164,12 @@ export class SileroVadService {
     }
   }
 
-  subscribe(onSpeechStart: () => void, onSpeechEnd: () => void): Unsubscribe {
-    const sub: VadSubscriber = { onSpeechStart, onSpeechEnd };
+  subscribe(
+    onSpeechStart: () => void,
+    onSpeechEnd: (lastSpeechAt: number) => void,
+    onSpeechPause?: (lastSpeechAt: number) => void,
+  ): Unsubscribe {
+    const sub: VadSubscriber = { onSpeechStart, onSpeechEnd, onSpeechPause };
     this.subscribers.push(sub);
     return () => {
       this.subscribers = this.subscribers.filter(s => s !== sub);
@@ -150,15 +181,27 @@ export class SileroVadService {
   setActive(active: boolean): void {
     this.active = active;
     if (!active) {
-      this.clearHangoverTimer();
+      this.clearSilenceTimers();
     }
+  }
+
+  /**
+   * Close the current utterance from the outside, without emitting an end
+   * event. A subscriber that acted on `onSpeechPause` has already taken the
+   * turn; this cancels the hangover that would otherwise fire a second,
+   * duplicate ending, and re-arms the detector so the next speaker still
+   * produces an `onSpeechStart`.
+   */
+  endUtterance(): void {
+    this.clearSilenceTimers();
+    this.speaking = false;
   }
 
   /** Reset the RNN state and speaking flag without destroying the ONNX session.
    *  Call between HF sessions to prevent stale state from a previous run
    *  affecting speech detection in the new session. */
   resetState(): void {
-    this.clearHangoverTimer();
+    this.clearSilenceTimers();
     this.state = new Float32Array(STATE_SIZE);
     this.speaking = false;
     this.frameCount = 0;
@@ -169,7 +212,7 @@ export class SileroVadService {
   }
 
   destroy(): void {
-    this.clearHangoverTimer();
+    this.clearSilenceTimers();
     this.subscribers = [];
     this.session = null;
     this.initialized = false;
@@ -247,32 +290,54 @@ export class SileroVadService {
     const isSpeech = isModelSpeech || isEnergySpeech;
 
     if (isSpeech) {
-      this.clearHangoverTimer();
+      this.lastSpeechAt = Date.now();
+      this.clearSilenceTimers();
       if (!this.speaking) {
         this.speaking = true;
-        this.emit('start');
+        this.emit('start', this.lastSpeechAt);
       }
     } else if (this.speaking && this.hangoverTimer === null) {
+      // Both timers are armed from the same instant and cancelled together by
+      // the next speech frame, so a mid-sentence breath costs nothing: the
+      // pause hint is a question ("are they done?"), the hangover is the
+      // answer of last resort.
+      const since = this.lastSpeechAt;
+      if (this.pauseHintMs > 0 && this.pauseHintMs < this.hangoverMs) {
+        this.pauseTimer = setTimeout(() => {
+          this.pauseTimer = null;
+          this.emit('pause', since);
+        }, this.pauseHintMs);
+      }
       this.hangoverTimer = setTimeout(() => {
         this.hangoverTimer = null;
+        this.clearPauseTimer();
         this.speaking = false;
-        this.emit('end');
+        this.emit('end', since);
       }, this.hangoverMs);
     }
   }
 
-  private clearHangoverTimer(): void {
+  private clearPauseTimer(): void {
+    if (this.pauseTimer !== null) {
+      clearTimeout(this.pauseTimer);
+      this.pauseTimer = null;
+    }
+  }
+
+  private clearSilenceTimers(): void {
+    this.clearPauseTimer();
     if (this.hangoverTimer !== null) {
       clearTimeout(this.hangoverTimer);
       this.hangoverTimer = null;
     }
   }
 
-  private emit(event: 'start' | 'end'): void {
+  private emit(event: 'start' | 'pause' | 'end', lastSpeechAt: number): void {
     for (const sub of this.subscribers) {
       try {
         if (event === 'start') sub.onSpeechStart();
-        else sub.onSpeechEnd();
+        else if (event === 'pause') sub.onSpeechPause?.(lastSpeechAt);
+        else sub.onSpeechEnd(lastSpeechAt);
       } catch (e) {
         log.error('[vad] subscriber error', e instanceof Error ? e : new Error(String(e)));
       }

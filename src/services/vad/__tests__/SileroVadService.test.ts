@@ -238,3 +238,120 @@ describe('SileroVadService', () => {
     expect(starts).toHaveLength(1);
   });
 });
+
+// ── Two-stage endpointing ────────────────────────────────────────────────────
+
+describe('SileroVadService — pause hint', () => {
+  /** Feed frames and drain the inference queue between each. */
+  async function feed(svc: SileroVadService, frames: Int16Array[]): Promise<void> {
+    for (const f of frames) svc.feedFrame(f);
+    for (let i = 0; i < 8 * frames.length; i++) await Promise.resolve();
+  }
+
+  it('offers the pause hint well before the hangover concedes the turn', async () => {
+    jest.useFakeTimers();
+    try {
+      const svc = new SileroVadService(
+        { speechProbThreshold: 0.5, pauseHintMs: 400, silenceHangoverMs: 600 },
+        makeSessionFactory(makeOrtSession([0.9, 0.1])),
+      );
+      await svc.initialize();
+
+      const pauses: number[] = [];
+      const ends: number[] = [];
+      svc.subscribe(() => {}, at => ends.push(at), at => pauses.push(at));
+
+      await feed(svc, [voice(), silence()]);
+      expect(pauses).toHaveLength(0);
+
+      jest.advanceTimersByTime(450);
+      expect(pauses).toHaveLength(1);
+      expect(ends).toHaveLength(0); // the turn is still the speaker's
+
+      jest.advanceTimersByTime(200);
+      expect(ends).toHaveLength(1);
+      // Both report the same instant — when the room actually went quiet.
+      expect(ends[0]).toBe(pauses[0]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('cancels the hint when speech resumes — a breath is not an ending', async () => {
+    jest.useFakeTimers();
+    try {
+      const svc = new SileroVadService(
+        { speechProbThreshold: 0.5, pauseHintMs: 400, silenceHangoverMs: 600 },
+        makeSessionFactory(makeOrtSession([0.9, 0.1, 0.9])),
+      );
+      await svc.initialize();
+
+      const pauses: number[] = [];
+      const ends: number[] = [];
+      svc.subscribe(() => {}, at => ends.push(at), at => pauses.push(at));
+
+      await feed(svc, [voice(), silence()]);
+      jest.advanceTimersByTime(300); // mid-pause…
+      await feed(svc, [voice()]);    // …and they keep talking
+      jest.advanceTimersByTime(1_000);
+
+      expect(pauses).toHaveLength(0);
+      expect(ends).toHaveLength(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('endUtterance() cancels the hangover and re-arms for the next speaker', async () => {
+    jest.useFakeTimers();
+    try {
+      const svc = new SileroVadService(
+        { speechProbThreshold: 0.5, pauseHintMs: 400, silenceHangoverMs: 600 },
+        makeSessionFactory(makeOrtSession([0.9, 0.1, 0.9])),
+      );
+      await svc.initialize();
+
+      const starts: number[] = [];
+      const ends: number[] = [];
+      svc.subscribe(() => starts.push(Date.now()), at => ends.push(at), () => {});
+
+      await feed(svc, [voice(), silence()]);
+      expect(starts).toHaveLength(1);
+
+      // A subscriber acted on the hint and took the turn itself.
+      svc.endUtterance();
+      jest.advanceTimersByTime(1_000);
+      // No duplicate ending for a turn already handled.
+      expect(ends).toHaveLength(0);
+
+      // And the detector is armed: the next speaker still opens a turn.
+      await feed(svc, [voice()]);
+      expect(starts).toHaveLength(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('stays single-stage when no pause hint is configured', async () => {
+    jest.useFakeTimers();
+    try {
+      const svc = new SileroVadService(
+        { speechProbThreshold: 0.5, silenceHangoverMs: 600 },
+        makeSessionFactory(makeOrtSession([0.9, 0.1])),
+      );
+      await svc.initialize();
+
+      const pauses: number[] = [];
+      const ends: number[] = [];
+      svc.subscribe(() => {}, at => ends.push(at), at => pauses.push(at));
+
+      await feed(svc, [voice(), silence()]);
+      jest.advanceTimersByTime(1_000);
+
+      expect(pauses).toHaveLength(0);
+      expect(ends).toHaveLength(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});

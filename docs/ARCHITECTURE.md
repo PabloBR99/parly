@@ -51,11 +51,31 @@ With hands-free enabled, nobody presses anything: on-device VAD (Silero v5 via `
 hf-idle ─► hf-capturing ─► hf-flushing ─► hf-routing ─► hf-speaking ─► hf-cooldown ─► hf-idle
 ```
 
-- **Turn-taking:** a pause longer than 600 ms ends the utterance and dispatches it. Live partials render on the speaker's half while they talk.
+- **Turn-taking:** a pause longer than 600 ms ends the utterance and dispatches it — unless the transcript ends it sooner (see *Endpointing* below). Live partials render on the speaker's half while they talk.
 - **Routing:** the turn's direction is decided from the *transcript text* (script/stopword classification), not just Voxtral's audio language tag — this is what prevents same-language echo loops when the tag misfires.
 - **Echo gating:** while the phone speaks (and for a 250 ms cooldown after), mic audio is not fed to the transcriber and the VAD is disarmed, so the phone never transcribes its own voice. On re-arm, the transcriber's utterance buffer is reset to scrub anything that leaked in flight. This is deliberate: hardware echo cancellation (`VOICE_COMMUNICATION`) is too device-dependent to rely on.
 - **The wave is the meter:** the same 512-sample frames that drive turn detection also carry a loudness measurement (RMS → dBFS → envelope follower) that is published on `services/audio/audioLevelBus` and drawn as the seam control's wave. It travels the pub/sub bus rather than the store because 31 updates/s through Zustand would re-render the whole two-sided surface to move seven 2 px bars. The gate above applies to the meter too — audio the phone is hearing from its own speaker moves nothing, so the wave can never visualise the app's own voice.
 - **The trade-off:** speech during playback is not captured (half-duplex by design). Tapping the streaming translation skips the readback and returns to listening in ~250 ms.
+
+### The wait between "…?" and the answer
+
+Everything from the last syllable to the first spoken word is one serial chain, and each link was bought back with evidence rather than by shortening a timeout:
+
+```
+silence ─► endpoint ─► transcript ─► translation ─► first sentence ─► first audio
+          hangover     flush→final     TTFT          boundary          engine
+          ~600 ms      ~400-600 ms   ~300-500 ms    ~200 ms          ~250-400 ms
+```
+
+- **Endpointing is two-stage.** Silence is weak evidence that a person finished talking — strong enough only after a long wait, which is why the hangover sits at the front of every reply. So the VAD also emits an early *pause hint* at 400 ms, and the orchestrator answers it with evidence the VAD doesn't have: whether the transcript just closed a sentence. Voxtral punctuates, and a full stop is the one signal that distinguishes finishing a thought from drawing breath. A hint over a transcript that stops mid-clause is ignored and the full hangover runs. This matters because the hangover is not padding: an utterance split in two loses its second half, which arrives while the mic is gated behind the readback of the first.
+
+- **The final is usually a formality.** The flush→final round trip asks the server for a transcript it has already streamed: Voxtral buffers `target_streaming_delay_ms` of audio, and the silence the endpointer just waited through is longer than that, so by the time a turn ends the deltas normally carry every word of it. `commitUtterance()` takes what has arrived and closes the segment without blocking on the answer. The guard is that the transcript must have *stopped growing* (140 ms with no delta) — anything still arriving is the tail of the sentence, and this drops it.
+
+- **Both shortcuts refuse unless the text alone routes the turn.** Skipping the final also skips the audio language tag that comes with it, so they only fire when the transcript classifier is outright certain which half the turn belongs to. A fast turn delivered to the wrong reader is worse than a slow one, and slow is always still available.
+
+- **Nothing is warmed in front of the sentence that matters.** Both voices of the pair are primed when hands-free starts, before anyone has spoken. The silent primer costs a real synth-and-play cycle in the native engine, so re-warming an already-hot voice queues *ahead* of the real sentence and adds the latency it was meant to remove — it is skipped unless the voice changed or went cold.
+
+- **The measurement starts where the person starts waiting.** The `[hf_turn]` log line breaks the whole chain into segments that add up, measured from the last speech frame (not from when the hangover conceded) to the `tts-start` event (not to when a chunk was queued). `speechEndToAudio` is the number; everything else in the line explains it. Tuning any of the constants above without reading it first is guessing.
 
 ## Key design decisions
 

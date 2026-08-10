@@ -33,6 +33,12 @@ const PLAYBACK_TIMEOUT_MS = 120_000;
 // `tts-start` never fires (engine stuck, chunk dropped). Generous enough
 // to tolerate a deep queue of preceding chunks playing first.
 const ENQUEUE_TIMEOUT_MS = 300_000;
+// How long a voice stays hot after a warmup. The silent primer costs a full
+// synth+play cycle in the native engine, and prewarm() is called several
+// times per turn (turn start, first translated token) — queued in front of
+// the sentence the listener is waiting for, that is latency we are adding to
+// save latency. Re-warm only after a real lull.
+const WARM_TTL_MS = 20_000;
 
 interface CachedVoice {
   readonly id: string;
@@ -59,6 +65,27 @@ class NativeTTSService {
    *  cached so we don't retry the whole ladder on every chunk. */
   private unavailableLangs = new Set<string>();
   private cancelAllPending: Set<() => void> = new Set();
+  /** When each base language was last primed with the silent warmup. */
+  private warmedAt = new Map<string, number>();
+  /** Tail of the voice-switch queue — see `serial()`. */
+  private lane: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Run voice-switching work one at a time. `prewarm` and `speakChunk` both
+   * mutate the engine's active voice and both cache the result in
+   * `currentLang`. Interleaved, the slower one can land last and leave
+   * `currentLang` naming a voice the engine no longer has — after which the
+   * next chunk in that language takes the "already applied" shortcut and gets
+   * read in another language's phonemes. Serialising makes the cache honest.
+   */
+  private serial<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.lane.then(work, work);
+    this.lane = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
 
   /** Load engine + cache voices. Idempotent. */
   async init(): Promise<void> {
@@ -78,7 +105,7 @@ class NativeTTSService {
       const voices = await Tts.voices();
       for (const v of voices) {
         if (v.notInstalled) continue;
-        const lang = v.language.split(/[-_]/)[0].toLowerCase();
+        const lang = baseLanguage(v.language);
         if (!this.voicesByLang.has(lang)) {
           this.voicesByLang.set(lang, { id: v.id, language: v.language });
         }
@@ -93,9 +120,11 @@ class NativeTTSService {
    * Returns whether a voice (or locale) for this language was actually
    * applied. On false, the PREVIOUS voice is still active — callers must
    * not speak, or the text gets read in the wrong language's phonemes.
+   *
+   * Never call this directly — go through `serial()`.
    */
-  private async applyLanguage(language: string): Promise<boolean> {
-    const baseLang = language.split(/[-_]/)[0].toLowerCase();
+  private async applyLanguageNow(language: string): Promise<boolean> {
+    const baseLang = baseLanguage(language);
     if (this.currentLang === baseLang) return true;
     if (this.unavailableLangs.has(baseLang)) return false;
     const cached = this.voicesByLang.get(baseLang);
@@ -128,26 +157,35 @@ class NativeTTSService {
   /** Whether a voice for `language` is known to be unavailable. Only
    *  meaningful after an applyLanguage attempt (speakChunk/prewarm). */
   hasVoiceFor(language: string): boolean {
-    return !this.unavailableLangs.has(language.split(/[-_]/)[0].toLowerCase());
+    return !this.unavailableLangs.has(baseLanguage(language));
   }
 
   /**
    * Speculative warmup — load the voice engine for `language` so the first
    * real sentence's TTS first-audio-frame latency drops by ~100-300 ms on
    * Android. Speaks a single space character (inaudible) and does not await.
+   *
+   * Safe to call often: the silent primer is only actually spoken when the
+   * voice changed or went cold (WARM_TTL_MS). A primer queued behind a voice
+   * that is already hot delays the real sentence instead of helping it.
    */
   prewarm(language: string): void {
-    void (async () => {
+    void this.serial(async () => {
       if (!this.initialized) await this.init();
-      const voiceReady = await this.applyLanguage(language);
+      const base = baseLanguage(language);
+      const alreadyActive = this.currentLang === base;
+      const voiceReady = await this.applyLanguageNow(language);
       if (!voiceReady) return; // nothing to warm — and don't warm the wrong voice
+      const hot = Date.now() - (this.warmedAt.get(base) ?? 0) < WARM_TTL_MS;
+      if (alreadyActive && hot) return;
+      this.warmedAt.set(base, Date.now());
       try {
         // Returns a Promise<utteranceId> — fire and forget.
         void Tts.speak(' ');
       } catch {
         /* best-effort */
       }
-    })();
+    });
   }
 
   /**
@@ -155,11 +193,19 @@ class NativeTTSService {
    * finishes (tts-finish with the matching utteranceId), is cancelled, or
    * errors. Multiple consecutive calls queue in order — react-native-tts
    * native engine handles the queuing.
+   *
+   * `onStart` fires when the engine begins playing THIS chunk — the moment
+   * the listener actually hears something, which is the only end point a
+   * latency measurement may honestly use.
    */
-  async speakChunk(text: string, language: string): Promise<SpeakOutcome> {
+  async speakChunk(
+    text: string,
+    language: string,
+    onStart?: () => void,
+  ): Promise<SpeakOutcome> {
     if (!text.trim()) return 'skipped';
     if (!this.initialized) await this.init();
-    const voiceReady = await this.applyLanguage(language);
+    const voiceReady = await this.serial(() => this.applyLanguageNow(language));
     if (!voiceReady) return 'no-voice';
 
     // Tts.speak() resolves to the utteranceId once accepted by the native
@@ -213,6 +259,11 @@ class NativeTTSService {
         // here so the timer measures actual audio time, not queue wait.
         if (playbackTimer) clearTimeout(playbackTimer);
         playbackTimer = setTimeout(() => finish('spoken'), PLAYBACK_TIMEOUT_MS);
+        try {
+          onStart?.();
+        } catch {
+          /* a broken observer must never break playback */
+        }
       }) as unknown as { remove?(): void };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       finishSub = Tts.addEventListener('tts-finish', (ev: any) => {
@@ -240,6 +291,11 @@ class NativeTTSService {
 }
 
 export const nativeTTSService = new NativeTTSService();
+
+/** BCP-47 primary subtag, lowercased — "pt-BR" and "pt_br" both → "pt". */
+function baseLanguage(lang: string): string {
+  return lang.split(/[-_]/)[0].toLowerCase();
+}
 
 /** BCP-47 locale fallback for short language codes. */
 function toTtsLocale(lang: string): string {

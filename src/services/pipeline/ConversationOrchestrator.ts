@@ -25,6 +25,18 @@
 //   instead of dropping the utterance, and skipHfTurn() lets a reader cut a
 //   long TTS readback short.
 //
+//   Ending a turn quickly (the two shortcuts, both evidence-gated):
+//     · Early endpoint — the VAD's pause hint fires well before the hangover;
+//       if the transcript has closed a sentence and stopped growing, the turn
+//       ends there instead of waiting out silence it no longer needs.
+//     · Settled transcript — the streamed partials are normally the whole
+//       utterance by the time it ends, so the turn is dispatched from them
+//       and the flush→final round trip is closed in the background rather
+//       than waited on.
+//   Both refuse unless the transcript alone routes the turn unambiguously:
+//   skipping the final also skips the audio language tag, and a turn sent to
+//   the wrong half is far worse than a slow one.
+//
 //   HF state machine:
 //     hf-idle → hf-capturing → hf-flushing → hf-routing → hf-speaking
 //             ↑                                          |           |
@@ -74,6 +86,9 @@ export interface VoxtralLike {
   cancel(): void;
   // Session-mode only (optional — not available in PTT mocks):
   flushUtterance?(timeoutMs?: number): Promise<{ text: string; language?: string }>;
+  /** Close the segment and take the transcript already streamed, without
+   *  waiting for the server's final. */
+  commitUtterance?(): { text: string; language?: string };
   endSession?(): Promise<void>;
   /** Drop text accumulated since the last flush (TTS echo scrubbing). */
   resetUtterance?(): void;
@@ -104,16 +119,28 @@ export type TTSSpeakOutcome = 'spoken' | 'no-voice' | 'error' | 'skipped';
 export interface TTSLike {
   init(): Promise<void>;
   prewarm(language: string): void;
-  speakChunk(text: string, language: string): Promise<TTSSpeakOutcome>;
+  /** `onStart` fires when this chunk actually becomes audible. */
+  speakChunk(
+    text: string,
+    language: string,
+    onStart?: () => void,
+  ): Promise<TTSSpeakOutcome>;
   stop(): void;
 }
 
 export interface VadLike {
   initialize(): Promise<void>;
   feedFrame(pcmInt16: Int16Array): void;
-  subscribe(onSpeechStart: () => void, onSpeechEnd: () => void): () => void;
+  subscribe(
+    onSpeechStart: () => void,
+    onSpeechEnd: (lastSpeechAt: number) => void,
+    onSpeechPause?: (lastSpeechAt: number) => void,
+  ): () => void;
   setActive(active: boolean): void;
   resetState(): void;
+  /** Close the utterance without emitting an end event — the caller already
+   *  took the turn from an `onSpeechPause`. */
+  endUtterance?(): void;
   destroy(): void;
 }
 
@@ -182,6 +209,32 @@ const FINAL_EXTRA_TIMEOUT_CAP_MS = 7_000;
 /** Min interval between hfLive store writes from streaming partials. */
 const HF_PARTIAL_WRITE_THROTTLE_MS = 150;
 
+/**
+ * How long the streaming transcript must go without growing before we treat
+ * it as the whole utterance and stop waiting for the server's final.
+ *
+ * Voxtral buffers TARGET_STREAMING_DELAY_MS of audio before emitting; once
+ * the room is silent, the deltas drain and stop. Silence in the transcript
+ * for longer than one delivery gap therefore means the server has caught up
+ * with the audio and there is nothing left to say — the final would repeat
+ * the same sentence with tidier punctuation, several hundred milliseconds
+ * later. This is the fast path's whole justification, so keep it comfortably
+ * above the jitter between two consecutive deltas.
+ */
+const PARTIAL_SETTLED_MS = 140;
+/** Below this, a "settled" transcript is more plausibly a cough or a stray
+ *  syllable than a finished sentence. Let the server decide those. */
+const FAST_PATH_MIN_CHARS = 4;
+/** Sentence-final punctuation, tolerating a closing quote or bracket after
+ *  it. Voxtral punctuates its transcripts, which makes this the one piece of
+ *  linguistic evidence available that someone finished a thought — silence
+ *  alone can never distinguish a full stop from drawing breath. */
+const CLOSED_THOUGHT_RE = /[.!?…。！？؟।]["'”’»)\]]*$/;
+
+/** What ended the utterance — 'punctuation' means the transcript closed a
+ *  sentence during the pause hint, before the hangover expired. */
+type HfEndpoint = 'silence' | 'punctuation';
+
 /** Final-transcript timeout scaled by how long the person actually spoke. */
 function finalTimeoutFor(speechMs: number): number {
   return (
@@ -231,6 +284,11 @@ export class ConversationOrchestrator {
   /** Live-partial routing guess, sticky within one utterance. */
   private hfLiveSide: PersonId | null = null;
   private hfLastPartialWriteAt = 0;
+  /** Latest streaming transcript for the utterance being captured, and when
+   *  it last grew. Recorded on EVERY delta (the store write is throttled;
+   *  this must not be, or a transcript still arriving looks settled). */
+  private hfPartialText = '';
+  private hfPartialAt = 0;
   /** Abort handle for the in-flight HF translation (skip / disable). */
   private hfTurnAbort: AbortController | null = null;
   /** The reader cut this HF turn short — end it quietly as done. */
@@ -487,7 +545,15 @@ export class ConversationOrchestrator {
     this.setHfState('hf-idle');
     this.vadBuffer = new Int16Array(0);
     this.hfFirstAudioLogged = false;
+    this.hfPartialText = '';
+    this.hfPartialAt = 0;
     resetAudioLevel();
+
+    // Warm BOTH voices now. Which one the first turn needs isn't known until
+    // somebody speaks, and by then the engine's cold-start sits directly in
+    // front of the reply. Two warmups here cost nothing anyone is waiting on.
+    this.deps.tts.prewarm(pairA);
+    this.deps.tts.prewarm(pairB);
 
     const store = (this.deps.conversationStore ?? useConversationStore).getState();
     store.setMode('hf');
@@ -517,7 +583,8 @@ export class ConversationOrchestrator {
     // 4. Subscribe to VAD events.
     this.hfVadUnsub = this.deps.vad.subscribe(
       () => this.handleHfSpeechStart(),
-      () => void this.handleHfSpeechEnd(),
+      (lastSpeechAt) => void this.handleHfSpeechEnd(lastSpeechAt),
+      (lastSpeechAt) => this.handleHfSpeechPause(lastSpeechAt),
     );
 
     // Reset RNN state so stale state from a previous session doesn't suppress
@@ -655,31 +722,92 @@ export class ConversationOrchestrator {
     log.info('[orch/hf] speech_start → capturing');
     this.hfCaptureStartAt = Date.now();
     this.hfLiveSide = null;
+    this.hfPartialText = '';
+    this.hfPartialAt = 0;
     this.setHfState('hf-capturing');
   }
 
-  private async handleHfSpeechEnd(): Promise<void> {
+  /**
+   * The transcript, if it is safe to translate without the server's final:
+   * long enough to be a sentence, no longer growing, and unambiguous about
+   * which direction it should travel.
+   *
+   * That last condition is not fussiness. Skipping the final also skips the
+   * audio language tag that comes with it, so the fast path only exists where
+   * the text alone decides the routing outright. Anything the classifier is
+   * merely leaning towards goes the slow way and keeps its second opinion.
+   */
+  private settledTranscript(now: number): string | null {
+    const text = this.hfPartialText;
+    if (text.length < FAST_PATH_MIN_CHARS) return null;
+    if (now - this.hfPartialAt < PARTIAL_SETTLED_MS) return null;
+    const pairA = this.hfPairA;
+    const pairB = this.hfPairB;
+    if (!pairA || !pairB) return null;
+    const a = primarySubtag(pairA);
+    const b = primarySubtag(pairB);
+    if (a === b) return null;
+    if (classifyPairText(text, a, b)?.strength !== 'strong') return null;
+    return text;
+  }
+
+  /**
+   * Early endpoint. The VAD noticed a short silence — not enough on its own
+   * to call the turn over — but if the transcript has already closed a
+   * sentence and stopped growing, the speaker is finished and the rest of the
+   * hangover is dead air in front of the reply. Anything less certain waits.
+   */
+  private handleHfSpeechPause(lastSpeechAt: number): void {
+    if (!this.hfEnabled || this.hfPaused || this.hfState !== 'hf-capturing') return;
+    if (!this.deps.voxtral.commitUtterance) return;
+    const settled = this.settledTranscript(Date.now());
+    if (settled === null || !CLOSED_THOUGHT_RE.test(settled)) return;
+    log.info('[orch/hf] early endpoint — transcript closed a sentence');
+    // Cancel the hangover that would otherwise deliver a second ending.
+    this.deps.vad?.endUtterance?.();
+    void this.handleHfSpeechEnd(lastSpeechAt, 'punctuation');
+  }
+
+  private async handleHfSpeechEnd(
+    lastSpeechAt?: number,
+    endpoint: HfEndpoint = 'silence',
+  ): Promise<void> {
     if (!this.hfEnabled || this.hfPaused || this.hfState !== 'hf-capturing') return;
     if (!this.deps.voxtral.flushUtterance) return;
 
     const vadEndAt = Date.now();
+    // When the room actually went quiet — not when the hangover expired.
+    // Every latency number below is measured from here, because this is where
+    // the person starts waiting.
+    const speechEndAt = lastSpeechAt ?? vadEndAt;
     const capturedMs = this.hfCaptureStartAt !== null ? vadEndAt - this.hfCaptureStartAt : 0;
-    log.info(`[orch/hf] speech_end → flushing (captured ${capturedMs} ms)`);
+    log.info(`[orch/hf] speech_end (${endpoint}) → flushing (captured ${capturedMs} ms)`);
     this.setHfState('hf-flushing');
 
     const store0 = (this.deps.conversationStore ?? useConversationStore).getState();
+    const commit = this.deps.voxtral.commitUtterance;
+    const settled = commit ? this.settledTranscript(vadEndAt) : null;
+
     let result: { text: string; language?: string };
     const flushSentAt = Date.now();
-    try {
-      result = await this.deps.voxtral.flushUtterance(finalTimeoutFor(capturedMs));
-    } catch (e) {
-      log.error('[orch/hf] flushUtterance failed', e instanceof Error ? e : new Error(String(e)));
-      store0.setHfLive(null);
-      if (this.hfEnabled) {
-        this.setHfState('hf-idle');
-        await this.attemptHfReconnect();
+    if (settled !== null && commit) {
+      // The transcript is in hand and has stopped moving. Close the segment
+      // and go — waiting out the round trip here buys punctuation, and costs
+      // the listener the pause they notice most.
+      const taken = commit.call(this.deps.voxtral);
+      result = { text: taken.text.trim() || settled, language: taken.language };
+    } else {
+      try {
+        result = await this.deps.voxtral.flushUtterance(finalTimeoutFor(capturedMs));
+      } catch (e) {
+        log.error('[orch/hf] flushUtterance failed', e instanceof Error ? e : new Error(String(e)));
+        store0.setHfLive(null);
+        if (this.hfEnabled) {
+          this.setHfState('hf-idle');
+          await this.attemptHfReconnect();
+        }
+        return;
       }
-      return;
     }
     const flushedAt = Date.now();
 
@@ -723,9 +851,12 @@ export class ConversationOrchestrator {
     store.setHfActiveSpeaker(speakerId);
 
     await this.dispatchHfTurn(speakerId, sourceLang, targetLang, trimmed, {
+      speechEndAt,
       vadEndAt,
       flushSentAt,
       flushedAt,
+      endpoint,
+      transcriptSource: settled !== null ? 'settled-partial' : 'server-final',
       routedLanguage: language ?? null,
       configuredPair: [pairA ?? '', pairB ?? ''],
       routingResult: routingKind,
@@ -832,9 +963,12 @@ export class ConversationOrchestrator {
     targetLang: string,
     sourceText: string,
     telemetry: {
+      speechEndAt: number;
       vadEndAt: number;
       flushSentAt: number;
       flushedAt: number;
+      endpoint: HfEndpoint;
+      transcriptSource: 'settled-partial' | 'server-final';
       routedLanguage: string | null;
       configuredPair: [string, string];
       routingResult: HfRoutingKind;
@@ -867,6 +1001,7 @@ export class ConversationOrchestrator {
     const ttsPromises: Promise<void>[] = [];
     let firstTokenAt: number | null = null;
     let firstTtsStartAt: number | null = null;
+    let firstAudioAt: number | null = null;
     let lastDeltaWriteAt = 0;
 
     await this.deps.translator.translateStream({
@@ -893,7 +1028,9 @@ export class ConversationOrchestrator {
         store.updateTurn(id, { stage: 'speaking' });
         ttsPromises.push(
           this.deps.tts
-            .speakChunk(sentence, targetLang)
+            .speakChunk(sentence, targetLang, () => {
+              if (firstAudioAt === null) firstAudioAt = Date.now();
+            })
             .then((outcome) => {
               if (outcome === 'no-voice') this.noteNoVoice(targetLang, listenerId);
             })
@@ -925,10 +1062,20 @@ export class ConversationOrchestrator {
       store.endTurn(id, { stage: 'done' });
     }
 
-    // Phase 4 — structured HF turn telemetry (§11). Single emit per turn.
+    // Structured HF turn telemetry. One emit per turn, and the only place the
+    // latency budget is written down: every field is a segment of the wait
+    // between someone finishing a sentence and hearing it come back, so the
+    // parts add up and the biggest one is always obvious.
     const finalAt = telemetry.flushedAt;
+    const since = (t: number | null): number =>
+      t !== null ? t - telemetry.speechEndAt : -1;
     const payload = {
       kind: 'hf_turn' as const,
+      endpoint: telemetry.endpoint,
+      transcript: telemetry.transcriptSource,
+      // The number that matters: silence → first audible word.
+      speechEndToAudio: since(firstAudioAt),
+      endpointDelay: telemetry.vadEndAt - telemetry.speechEndAt,
       vadEndToFlush: telemetry.flushSentAt - telemetry.vadEndAt,
       flushToFinal: finalAt - telemetry.flushSentAt,
       finalToFirstToken: firstTokenAt !== null ? firstTokenAt - finalAt : -1,
@@ -936,7 +1083,11 @@ export class ConversationOrchestrator {
         firstTokenAt !== null && firstTtsStartAt !== null
           ? firstTtsStartAt - firstTokenAt
           : -1,
-      totalTurnDuration: endAt - telemetry.vadEndAt,
+      ttsQueueToAudio:
+        firstTtsStartAt !== null && firstAudioAt !== null
+          ? firstAudioAt - firstTtsStartAt
+          : -1,
+      totalTurnDuration: endAt - telemetry.speechEndAt,
       routedLanguage: telemetry.routedLanguage,
       configuredPair: telemetry.configuredPair,
       routingResult: telemetry.routingResult,
@@ -960,6 +1111,12 @@ export class ConversationOrchestrator {
     const trimmed = text.trim();
     if (trimmed.length === 0) return;
     const now = Date.now();
+    // Record every delta. The store write below is throttled because the
+    // screen cannot use 30 updates a second, but the endpoint decision is
+    // precisely a question about WHEN the transcript last grew — sampled
+    // through a throttle, a sentence still arriving would look finished.
+    this.hfPartialText = trimmed;
+    this.hfPartialAt = now;
     if (now - this.hfLastPartialWriteAt < HF_PARTIAL_WRITE_THROTTLE_MS) return;
     this.hfLastPartialWriteAt = now;
 
