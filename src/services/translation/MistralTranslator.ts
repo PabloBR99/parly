@@ -93,6 +93,11 @@ export interface TranslateStreamCallbacks {
   /** Optional: fires once with the very first content delta. Used for
    *  speculative TTS warmup before any sentence boundary appears. */
   readonly onFirstToken?: () => void;
+  /** Optional: fires when the response headers arrive, before any body byte.
+   *  Splits the wait for a first token into "getting the request answered"
+   *  (connection, queue, prefill) and "the model writing" — two costs with
+   *  completely different fixes, indistinguishable from one number. */
+  readonly onRequestOpen?: () => void;
 }
 
 export interface TranslateStreamArgs extends TranslateStreamCallbacks {
@@ -157,12 +162,13 @@ interface StreamingFetcher {
     body: string;
     signal?: AbortSignal;
     onChunk: ChunkSink;
+    onOpen?: () => void;
   }): Promise<{ ok: boolean; status: number; errorBody?: string }>;
 }
 
 /** Default fetcher: tries fetch().body.getReader(), falls back to XHR. */
 const defaultFetcher: StreamingFetcher = {
-  async postStream({ url, headers, body, signal, onChunk }) {
+  async postStream({ url, headers, body, signal, onChunk, onOpen }) {
     // The XHR fallback re-POSTs the full request from byte zero. That is
     // only safe before any bytes arrived: once a chunk has been delivered,
     // its sentences are already queued into TTS, and a replay would speak
@@ -181,6 +187,9 @@ const defaultFetcher: StreamingFetcher = {
         body,
         signal,
       });
+      // Headers are in: the connection is established, the request queued and
+      // prefilled. Everything after this point is the model writing.
+      onOpen?.();
       if (!response.ok) {
         const errBody = await response.text().catch(() => '');
         return { ok: false, status: response.status, errorBody: errBody };
@@ -217,7 +226,12 @@ const defaultFetcher: StreamingFetcher = {
           lastIndex = text.length;
         }
       };
+      let opened = false;
       xhr.onreadystatechange = () => {
+        if (xhr.readyState >= 2 && !opened) {
+          opened = true;
+          onOpen?.();
+        }
         if (xhr.readyState >= 3) flushNew();
         if (xhr.readyState === 4) {
           if (xhr.status >= 200 && xhr.status < 300) {
@@ -328,6 +342,7 @@ export class MistralTranslator {
         body: reqBody,
         signal: args.signal,
         onChunk: sink,
+        onOpen: args.onRequestOpen,
       });
     } catch (e) {
       if ((e as { name?: string })?.name === 'AbortError') {

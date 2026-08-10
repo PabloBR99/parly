@@ -1339,3 +1339,188 @@ describe('ConversationOrchestrator (hands-free latency)', () => {
     expect(payload.flushToFinal).toBeLessThan(20);
   });
 });
+
+// ── Translating ahead of the ending ──────────────────────────────────────────
+//
+// The request to Mistral is the longest link in the chain, so it is sent on the
+// transcript we already have while the endpointer is still waiting out silence.
+// The safety is entirely in adoption: a turn takes the running stream only if
+// it is a translation of that utterance, in that direction. Everything else is
+// discarded unread, which is what these tests are mostly about.
+
+type TranslateArgs = Parameters<TranslatorLike['translateStream']>[0];
+
+describe('ConversationOrchestrator (translating ahead of the ending)', () => {
+  function makeSpecOrchestrator() {
+    const m = makeMocks();
+    const o = new ConversationOrchestrator(m);
+    o.configure({ apiKey: 'sk-test', translationModel: 'mistral-small-latest' });
+    const streams: TranslateArgs[] = [];
+    m.translator.translateStream.mockImplementation(
+      (args: TranslateArgs) =>
+        new Promise<void>(() => { streams.push(args); }), // never self-resolves
+    );
+    return { m, o, streams };
+  }
+
+  const settle = () => new Promise<void>(r => setTimeout(r, 200));
+  const tick = () => new Promise<void>(r => setTimeout(r, 30));
+
+  /** Speak a stable, clearly-Spanish transcript that does NOT close a
+   *  sentence, so the pause hint speculates without ending the turn. */
+  const OPEN_UTTERANCE = 'Buenos días, quería preguntarte una cosa';
+
+  it('sends the translation at the pause hint, and the turn adopts it', async () => {
+    const { m, o, streams } = makeSpecOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVoxtralPartial(OPEN_UTTERANCE);
+    await settle();
+    m.fireVadPause();
+    await tick();
+
+    // In flight while the speaker still owns the turn.
+    expect(streams).toHaveLength(1);
+    expect(streams[0].sourceText).toBe(OPEN_UTTERANCE);
+    expect(streams[0].targetLang).toBe('en');
+    // …and nothing has reached the listener yet.
+    expect(m.ttsCalls).toHaveLength(0);
+    expect(useConversationStore.getState().turns).toHaveLength(0);
+
+    // Tokens arrive before the utterance is even declared over.
+    streams[0].onFirstToken?.();
+    streams[0].onSentence('Good morning, I wanted to ask you something.');
+    expect(m.ttsCalls).toHaveLength(0); // still buffered — nothing is certain
+
+    m.fireVadEnd();
+    await tick();
+
+    // The turn took the running stream rather than starting a second request.
+    expect(m.translator.translateStream).toHaveBeenCalledTimes(1);
+    expect(m.ttsCalls).toEqual([
+      { text: 'Good morning, I wanted to ask you something.', language: 'en' },
+    ]);
+    expect(useConversationStore.getState().turns.at(-1)?.sourceText).toBe(OPEN_UTTERANCE);
+  });
+
+  it('adopts across the tidying the final applies — punctuation and accents', async () => {
+    const { m, o, streams } = makeSpecOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVoxtralPartial('buenos dias quería preguntarte una cosa');
+    await settle();
+    m.fireVadPause();
+    await tick();
+    expect(streams).toHaveLength(1);
+
+    // The server's final says the same words, dressed properly.
+    (m.voxtral.commitUtterance as jest.Mock).mockReturnValueOnce({
+      text: 'Buenos días, ¿quería preguntarte una cosa?',
+      language: 'es',
+    });
+    m.fireVadEnd();
+    await tick();
+
+    expect(m.translator.translateStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards the guess when the speaker kept going', async () => {
+    const { m, o, streams } = makeSpecOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVoxtralPartial(OPEN_UTTERANCE);
+    await settle();
+    m.fireVadPause();
+    await tick();
+    expect(streams).toHaveLength(1);
+    const guessed = streams[0];
+    guessed.onSentence('Good morning, I wanted to ask you something.');
+
+    // They were not finished.
+    m.fireVoxtralPartial(`${OPEN_UTTERANCE} sobre el tren`);
+    await settle();
+    m.fireVadEnd();
+    await tick();
+
+    // The stale stream was abandoned and a correct one started.
+    expect(guessed.signal?.aborted).toBe(true);
+    expect(m.translator.translateStream).toHaveBeenCalledTimes(2);
+    expect(streams[1].sourceText).toBe(`${OPEN_UTTERANCE} sobre el tren`);
+    // Nothing from the discarded guess was ever spoken.
+    expect(m.ttsCalls).toHaveLength(0);
+  });
+
+  it('discards the guess when the turn turned out to travel the other way', async () => {
+    const { m, o, streams } = makeSpecOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVoxtralPartial(OPEN_UTTERANCE);
+    await settle();
+    m.fireVadPause();
+    await tick();
+    expect(streams[0].targetLang).toBe('en');
+
+    // The final is English after all — same-ish text, opposite direction.
+    (m.voxtral.commitUtterance as jest.Mock).mockReturnValueOnce({
+      text: 'Good morning, I wanted to ask you something',
+      language: 'en',
+    });
+    m.fireVadEnd();
+    await tick();
+
+    expect(streams[0].signal?.aborted).toBe(true);
+    expect(m.translator.translateStream).toHaveBeenCalledTimes(2);
+    expect(streams[1].targetLang).toBe('es');
+  });
+
+  it('stops guessing after a couple of misses in one utterance', async () => {
+    const { m, o } = makeSpecOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    for (const tail of ['una cosa', 'una cosa sobre', 'una cosa sobre el tren']) {
+      m.fireVoxtralPartial(`Buenos días, quería preguntarte ${tail}`);
+      await settle();
+      m.fireVadPause();
+      await tick();
+    }
+
+    // Every miss is a real request against the user's own key and rate limit.
+    expect(m.translator.translateStream.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
+  it('never guesses on speaker alternation — that is not evidence about this utterance', async () => {
+    const { m, o } = makeSpecOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    // A bare proper noun: the classifier abstains, so routing would be a coin
+    // flip that the real ending could easily overturn.
+    m.fireVoxtralPartial('Barcelona Sants');
+    await settle();
+    m.fireVadPause();
+    await tick();
+
+    expect(m.translator.translateStream).not.toHaveBeenCalled();
+  });
+
+  it('drops an in-flight guess when hands-free is switched off', async () => {
+    const { m, o, streams } = makeSpecOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVoxtralPartial(OPEN_UTTERANCE);
+    await settle();
+    m.fireVadPause();
+    await tick();
+    expect(streams).toHaveLength(1);
+
+    await o.disableHandsFree();
+
+    expect(streams[0].signal?.aborted).toBe(true);
+  });
+});

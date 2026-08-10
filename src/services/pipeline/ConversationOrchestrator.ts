@@ -104,6 +104,9 @@ export interface TranslatorLike {
     model?: string;
     signal?: AbortSignal;
     onFirstToken?: () => void;
+    /** Response headers arrived — the request is answered, the model is
+     *  about to write. Splits connection/queue cost from generation cost. */
+    onRequestOpen?: () => void;
     /** Full translated text so far, on every delta — drives live display. */
     onDelta?: (fullTextSoFar: string) => void;
     onSentence: (sentence: string) => void;
@@ -235,6 +238,74 @@ const CLOSED_THOUGHT_RE = /[.!?…。！？؟।]["'”’»)\]]*$/;
  *  sentence during the pause hint, before the hangover expired. */
 type HfEndpoint = 'silence' | 'punctuation';
 
+/** Why a turn could not skip the server's final. Logged, because a shortcut
+ *  that silently never fires looks exactly like a shortcut that does. */
+type FastPathBlock = 'none' | 'no-transcript' | 'still-arriving' | 'routing-unclear';
+
+/**
+ * Cap on translation requests started speculatively per utterance. Each one
+ * that misses is a wasted call against the user's own API key and rate limit,
+ * so the budget is deliberately tiny: re-speculate once if the speaker adds
+ * more after a long pause, then stop guessing and wait for the real ending.
+ */
+const MAX_SPECULATIONS_PER_UTTERANCE = 2;
+
+/** Callbacks a real turn attaches to a translation already in flight. */
+interface TranslationSink {
+  onFirstToken: (at: number) => void;
+  onDelta: (fullSoFar: string) => void;
+  onSentence: (sentence: string) => void;
+  onDone: (fullText: string) => void;
+  onError: (err: Error) => void;
+}
+
+/**
+ * A translation started before the turn it belongs to was certain.
+ *
+ * The request to Mistral is by far the longest link in the chain — far longer
+ * than the silence the endpointer is still waiting out when this starts. So we
+ * send it on the transcript we already have and let it run against the clock.
+ * Nothing reaches the screen or the speaker until a real turn adopts it, and a
+ * turn only adopts a speculation whose source text and direction match what
+ * the utterance actually turned out to be. A miss costs one request; a hit
+ * costs nothing and arrives sooner.
+ */
+interface SpeculativeTranslation {
+  readonly sourceText: string;
+  readonly sourceLang: string;
+  readonly targetLang: string;
+  readonly abort: AbortController;
+  readonly startedAt: number;
+  firstTokenAt: number | null;
+  openedAt: number | null;
+  fullText: string;
+  readonly sentences: string[];
+  state: 'running' | 'done' | 'error';
+  error: Error | null;
+  /** Once a turn adopts it, callbacks stop buffering and go straight through. */
+  sink: TranslationSink | null;
+}
+
+/**
+ * Two transcripts are the same utterance if they carry the same words in the
+ * same order. Punctuation, capitalisation and accents are exactly what the
+ * server's final tends to tidy up, and none of them change the translation —
+ * refusing to adopt over a comma would throw away the whole point. An added
+ * or dropped word is a different sentence, and does not match.
+ */
+function sameUtterance(a: string, b: string): boolean {
+  return foldForCompare(a) === foldForCompare(b);
+}
+
+function foldForCompare(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
 /** Final-transcript timeout scaled by how long the person actually spoke. */
 function finalTimeoutFor(speechMs: number): number {
   return (
@@ -291,6 +362,9 @@ export class ConversationOrchestrator {
   private hfPartialAt = 0;
   /** Abort handle for the in-flight HF translation (skip / disable). */
   private hfTurnAbort: AbortController | null = null;
+  /** Translation started ahead of the turn being certain — see the type. */
+  private hfSpec: SpeculativeTranslation | null = null;
+  private hfSpecCount = 0;
   /** The reader cut this HF turn short — end it quietly as done. */
   private hfSkipRequested = false;
 
@@ -554,6 +628,12 @@ export class ConversationOrchestrator {
     // front of the reply. Two warmups here cost nothing anyone is waiting on.
     this.deps.tts.prewarm(pairA);
     this.deps.tts.prewarm(pairB);
+    // Same idea for the network: open the TLS session to Mistral now rather
+    // than paying the handshake inside the first turn's translation request.
+    // The app-launch prewarm is minutes stale by the time hands-free starts.
+    void this.deps.translator
+      .prewarm({ apiKey: cfg.apiKey, model: cfg.translationModel })
+      .catch(() => { /* best-effort */ });
 
     const store = (this.deps.conversationStore ?? useConversationStore).getState();
     store.setMode('hf');
@@ -625,6 +705,7 @@ export class ConversationOrchestrator {
     this.hfSkipRequested = true;
     try { this.hfTurnAbort?.abort(); } catch { /* noop */ }
     this.hfTurnAbort = null;
+    this.cancelSpeculation();
 
     // 2. Stop VAD subscription.
     this.hfVadUnsub?.();
@@ -668,6 +749,7 @@ export class ConversationOrchestrator {
     this.hfPaused = true;
     this.setHfState('hf-idle');
     this.vadBuffer = new Int16Array(0);
+    this.cancelSpeculation();
     resetAudioLevel();
     (this.deps.conversationStore ?? useConversationStore).getState().setHfLive(null);
     this.deps.vad?.setActive(false);
@@ -724,7 +806,136 @@ export class ConversationOrchestrator {
     this.hfLiveSide = null;
     this.hfPartialText = '';
     this.hfPartialAt = 0;
+    this.hfSpecCount = 0;
+    this.cancelSpeculation();
     this.setHfState('hf-capturing');
+  }
+
+  /** Drop any translation started ahead of a turn. Safe to call at any time. */
+  private cancelSpeculation(): void {
+    const spec = this.hfSpec;
+    this.hfSpec = null;
+    if (!spec) return;
+    try { spec.abort.abort(); } catch { /* noop */ }
+  }
+
+  /**
+   * Send the translation now, on the transcript we already have, without
+   * waiting for the turn to be certain. See SpeculativeTranslation.
+   *
+   * Routing here may lean on weak evidence, unlike the commit shortcuts: this
+   * decision is reversible. If the utterance turns out to travel the other
+   * way, or to say something else, the result is discarded unread.
+   */
+  private startSpeculativeTranslation(text: string): void {
+    const cfg = this.config;
+    if (!cfg) return;
+    if (this.hfSpec !== null && sameUtterance(this.hfSpec.sourceText, text)) return;
+    if (this.hfSpecCount >= MAX_SPECULATIONS_PER_UTTERANCE) return;
+
+    // Speaker alternation is not evidence about THIS utterance, and the turn
+    // it would guess can change before the ending arrives. Never speculate on it.
+    const routing = this.routeUtterance(null, text);
+    if (!routing || routing.kind === 'fallback') return;
+
+    this.cancelSpeculation();
+    this.hfSpecCount++;
+
+    const spec: SpeculativeTranslation = {
+      sourceText: text,
+      sourceLang: routing.sourceLang,
+      targetLang: routing.targetLang,
+      abort: new AbortController(),
+      startedAt: Date.now(),
+      firstTokenAt: null,
+      openedAt: null,
+      fullText: '',
+      sentences: [],
+      state: 'running',
+      error: null,
+      sink: null,
+    };
+    this.hfSpec = spec;
+    log.info(`[orch/hf] translating ahead of the ending (${routing.sourceLang}→${routing.targetLang})`);
+
+    // The target voice is knowable now too — warm it while the request flies.
+    this.deps.tts.prewarm(routing.targetLang);
+
+    void this.deps.translator
+      .translateStream({
+        signal: spec.abort.signal,
+        apiKey: cfg.apiKey,
+        sourceText: text,
+        sourceLang: routing.sourceLang,
+        targetLang: routing.targetLang,
+        model: cfg.translationModel,
+        onRequestOpen: () => {
+          if (spec.openedAt === null) spec.openedAt = Date.now();
+        },
+        onFirstToken: () => {
+          if (spec.firstTokenAt === null) spec.firstTokenAt = Date.now();
+          spec.sink?.onFirstToken(spec.firstTokenAt);
+        },
+        onDelta: (fullSoFar) => {
+          spec.fullText = fullSoFar;
+          spec.sink?.onDelta(fullSoFar);
+        },
+        onSentence: (sentence) => {
+          if (spec.sink) spec.sink.onSentence(sentence);
+          else spec.sentences.push(sentence);
+        },
+        onDone: (fullText) => {
+          spec.fullText = fullText;
+          spec.state = 'done';
+          spec.sink?.onDone(fullText);
+        },
+        onError: (err) => {
+          spec.state = 'error';
+          spec.error = err;
+          spec.sink?.onError(err);
+        },
+      })
+      .catch(() => {
+        spec.state = 'error';
+      });
+  }
+
+  /**
+   * Hand a speculation's stream to the turn that adopted it: replay whatever
+   * already arrived, then let the rest flow straight through. Resolves when
+   * the stream ends, so callers can await it exactly like a fresh one.
+   */
+  private adoptSpeculation(
+    spec: SpeculativeTranslation,
+    sink: TranslationSink,
+  ): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let finished = false;
+      const finish = (): void => {
+        if (finished) return;
+        finished = true;
+        resolve();
+      };
+      spec.sink = {
+        onFirstToken: sink.onFirstToken,
+        onDelta: sink.onDelta,
+        onSentence: sink.onSentence,
+        onDone: (fullText) => { sink.onDone(fullText); finish(); },
+        onError: (err) => { sink.onError(err); finish(); },
+      };
+
+      // Replay what landed before this turn existed to receive it.
+      if (spec.firstTokenAt !== null) sink.onFirstToken(spec.firstTokenAt);
+      if (spec.fullText.length > 0) sink.onDelta(spec.fullText);
+      const buffered = spec.sentences.splice(0, spec.sentences.length);
+      for (const sentence of buffered) sink.onSentence(sentence);
+
+      if (spec.state === 'done') { sink.onDone(spec.fullText); finish(); }
+      else if (spec.state === 'error') {
+        sink.onError(spec.error ?? new Error('Translation failed'));
+        finish();
+      }
+    });
   }
 
   /**
@@ -738,17 +949,26 @@ export class ConversationOrchestrator {
    * merely leaning towards goes the slow way and keeps its second opinion.
    */
   private settledTranscript(now: number): string | null {
+    return this.inspectTranscript(now).text;
+  }
+
+  /** The settled transcript, or why there isn't one. */
+  private inspectTranscript(now: number): { text: string | null; blocked: FastPathBlock } {
     const text = this.hfPartialText;
-    if (text.length < FAST_PATH_MIN_CHARS) return null;
-    if (now - this.hfPartialAt < PARTIAL_SETTLED_MS) return null;
+    if (text.length < FAST_PATH_MIN_CHARS) return { text: null, blocked: 'no-transcript' };
+    if (now - this.hfPartialAt < PARTIAL_SETTLED_MS) {
+      return { text: null, blocked: 'still-arriving' };
+    }
     const pairA = this.hfPairA;
     const pairB = this.hfPairB;
-    if (!pairA || !pairB) return null;
+    if (!pairA || !pairB) return { text: null, blocked: 'routing-unclear' };
     const a = primarySubtag(pairA);
     const b = primarySubtag(pairB);
-    if (a === b) return null;
-    if (classifyPairText(text, a, b)?.strength !== 'strong') return null;
-    return text;
+    if (a === b) return { text: null, blocked: 'routing-unclear' };
+    if (classifyPairText(text, a, b)?.strength !== 'strong') {
+      return { text: null, blocked: 'routing-unclear' };
+    }
+    return { text, blocked: 'none' };
   }
 
   /**
@@ -759,8 +979,18 @@ export class ConversationOrchestrator {
    */
   private handleHfSpeechPause(lastSpeechAt: number): void {
     if (!this.hfEnabled || this.hfPaused || this.hfState !== 'hf-capturing') return;
+    const now = Date.now();
+
+    // Whatever happens to the turn, the translation can start now. It is the
+    // longest link in the chain by a wide margin, so the silence still being
+    // waited out below is time it can spend in flight instead.
+    const stable = this.hfPartialText;
+    if (stable.length >= FAST_PATH_MIN_CHARS && now - this.hfPartialAt >= PARTIAL_SETTLED_MS) {
+      this.startSpeculativeTranslation(stable);
+    }
+
     if (!this.deps.voxtral.commitUtterance) return;
-    const settled = this.settledTranscript(Date.now());
+    const settled = this.settledTranscript(now);
     if (settled === null || !CLOSED_THOUGHT_RE.test(settled)) return;
     log.info('[orch/hf] early endpoint — transcript closed a sentence');
     // Cancel the hangover that would otherwise deliver a second ending.
@@ -786,7 +1016,9 @@ export class ConversationOrchestrator {
 
     const store0 = (this.deps.conversationStore ?? useConversationStore).getState();
     const commit = this.deps.voxtral.commitUtterance;
-    const settled = commit ? this.settledTranscript(vadEndAt) : null;
+    const inspected = this.inspectTranscript(vadEndAt);
+    const settled = commit ? inspected.text : null;
+    const fastPathBlock: FastPathBlock = commit ? inspected.blocked : 'no-transcript';
 
     let result: { text: string; language?: string };
     const flushSentAt = Date.now();
@@ -857,6 +1089,7 @@ export class ConversationOrchestrator {
       flushedAt,
       endpoint,
       transcriptSource: settled !== null ? 'settled-partial' : 'server-final',
+      fastPathBlock,
       routedLanguage: language ?? null,
       configuredPair: [pairA ?? '', pairB ?? ''],
       routingResult: routingKind,
@@ -969,6 +1202,7 @@ export class ConversationOrchestrator {
       flushedAt: number;
       endpoint: HfEndpoint;
       transcriptSource: 'settled-partial' | 'server-final';
+      fastPathBlock: FastPathBlock;
       routedLanguage: string | null;
       configuredPair: [string, string];
       routingResult: HfRoutingKind;
@@ -994,25 +1228,38 @@ export class ConversationOrchestrator {
     this.deps.tts.prewarm(targetLang);
     this.deps.vad?.setActive(false);
 
-    const abort = new AbortController();
+    // A translation may already be in flight from the pause hint. Adopt it
+    // only if it is a translation of THIS utterance, in THIS direction —
+    // otherwise it is a guess that missed, and it is discarded unread.
+    const spec = this.hfSpec;
+    this.hfSpec = null;
+    const adopted =
+      spec !== null &&
+      spec.state !== 'error' &&
+      spec.sourceLang === sourceLang &&
+      spec.targetLang === targetLang &&
+      sameUtterance(spec.sourceText, sourceText)
+        ? spec
+        : null;
+    if (spec !== null && adopted === null) {
+      log.info('[orch/hf] speculative translation discarded — the utterance changed');
+      try { spec.abort.abort(); } catch { /* noop */ }
+    }
+
+    const abort = adopted?.abort ?? new AbortController();
     this.hfTurnAbort = abort;
     this.hfSkipRequested = false;
     const listenerId: PersonId = speakerId === 'person_a' ? 'person_b' : 'person_a';
     const ttsPromises: Promise<void>[] = [];
     let firstTokenAt: number | null = null;
+    let requestOpenAt: number | null = null;
     let firstTtsStartAt: number | null = null;
     let firstAudioAt: number | null = null;
     let lastDeltaWriteAt = 0;
 
-    await this.deps.translator.translateStream({
-      signal: abort.signal,
-      apiKey: cfg.apiKey,
-      sourceText,
-      sourceLang,
-      targetLang,
-      model: cfg.translationModel,
-      onFirstToken: () => {
-        if (firstTokenAt === null) firstTokenAt = Date.now();
+    const sink: TranslationSink = {
+      onFirstToken: (at) => {
+        if (firstTokenAt === null) firstTokenAt = at;
         this.deps.tts.prewarm(targetLang);
       },
       onDelta: (fullSoFar) => {
@@ -1052,7 +1299,29 @@ export class ConversationOrchestrator {
         if (key) store.setNotice(speakerId, { key, kind: 'error' });
         probeNetworkNow();
       },
-    });
+    };
+
+    if (adopted !== null) {
+      requestOpenAt = adopted.openedAt;
+      await this.adoptSpeculation(adopted, sink);
+    } else {
+      await this.deps.translator.translateStream({
+        signal: abort.signal,
+        apiKey: cfg.apiKey,
+        sourceText,
+        sourceLang,
+        targetLang,
+        model: cfg.translationModel,
+        onRequestOpen: () => {
+          if (requestOpenAt === null) requestOpenAt = Date.now();
+        },
+        onFirstToken: () => sink.onFirstToken(Date.now()),
+        onDelta: sink.onDelta,
+        onSentence: sink.onSentence,
+        onDone: sink.onDone,
+        onError: sink.onError,
+      });
+    }
 
     await Promise.all(ttsPromises);
     this.hfTurnAbort = null;
@@ -1073,12 +1342,24 @@ export class ConversationOrchestrator {
       kind: 'hf_turn' as const,
       endpoint: telemetry.endpoint,
       transcript: telemetry.transcriptSource,
+      fastPathBlock: telemetry.fastPathBlock,
+      translation: adopted !== null ? 'speculative' : 'fresh',
+      // How much of the request flew before the turn was even certain.
+      translationLead: adopted !== null ? finalAt - adopted.startedAt : 0,
       // The number that matters: silence → first audible word.
       speechEndToAudio: since(firstAudioAt),
       endpointDelay: telemetry.vadEndAt - telemetry.speechEndAt,
       vadEndToFlush: telemetry.flushSentAt - telemetry.vadEndAt,
       flushToFinal: finalAt - telemetry.flushSentAt,
       finalToFirstToken: firstTokenAt !== null ? firstTokenAt - finalAt : -1,
+      // The two halves of the request's own cost: getting answered (connection,
+      // queue, prefill) versus the model writing. They need different fixes.
+      requestToOpen:
+        requestOpenAt !== null
+          ? requestOpenAt - (adopted?.startedAt ?? telemetry.flushedAt)
+          : -1,
+      openToFirstToken:
+        requestOpenAt !== null && firstTokenAt !== null ? firstTokenAt - requestOpenAt : -1,
       firstTokenToFirstTtsStart:
         firstTokenAt !== null && firstTtsStartAt !== null
           ? firstTtsStartAt - firstTokenAt
@@ -1163,6 +1444,7 @@ export class ConversationOrchestrator {
     // against a half-open or freshly-reconnected session.
     this.deps.vad?.setActive(false);
     this.vadBuffer = new Int16Array(0);
+    this.cancelSpeculation();
     (this.deps.conversationStore ?? useConversationStore).getState().setHfLive(null);
     this.setHfState('hf-idle');
 
