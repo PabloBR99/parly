@@ -21,6 +21,15 @@ jest.mock('react-native-safe-area-context', () => {
   };
 });
 
+jest.mock('@react-native-masked-view/masked-view', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  // The real component is a native ViewGroup; for the tree test all that
+  // matters is that children still render.
+  const MaskedView = ({ children, style }) => React.createElement(View, { style }, children);
+  return { __esModule: true, default: MaskedView };
+});
+
 jest.mock('react-native-linear-gradient', () => {
   const React = require('react');
   const { View } = require('react-native');

@@ -17,6 +17,7 @@ import { getLanguage } from '../../app/languages';
 import { noticeText, stringsFor } from '../../i18n/strings';
 import { stageMicrocopy } from './helpers';
 import {
+  FadeEdges,
   PTTButton,
   StateMorph,
   Text,
@@ -91,6 +92,9 @@ const HistoryLine = React.memo(function HistoryLine({
 
 /** Scroll slack (px) beyond which the reader counts as "away from live". */
 const DETACH_SLACK_PX = 56;
+/** Height of the history's dissolve at each end. Kept in step with the scroll
+ *  content's vertical padding — see FadeEdges for why they must match. */
+const FADE_EDGE_PX = 18;
 
 // ── SpeakerHalf ─────────────────────────────────────────────────────────────
 
@@ -288,6 +292,7 @@ export function SpeakerHalf({
       <View style={styles.sourceSlot}>{sourceNode}</View>
 
       <View style={[styles.big, feed.length > 0 && styles.bigWithText]}>
+        <FadeEdges height={FADE_EDGE_PX} style={styles.bigScroll}>
         <Animated.ScrollView
           ref={scrollRef}
           onScroll={scrollHandler}
@@ -351,6 +356,7 @@ export function SpeakerHalf({
             </Text>
           )}
         </Animated.ScrollView>
+        </FadeEdges>
         {detached && (
           <Pressable
             style={styles.jumpChip}
@@ -462,6 +468,10 @@ const styles = StyleSheet.create({
   bigScrollContent: {
     flexGrow: 1,
     justifyContent: 'flex-start',
+    // Must equal FADE_EDGE_PX: parks resting text clear of the fade bands, so
+    // only text on its way out of view ever dissolves.
+    paddingTop: FADE_EDGE_PX,
+    paddingBottom: FADE_EDGE_PX,
   },
   spacer: {
     flex: 1,

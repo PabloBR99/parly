@@ -85,14 +85,14 @@ hf-idle ─► hf-capturing ─► hf-flushing ─► hf-routing ─► hf-speak
 
 **No edges, anywhere.** This is a hard rule, not a preference. Nothing in the UI may show the boundary of its own box: no rectangle of tint, no scrim with a hard lip, no gradient that stops rather than dissolves. Against near-black, ~3 % of held light in a straight line is already enough to read as a line — which is how a dark overlay meant to be invisible ends up drawing the shape of its container. Two consequences that keep biting:
 
-- A veil that *darkens the background* can never be edge-free, because its boundary is a step in background brightness. Fading scrolled text needs a mask (fade the text), not a scrim (fade everything). Absent a mask, no fade at all is the better answer — a scroll region clipping its content is ordinary; a dark rectangle floating in the middle of the screen is not.
+- A veil that *darkens the background* can never be edge-free, because its boundary is a step in background brightness. Fading scrolled text needs a mask (set the text's own alpha, leave the background alone), not a scrim (darken everything). The history's ends use `FadeEdges`, a `MaskedView` wrapper; the scroll content is padded by the same amount as the fade bands, so resting text sits clear of them and only text on its way out of view ever dissolves.
 - Soft falloff is not enough on its own if the element can be clipped. An element must either dissolve completely *within* its container, or bleed past a boundary the user cannot see (the physical screen edge). Relying on `overflow: visible` to save an oversized child is not a plan.
 
 **Atmosphere is never idle:** when a hands-free turn crosses the seam, the horizon blooms once in the *receiving* reader's accent — peach downward, periwinkle upward — and drifts that way as it fades. It is a circular SVG radial gradient with a gaussian-like 10-stop falloff, squashed by a transform (elliptical gradients band visibly in `react-native-svg`), so alpha asymptotes to zero in every direction. It is sized so that its box at maximum spread still fits inside the screen — the rule above, applied: wherever the glow meets a boundary it is already fully transparent. And it is at zero the rest of the time: a glow that is always on is not atmosphere, it is a tint.
 
 **Discoverability without chrome:** first-run hints ("press and hold to speak", the hands-free label on the seam) are quiet, localized per half, and retire themselves permanently after first successful use.
 
-**Per-side history:** each half is a scroll feed in reading order — no gradient scrims at its ends, see the no-edges rule above — your own words in small serif, what the partner said (translated) in sans, the latest incoming message hero-sized with an adaptive type scale. Auto-scroll sticks to the newest message and detaches when the reader scrolls back; a `↓` chip jumps back to live.
+**Per-side history:** each half is a scroll feed in reading order — your own words in small serif, what the partner said (translated) in sans, the latest incoming message hero-sized with an adaptive type scale. Auto-scroll sticks to the newest message and detaches when the reader scrolls back; a `↓` chip jumps back to live.
 
 ## API-key onboarding
 

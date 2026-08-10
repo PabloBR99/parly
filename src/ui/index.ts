@@ -15,3 +15,4 @@ export { StateMorph } from './animations/StateMorph';
 export { DuskBackdrop } from './animations/DuskBackdrop';
 export { Bloom } from './animations/Bloom';
 export { SeamBloom } from './animations/SeamBloom';
+export { FadeEdges } from './primitives/FadeEdges';
