@@ -83,6 +83,8 @@ hf-idle ─► hf-capturing ─► hf-flushing ─► hf-routing ─► hf-speak
 
 **Felt rhythm:** haptics mark each stage transition (press → recording → transcribing → translating → first spoken token → done/error) so the user knows where the machine is without reading the screen. Status microcopy beside the state glyph says it in words (`escuchando` on the Spanish half, `聞いています` on the Japanese half).
 
+**Atmosphere is never idle:** when a hands-free turn crosses the seam, the horizon blooms once in the *receiving* reader's accent — peach downward, periwinkle upward — and drifts that way as it fades. It is a circular SVG radial gradient with a gaussian-like 10-stop falloff, squashed by a transform (an elliptical gradient banding is visible in `react-native-svg`), so alpha asymptotes to zero in every direction and there is no boundary to see. It is at zero the rest of the time: a glow that is always on is not atmosphere, it is a tint.
+
 **Discoverability without chrome:** first-run hints ("press and hold to speak", the hands-free label on the seam) are quiet, localized per half, and retire themselves permanently after first successful use.
 
 **Per-side history:** each half is a scroll feed in reading order — your own words in small serif, what the partner said (translated) in sans, the latest incoming message hero-sized with an adaptive type scale. Auto-scroll sticks to the newest message and detaches when the reader scrolls back; a `↓` chip jumps back to live.

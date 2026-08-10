@@ -23,7 +23,7 @@ import {
   space,
 } from '../ui';
 import type { SeamControlMode } from '../ui/primitives/SeamControl';
-import { SeamShimmer } from '../ui/animations/SeamShimmer';
+import { SeamBloom } from '../ui/animations/SeamBloom';
 import { SpeakerHalf } from './conversation/SpeakerHalf';
 import { NetworkPill } from './conversation/NetworkPill';
 import { findLastTurn, useTurnHaptics } from './conversation/helpers';
@@ -59,7 +59,7 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   const [hfFirstRun, setHfFirstRun] = useState(false);
   const [isHfPaused, setIsHfPaused] = useState(false);
 
-  // SeamShimmer directional pulse state.
+  // SeamBloom directional pulse state.
   const [seamPulseDir, setSeamPulseDir] = useState<0 | 1 | -1>(0);
   const prevHfSpeakerRef = useRef<PersonId | null>(null);
 
@@ -145,7 +145,7 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
     if (hfActiveSpeaker !== null && hfFirstRun) setHfFirstRun(false);
   }, [hfActiveSpeaker, hfFirstRun]);
 
-  // Derive SeamShimmer pulse direction from HF active speaker transitions.
+  // Derive SeamBloom pulse direction from HF active speaker transitions.
   useEffect(() => {
     const prev = prevHfSpeakerRef.current;
     const curr = hfActiveSpeaker;
@@ -306,8 +306,8 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
       <StatusBar barStyle="light-content" backgroundColor={color.bg} />
       <DuskBackdrop />
 
-      {/* SeamShimmer — directional pulse in HF mode. */}
-      {isHfActive && <SeamShimmer pulseDirection={seamPulseDir} />}
+      {/* SeamBloom — the horizon breathes in the direction the turn went. */}
+      {isHfActive && <SeamBloom pulseDirection={seamPulseDir} />}
 
       {/* TOP HALF — rotated 180deg so the partner sees everything upright. */}
       <View style={styles.half}>
