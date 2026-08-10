@@ -130,33 +130,33 @@ export const WAVE_SHAPE: Record<'escuchando' | 'traduciendo', WaveShape> = {
 
 // Bar geometry per resolved state.
 const BAR_HEIGHT: Record<Resolved, number> = {
-  reposo: 4,
+  reposo: 5,
   escuchando: 16,
   traduciendo: 13,
-  paused: 4,
+  paused: 5,
 };
 const BAR_COLOR: Record<Resolved, string> = {
-  reposo: 'rgba(255,255,255,0.40)',
+  // Off is quiet, but it must still be *there* — an empty pill reads as a bug,
+  // not as a resting control. These two are the only thing drawn when nothing
+  // is happening, so they carry the whole "this is a thing you can press".
+  reposo: 'rgba(255,255,255,0.52)',
   escuchando: 'rgba(255,255,255,0.95)',
   traduciendo: 'rgba(255,255,255,0.92)',
-  paused: 'rgba(255,255,255,0.28)',
+  paused: 'rgba(255,255,255,0.34)',
 };
 
 // ── Bars ─────────────────────────────────────────────────────────────────────
 
-/** The off / offline bar: flat, still, settling in on state change. */
+/**
+ * The off / offline bar: a still dot, always drawn.
+ *
+ * Deliberately a plain View with no animation and no shared value. An earlier
+ * pass had it scale up from 0 on mount, which meant a single missed animation
+ * left `scaleY: 0` — seven invisible bars and an empty pill. Nothing about a
+ * resting dot needs to animate, so nothing here can fail to.
+ */
 function StillBar({ height, color }: { height: number; color: string }): React.JSX.Element {
-  const v = useSharedValue(0);
-
-  useEffect(() => {
-    cancelAnimation(v);
-    v.value = withTiming(1, { duration: 220, easing: Easing.out(Easing.quad) });
-    return () => cancelAnimation(v);
-  }, [v]);
-
-  const style = useAnimatedStyle(() => ({ transform: [{ scaleY: v.value }] }));
-
-  return <Animated.View style={[styles.bar, { height, backgroundColor: color }, style]} />;
+  return <View style={[styles.bar, { height, backgroundColor: color }]} />;
 }
 
 interface WaveBarProps {

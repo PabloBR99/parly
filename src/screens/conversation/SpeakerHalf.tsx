@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { LayoutChangeEvent, TextStyle } from 'react-native';
+import type { TextStyle } from 'react-native';
 import { Pressable, StyleSheet, Text as RNText, View } from 'react-native';
 import Animated, {
   runOnJS,
@@ -10,7 +10,6 @@ import Animated, {
   withTiming,
   Easing,
 } from 'react-native-reanimated';
-import LinearGradient from 'react-native-linear-gradient';
 import type { SpeakerNotice, Turn, TurnStage } from '../../store/conversationStore';
 import { useConversationStore } from '../../store/conversationStore';
 import type { PersonId } from '../../app/types';
@@ -225,9 +224,6 @@ export function SpeakerHalf({
 
   // ── Scroll position: stick to the live end unless the reader wanders ─────
   const scrollRef = useAnimatedRef<Animated.ScrollView>();
-  const scrollY = useSharedValue(0);
-  const contentH = useSharedValue(0);
-  const viewH = useSharedValue(0);
   const detachedSV = useSharedValue(0);
   const stickRef = useRef(true);
   const [detached, setDetachedState] = useState(false);
@@ -238,7 +234,6 @@ export function SpeakerHalf({
 
   const scrollHandler = useAnimatedScrollHandler({
     onScroll: (e) => {
-      scrollY.value = e.contentOffset.y;
       const slack = e.contentSize.height - (e.contentOffset.y + e.layoutMeasurement.height);
       const isDetached = slack > DETACH_SLACK_PX;
       if (isDetached !== (detachedSV.value === 1)) {
@@ -247,8 +242,7 @@ export function SpeakerHalf({
       }
     },
   });
-  const onContentSizeChange = (_w: number, h: number) => {
-    contentH.value = h;
+  const onContentSizeChange = () => {
     // Streaming text grows the content every few frames; while the reader is
     // at (or near) the live end, keep them pinned there. A reader who has
     // scrolled up to consult history is never yanked — the ↓ chip waits.
@@ -256,21 +250,10 @@ export function SpeakerHalf({
       requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: false }));
     }
   };
-  const onScrollViewLayout = (e: LayoutChangeEvent) => { viewH.value = e.nativeEvent.layout.height; };
   const jumpToLatest = useCallback(() => {
     scrollRef.current?.scrollToEnd({ animated: true });
     setDetached(false);
   }, [scrollRef, setDetached]);
-
-  const topFadeStyle = useAnimatedStyle(() => {
-    if (contentH.value <= viewH.value + 1) return { opacity: 0 };
-    return { opacity: Math.min(1, scrollY.value / 16) };
-  });
-  const bottomFadeStyle = useAnimatedStyle(() => {
-    if (contentH.value <= viewH.value + 1) return { opacity: 0 };
-    const slack = contentH.value - (scrollY.value + viewH.value);
-    return { opacity: Math.min(1, Math.max(0, slack / 16)) };
-  });
 
   const stageForMorph: TurnStage | null = activeTurn?.stage ?? incomingStage ?? null;
   const showMorph = stageForMorph !== null && stageForMorph !== 'done';
@@ -309,7 +292,6 @@ export function SpeakerHalf({
           ref={scrollRef}
           onScroll={scrollHandler}
           onContentSizeChange={onContentSizeChange}
-          onLayout={onScrollViewLayout}
           scrollEventThrottle={16}
           style={styles.bigScroll}
           contentContainerStyle={styles.bigScrollContent}
@@ -369,18 +351,6 @@ export function SpeakerHalf({
             </Text>
           )}
         </Animated.ScrollView>
-        <Animated.View style={[styles.fadeTop, topFadeStyle]} pointerEvents="none">
-          <LinearGradient
-            colors={['rgba(0,0,0,0.55)', 'transparent']}
-            style={styles.fadeGradient}
-          />
-        </Animated.View>
-        <Animated.View style={[styles.fadeBottom, bottomFadeStyle]} pointerEvents="none">
-          <LinearGradient
-            colors={['transparent', 'rgba(0,0,0,0.55)']}
-            style={styles.fadeGradient}
-          />
-        </Animated.View>
         {detached && (
           <Pressable
             style={styles.jumpChip}
@@ -492,23 +462,6 @@ const styles = StyleSheet.create({
   bigScrollContent: {
     flexGrow: 1,
     justifyContent: 'flex-start',
-  },
-  fadeTop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 22,
-  },
-  fadeBottom: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 22,
-  },
-  fadeGradient: {
-    flex: 1,
   },
   spacer: {
     flex: 1,

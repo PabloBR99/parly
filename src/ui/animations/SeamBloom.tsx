@@ -43,21 +43,34 @@ import Animated, {
 import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { color } from '../theme';
 
-// Footprint as a multiple of screen width. Wide enough that the glow reads as
-// a horizon rather than a floating oval, tight enough that it is down to ~1.6 %
-// alpha by the time it reaches the phone's own edge — below the ~3 % that
-// Bloom.tsx found was "just enough to read as an edge" against near-black.
-// Vertically it is fully dissolved within ~80 pt of the seam.
-const FOOTPRINT = 1.45;
-/** Squashes the circle into something horizon-shaped. */
-const FLATTEN = 0.34;
-/** Peak alpha at the very centre. Everything else is the falloff curve. */
-const PEAK_ALPHA = 0.18;
-/** How far the bloom drifts toward the reader receiving the turn. */
-const DRIFT = 44;
-
 const RISE_MS = 200;
 const FALL_MS = 620;
+
+/** How far the bloom drifts toward the reader receiving the turn. */
+const DRIFT = 44;
+/** Squashes the circle into something horizon-shaped. */
+const FLATTEN = 0.5;
+/** Peak alpha at the very centre. Everything else is the falloff curve. */
+const PEAK_ALPHA = 0.24;
+/** The bloom expands slightly as it dissipates: 0.92 → this. */
+const SPREAD_MAX = 1.06;
+
+// Footprint as a multiple of screen width.
+//
+// This number is load-bearing, not taste. The gradient reaches zero alpha at
+// exactly half the SVG's box, so as long as that box — at its widest, which is
+// SPREAD_MAX — fits inside the screen, every pixel where the bloom meets a
+// container boundary is already fully transparent. There is then no clip that
+// could ever be visible, whatever a given Android version decides to do about
+// `overflow` on a child bigger than its parent.
+//
+//   size × SPREAD_MAX ≤ screen width   ⟹   FOOTPRINT ≤ 1 / 1.06 ≈ 0.943
+//
+// Vertically it has room to spare: half-height at max spread is ~97 pt plus
+// 44 pt of drift, against half a screen. The previous pass sized the bloom at
+// 1.45× the width, which put a live edge of the box off-screen and left the
+// glow's boundary at the mercy of whatever clipped first.
+const FOOTPRINT = 0.94;
 
 export interface SeamBloomProps {
   /** 0 = idle, 1 = the turn is flowing down to person A, -1 = up to person B. */
@@ -104,7 +117,7 @@ export function SeamBloom({ pulseDirection }: SeamBloomProps): React.JSX.Element
 
   const bloomStyle = useAnimatedStyle(() => {
     // Expanding slightly as it dissipates reads as air, not as a moving object.
-    const spread = 0.92 + 0.14 * travel.value;
+    const spread = 0.92 + (SPREAD_MAX - 0.92) * travel.value;
     return {
       opacity: progress.value,
       transform: [
@@ -120,8 +133,15 @@ export function SeamBloom({ pulseDirection }: SeamBloomProps): React.JSX.Element
 
   return (
     <View pointerEvents="none" style={styles.field}>
+      {/* Absolutely positioned and centred on the seam by margin. Nothing here
+          is content-sized, so no parent's box can be shrunk by the negative
+          margins into something that clips the glow. */}
       <Animated.View
-        style={[{ width: size, height: size, marginTop: -size / 2 }, bloomStyle]}>
+        style={[
+          styles.bloom,
+          { width: size, height: size, marginTop: -size / 2, marginLeft: -size / 2 },
+          bloomStyle,
+        ]}>
         <BloomCircle size={size} fill={tint} />
       </Animated.View>
     </View>
@@ -168,11 +188,15 @@ function BloomCircle({ size, fill }: { size: number; fill: string }): React.JSX.
 }
 
 const styles = StyleSheet.create({
+  // Exactly the screen — a fixed box with no content-driven height, so the
+  // bloom's own size can never change it.
   field: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'visible',
+  },
+  bloom: {
     position: 'absolute',
-    left: 0,
-    right: 0,
     top: '50%',
-    alignItems: 'center',
+    left: '50%',
   },
 });
