@@ -1,8 +1,11 @@
 /**
- * The default streaming fetcher's fallback discipline: the XHR retry
- * re-POSTs from byte zero, so it is only allowed when the fetch path
- * delivered NOTHING. Once bytes have flowed, sentences are already queued
- * into TTS — a replay would speak them twice.
+ * The default streaming fetcher's transport discipline.
+ *
+ * Two rules, and the second one was learned the hard way on a device: the XHR
+ * attempt re-POSTs from byte zero, so it is only allowed when the fetch path
+ * delivered NOTHING (a replay would speak queued sentences twice) — and it
+ * must never be reached by *asking* a fetch that cannot stream, because that
+ * question costs a whole completed translation before the real one begins.
  */
 
 jest.mock('react-native', () => ({
@@ -130,5 +133,79 @@ describe('defaultFetcher fallback discipline', () => {
     expect(xhr.constructed()).toBe(0);
     expect(errors).toHaveLength(1);
     expect(errors[0].message).toMatch(/cancelled/i);
+  });
+});
+
+describe('defaultFetcher transport choice', () => {
+  const originalFetch = global.fetch;
+  const originalXhr = (global as Record<string, unknown>).XMLHttpRequest;
+  const originalResponse = (global as Record<string, unknown>).Response;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    (global as Record<string, unknown>).XMLHttpRequest = originalXhr;
+    (global as Record<string, unknown>).Response = originalResponse;
+    jest.resetModules();
+  });
+
+  it('never calls a fetch that cannot stream — that question costs a whole translation', async () => {
+    const xhr = stubXhr();
+    // React Native's Response (whatwg-fetch) has no `body` at all. Asking it
+    // anyway means one complete request, discarded, ahead of the real one.
+    class BodylessResponse {}
+    (global as Record<string, unknown>).Response = BodylessResponse as unknown;
+    const fetchSpy = jest.fn();
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    jest.resetModules();
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { MistralTranslator: Fresh } = require('../MistralTranslator');
+    const t = new Fresh();
+    let done = false;
+    await t.translateStream({
+      apiKey: 'sk',
+      sourceText: 'algo',
+      sourceLang: 'es',
+      targetLang: 'en',
+      onSentence: () => {},
+      onDone: () => { done = true; },
+      onError: () => {},
+    });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(xhr.constructed()).toBe(1);
+    expect(done).toBe(true);
+  });
+
+  it('uses fetch when the runtime really can stream, and only once', async () => {
+    const xhr = stubXhr();
+    const read = jest.fn()
+      .mockResolvedValueOnce({ done: false, value: encoder.encode(sseChunk('Hello there, friend. ')) })
+      .mockResolvedValueOnce({ done: true, value: undefined });
+    const fetchSpy = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: { getReader: () => ({ read }) },
+    });
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    jest.resetModules();
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { MistralTranslator: Fresh } = require('../MistralTranslator');
+    const t = new Fresh();
+    const sentences: string[] = [];
+    await t.translateStream({
+      apiKey: 'sk',
+      sourceText: 'algo',
+      sourceLang: 'es',
+      targetLang: 'en',
+      onSentence: (s: string) => sentences.push(s),
+      onDone: () => {},
+      onError: () => {},
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(xhr.constructed()).toBe(0);
+    expect(sentences).toContain('Hello there, friend.');
   });
 });

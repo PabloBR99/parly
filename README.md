@@ -78,7 +78,7 @@ The full picture — state machines, echo gating, latency decisions, the UI desi
 ## Development
 
 ```bash
-npm test           # Jest — 203 tests
+npm test           # Jest — 205 tests
 npm run lint       # ESLint
 npx tsc --noEmit   # typecheck
 ```

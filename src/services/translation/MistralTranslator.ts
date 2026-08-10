@@ -21,13 +21,23 @@
 //   responses still work because the stream's tail flush always emits
 //   whatever's left.
 //
-// Why XHR fallback?
-//   `fetch().body.getReader()` works in RN 0.84 with Hermes, but we keep an
-//   XHR-based fallback in case it doesn't (e.g. older devices, polyfill
-//   issues). The XHR path uses `responseText` slicing — every readyState=3 or
-//   progress event yields the new bytes since last invocation.
+// Why XHR at all, and why the capability is checked before asking?
+//   React Native's `fetch` is the whatwg-fetch polyfill. It has no
+//   ReadableStream: `response.body` is undefined, and worse, the promise does
+//   not resolve until the WHOLE response has arrived. So "try fetch, fall back
+//   to XHR on failure" is a trap on device — the fetch succeeds, delivers a
+//   response that cannot be streamed, and the fallback then re-POSTs from byte
+//   zero. Every translation ran twice, in series: one full request finished and
+//   thrown away before the real streaming one could start. On a metered,
+//   user-owned API key, at ~400 ms of dead time in front of every reply.
+//   The question is now answered from the prototype, before any request.
+//   The XHR path streams via `responseText` slicing — every readyState=3 or
+//   progress event yields the new bytes since last invocation. React Native
+//   only delivers those incrementally when `onreadystatechange` or `onprogress`
+//   is set before `send()` (XMLHttpRequest.js), which is why it is wired first.
 
 import { getLanguage } from '../../app/languages';
+import { log } from '../log/logStore';
 
 const ENDPOINT = 'https://api.mistral.ai/v1/chat/completions';
 const DEFAULT_MODEL = 'mistral-small-latest';
@@ -166,7 +176,28 @@ interface StreamingFetcher {
   }): Promise<{ ok: boolean; status: number; errorBody?: string }>;
 }
 
-/** Default fetcher: tries fetch().body.getReader(), falls back to XHR. */
+/**
+ * Whether this runtime's fetch can hand back a body that streams. Asked once,
+ * of the prototype, before any request is made — discovering it by trying
+ * costs a whole duplicated translation (see the header note).
+ */
+let fetchStreams: boolean | null = null;
+function fetchCanStream(): boolean {
+  if (fetchStreams === null) {
+    try {
+      fetchStreams = typeof Response === 'function' && 'body' in Response.prototype;
+    } catch {
+      fetchStreams = false;
+    }
+    log.info(
+      `[translate] streaming transport: ${fetchStreams ? 'fetch' : 'xhr (fetch cannot stream here)'}`,
+    );
+  }
+  return fetchStreams;
+}
+
+/** Default fetcher: streams via fetch where the runtime supports it, XHR
+ *  otherwise. Never both for the same translation. */
 const defaultFetcher: StreamingFetcher = {
   async postStream({ url, headers, body, signal, onChunk, onOpen }) {
     // The XHR fallback re-POSTs the full request from byte zero. That is
@@ -179,40 +210,40 @@ const defaultFetcher: StreamingFetcher = {
       receivedAny = true;
       onChunk(c);
     };
-    // Try native fetch streaming first
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body,
-        signal,
-      });
-      // Headers are in: the connection is established, the request queued and
-      // prefilled. Everything after this point is the model writing.
-      onOpen?.();
-      if (!response.ok) {
-        const errBody = await response.text().catch(() => '');
-        return { ok: false, status: response.status, errorBody: errBody };
-      }
-      const reader = response.body?.getReader?.();
-      if (reader) {
-        const decoder = new TextDecoder();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) guarded(decoder.decode(value, { stream: true }));
+    // Try native fetch streaming first — only where it can actually stream.
+    if (fetchCanStream()) {
+      try {
+        const response = await fetch(url, { method: 'POST', headers, body, signal });
+        // Headers are in: the connection is established, the request queued
+        // and prefilled. Everything after this point is the model writing.
+        onOpen?.();
+        if (!response.ok) {
+          const errBody = await response.text().catch(() => '');
+          return { ok: false, status: response.status, errorBody: errBody };
         }
-        const tail = decoder.decode();
-        if (tail) guarded(tail);
-        return { ok: true, status: response.status };
+        const reader = response.body?.getReader?.();
+        if (reader) {
+          const decoder = new TextDecoder();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) guarded(decoder.decode(value, { stream: true }));
+          }
+          const tail = decoder.decode();
+          if (tail) guarded(tail);
+          return { ok: true, status: response.status };
+        }
+        // The capability check said this runtime streams, and this response
+        // does not. Drop it and take the XHR path for the rest of the session.
+        fetchStreams = false;
+        log.warn('[translate] fetch returned a non-streaming body — switching to XHR');
+        response.body?.cancel?.().catch(() => {});
+      } catch (e) {
+        if ((e as { name?: string })?.name === 'AbortError') throw e;
+        if (receivedAny) throw e;
+        // Zero bytes delivered — the request failed before the response
+        // started. The XHR attempt below is duplicate-free.
       }
-      // No reader available — fall through to XHR. Drop this response.
-      response.body?.cancel?.().catch(() => {});
-    } catch (e) {
-      if ((e as { name?: string })?.name === 'AbortError') throw e;
-      if (receivedAny) throw e;
-      // Zero bytes delivered — fetch/streaming unsupported or failed before
-      // the response started. The XHR retry below is duplicate-free.
     }
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
