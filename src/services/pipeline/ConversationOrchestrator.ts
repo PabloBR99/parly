@@ -321,6 +321,7 @@ class TranslationRun {
   private readonly buffered: string[] = [];
   private sink: TranslationSink | null = null;
   private finish: (() => void) | null = null;
+  private settleWaiters: Array<() => void> = [];
 
   constructor(
     readonly sourceText: string,
@@ -359,12 +360,42 @@ class TranslationRun {
     this.state = 'done';
     this.sink?.onDone(fullText);
     this.finish?.();
+    this.markSettled();
   }
   noteError(err: Error): void {
     this.state = 'error';
     this.error = err;
     this.sink?.onError(err);
     this.finish?.();
+    this.markSettled();
+  }
+
+  private markSettled(): void {
+    for (const w of this.settleWaiters.splice(0, this.settleWaiters.length)) w();
+  }
+
+  /** Resolves when the stream has ended, whether or not a turn is listening.
+   *  Lets a caller read the result before deciding to show it to anyone. */
+  settled(): Promise<void> {
+    if (this.state !== 'running') return Promise.resolve();
+    return new Promise<void>((resolve) => { this.settleWaiters.push(resolve); });
+  }
+
+  /**
+   * The model handed back its own input.
+   *
+   * A translation that equals its source is not a translation: it is what
+   * comes out when a language is translated into itself, which is what asking
+   * in the wrong direction looks like from the outside — the speaker hears the
+   * app parrot them. Compared with punctuation, case and accents folded away,
+   * because a parrot that capitalises is still a parrot.
+   *
+   * Some words genuinely survive translation ("Madrid", "hotel", "OK"), so
+   * this is evidence that the direction was wrong, not proof — the caller
+   * checks the other direction before believing it.
+   */
+  returnedItsInput(sourceText: string): boolean {
+    return this.fullText.trim().length > 0 && sameUtterance(this.fullText, sourceText);
   }
 
   /**
@@ -1551,6 +1582,80 @@ export class ConversationOrchestrator {
     return { speakerId: 'person_a', sourceLang: pairA, targetLang: pairB, kind: 'fallback' };
   }
 
+  /**
+   * Whether the direction was decided WITHOUT reading the transcript.
+   *
+   * 'text' and 'text-override' read the very words about to be translated, and
+   * are trusted. The other two are not evidence about this utterance: 'matched'
+   * takes the audio tag's word for it, and that tag is the thing that has been
+   * observed calling Spanish English; 'fallback' had nothing at all and
+   * alternated. Those are the directions worth checking.
+   */
+  private directionWasGuessed(kind: HfRoutingKind): boolean {
+    return kind === 'fallback' || kind === 'matched';
+  }
+
+  /**
+   * Ask the translation whether the direction was right, before anyone sees or
+   * hears it.
+   *
+   * A guessed direction fails in one specific, humiliating way: asked to
+   * translate a language into itself, the model returns the sentence unchanged
+   * and the app reads the speaker their own words back. It is the failure the
+   * routing rewrite was built to prevent, and it survives in exactly the case
+   * routing has no evidence for — a short utterance the lexicon cannot place,
+   * on a device where the audio tag never arrives. "Genial." came back
+   * "Genial."
+   *
+   * So the guess is run first and read before it is shown. If it returned its
+   * own input, the other direction is tried; whichever produced a real
+   * translation is the one the turn uses. If BOTH come back unchanged the word
+   * genuinely survives translation ("Madrid", "hotel", "OK") and the original
+   * stands — two requests is the cap, and only on a direction nobody had
+   * evidence for.
+   *
+   * The cost is that these turns do not stream to the screen while they run.
+   * That is affordable precisely because it is the ambiguous ones that get
+   * here: a transcript the lexicon cannot place is a handful of words, and its
+   * translation arrives whole.
+   */
+  private async confirmDirection(
+    u: Utterance,
+    guess: TranslationRun,
+    sourceText: string,
+    dir: { speakerId: PersonId; sourceLang: string; targetLang: string },
+  ): Promise<{
+    run: TranslationRun;
+    dir: { speakerId: PersonId; sourceLang: string; targetLang: string };
+    flipped: boolean;
+  } | null> {
+    await guess.settled();
+    if (!this.hfEnabled || u.run !== guess) return null;
+    if (!guess.returnedItsInput(sourceText)) return { run: guess, dir, flipped: false };
+
+    const other: typeof dir = {
+      speakerId: dir.speakerId === 'person_a' ? 'person_b' : 'person_a',
+      sourceLang: dir.targetLang,
+      targetLang: dir.sourceLang,
+    };
+    log.warn(
+      `[orch/hf] ${dir.sourceLang}→${dir.targetLang} returned its own input — ` +
+      `trying ${other.sourceLang}→${other.targetLang} for "${sourceText.slice(0, 30)}"`,
+    );
+    const retry = this.startTranslation(u, sourceText, other.sourceLang, other.targetLang);
+    if (!retry) return { run: guess, dir, flipped: false };
+    await retry.settled();
+    if (!this.hfEnabled || u.run !== retry) return null;
+
+    // Unchanged both ways: the word is the same in both languages, and the
+    // direction we guessed is as good as the one we tried.
+    if (retry.returnedItsInput(sourceText)) {
+      log.info('[orch/hf] unchanged in both directions — the word survives translation');
+      return { run: retry, dir, flipped: false };
+    }
+    return { run: retry, dir: other, flipped: true };
+  }
+
   private async dispatchHfTurn(
     u: Utterance,
     speakerId: PersonId,
@@ -1579,21 +1684,8 @@ export class ConversationOrchestrator {
     const cfg = this.config;
     if (!cfg) return;
 
-    const id = turnId();
     const store = this.store.getState();
-    store.startTurn({
-      id,
-      speakerId,
-      sourceLang,
-      targetLang,
-      sourceText,
-      translatedText: '',
-      stage: 'translating',
-      startedAt: Date.now(),
-    });
-
     this.setHfState('hf-speaking');
-    this.deps.tts.prewarm(targetLang);
     this.deps.vad?.setActive(false);
 
     // A translation may already be in flight from the pause hint. Keep it only
@@ -1607,10 +1699,35 @@ export class ConversationOrchestrator {
     }
     // One path from here: either the run that was already flying, or one sent
     // now. A turn attaches to it the same way in both cases.
-    const run = speculative
+    let run = speculative
       ? guess
       : this.startTranslation(u, sourceText, sourceLang, targetLang);
     if (!run) return;
+
+    let dir = { speakerId, sourceLang, targetLang };
+    let flipped = false;
+    if (!speculative && this.directionWasGuessed(telemetry.routingResult)) {
+      const settled = await this.confirmDirection(u, run, sourceText, dir);
+      if (settled === null) return;
+      run = settled.run;
+      dir = settled.dir;
+      flipped = settled.flipped;
+    }
+    ({ speakerId, sourceLang, targetLang } = dir);
+    if (flipped) store.setHfActiveSpeaker(speakerId);
+
+    const id = turnId();
+    store.startTurn({
+      id,
+      speakerId,
+      sourceLang,
+      targetLang,
+      sourceText,
+      translatedText: '',
+      stage: 'translating',
+      startedAt: Date.now(),
+    });
+    this.deps.tts.prewarm(targetLang);
 
     const abort = run.abort;
     this.hfTurnAbort = abort;
@@ -1693,6 +1810,12 @@ export class ConversationOrchestrator {
       earlyClose: telemetry.earlyClose,
       earlyCloseMs: telemetry.earlyCloseMs,
       untaggedStreak: telemetry.untaggedStreak,
+      // Whether a guessed direction was checked, and whether checking changed
+      // it. 'kept' is the check running and finding nothing wrong, which must
+      // not look like the check never running at all.
+      direction: !this.directionWasGuessed(telemetry.routingResult)
+        ? 'from-transcript'
+        : flipped ? 'flipped' : 'kept',
       translation: speculative ? 'speculative' : 'fresh',
       // How much of the request flew before the turn was even certain.
       translationLead: speculative ? finalAt - run.startedAt : 0,

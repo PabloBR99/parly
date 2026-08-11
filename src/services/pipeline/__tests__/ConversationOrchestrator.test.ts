@@ -1666,6 +1666,10 @@ describe('ConversationOrchestrator (waiting for evidence, not for clocks)', () =
     m.fireVoxtralPartial('Hola.', 'es');
     await settle();
     m.fireVadEnd();
+    // The turn happens without the server's transcript. It is not synchronous
+    // any more: routing took the tag's word for it rather than the text's, and
+    // that is a direction the translation gets to confirm before it is spoken.
+    await new Promise<void>(r => setTimeout(r, 50));
     expect(useConversationStore.getState().turns.length).toBeGreaterThan(before);
     await new Promise<void>(r => setTimeout(r, 350));
 
@@ -1850,5 +1854,122 @@ describe('ConversationOrchestrator (asking for the transcript, not waiting for i
     // next sentence's time to audio. (Warming the voice being spoken *now*,
     // which is what the calls during the turn are, stays as it was.)
     expect(m.tts.prewarm).not.toHaveBeenCalledWith('es');
+  });
+});
+
+// ── A translation that comes back as its own input ───────────────────────────
+//
+// Reported from a device: the speaker said "Genial." and the app read
+// "Genial." back to them. The chain is fully determined — 'genial' is in
+// neither lexicon (it is an English word too), the audio tag was absent on
+// every turn of that session, so routing had no evidence at all and alternated
+// from the last turn. The speaker had been talking alone, so alternation chose
+// the other half, asked for en→es, and the model returned the word unchanged.
+//
+// Routing cannot fix this: there IS no textual evidence in a one-word
+// homograph. But the translation itself is evidence, and it arrives before
+// anyone has to hear it.
+
+describe('ConversationOrchestrator (a direction nobody had evidence for)', () => {
+  /** Answer each request from a table keyed "sourceText|source>target". A
+   *  missing entry means the model handed the input straight back, which is
+   *  what asking for a language to be translated into itself produces. */
+  function makeOrchestrator(replies: Record<string, string>) {
+    const m = makeMocks();
+    const o = new ConversationOrchestrator(m);
+    o.configure({ apiKey: 'sk-test', translationModel: 'mistral-small-latest' });
+    const asked: string[] = [];
+    m.translator.translateStream.mockImplementation(async (args: TranslateArgs) => {
+      const dir = `${args.sourceLang}>${args.targetLang}`;
+      asked.push(dir);
+      const text = replies[`${args.sourceText}|${dir}`] ?? args.sourceText;
+      args.onFirstToken?.();
+      args.onDelta?.(text);
+      args.onSentence(text);
+      args.onDone(text);
+    });
+    return { m, o, asked };
+  }
+
+  const settle = () => new Promise<void>(r => setTimeout(r, 200));
+  /** Long enough to clear the 250 ms cooldown, or the next speech_start lands
+   *  while the machine is still gated and the utterance is dropped. */
+  const turnDone = () => new Promise<void>(r => setTimeout(r, 400));
+
+  /** One utterance ending on silence, with no audio tag — as observed. */
+  async function say(m: ReturnType<typeof makeMocks>, text: string) {
+    m.fireVadStart();
+    m.fireVoxtralPartial(text);
+    await settle();
+    m.fireVadEnd();
+    await Promise.resolve();
+    m.resolveFlush(text);
+    await turnDone();
+  }
+
+  const OPENER = 'Buenos días, ¿qué tal estás?';
+
+  it('never speaks a translation that is its own input', async () => {
+    const { m, o, asked } = makeOrchestrator({
+      [`${OPENER}|es>en`]: 'Good morning, how are you?',
+      'Genial.|es>en': 'Great.',
+      // 'Genial.|en>es' is absent: asked that way the word comes back as-is.
+    });
+    await o.enableHandsFree('es', 'en');
+
+    // One Spanish turn first, so blind alternation points at the OTHER half —
+    // the state the reported session was in after several turns from one
+    // speaker.
+    await say(m, OPENER);
+    const askedBefore = asked.length;
+    m.ttsCalls.length = 0;
+
+    await say(m, 'Genial.');
+
+    // Alternation guessed en→es, the model handed the word back, and the other
+    // direction was tried before anything was spoken.
+    expect(asked.slice(askedBefore)).toEqual(['en>es', 'es>en']);
+    expect(m.ttsCalls).toEqual([{ text: 'Great.', language: 'en' }]);
+
+    // The turn landed on the speaker's own half, in the direction that worked.
+    const turn = useConversationStore.getState().turns.at(-1);
+    expect(turn?.speakerId).toBe('person_a');
+    expect(turn?.sourceLang).toBe('es');
+    expect(turn?.targetLang).toBe('en');
+    expect(turn?.translatedText).toBe('Great.');
+  });
+
+  it('leaves a word that survives translation alone, at a cost of one retry', async () => {
+    const { m, o, asked } = makeOrchestrator({
+      [`${OPENER}|es>en`]: 'Good morning, how are you?',
+      // "Madrid" is "Madrid" whichever way it is asked — no entry either way.
+    });
+    await o.enableHandsFree('es', 'en');
+
+    await say(m, OPENER);
+    const askedBefore = asked.length;
+    m.ttsCalls.length = 0;
+
+    await say(m, 'Madrid.');
+
+    // Two requests and no more: the check does not loop looking for a
+    // difference that does not exist, and the guessed direction stands.
+    expect(asked.slice(askedBefore)).toEqual(['en>es', 'es>en']);
+    expect(m.ttsCalls).toEqual([{ text: 'Madrid.', language: 'es' }]);
+    expect(useConversationStore.getState().turns.at(-1)?.stage).toBe('done');
+  });
+
+  it('does not second-guess a direction the transcript itself chose', async () => {
+    const { m, o, asked } = makeOrchestrator({
+      [`${OPENER}|es>en`]: 'Good morning, how are you?',
+    });
+    await o.enableHandsFree('es', 'en');
+
+    // Unmistakably Spanish: routing read the words, so the direction is not a
+    // guess and the translation is streamed rather than inspected first.
+    await say(m, OPENER);
+
+    expect(asked).toEqual(['es>en']);
+    expect(m.ttsCalls).toEqual([{ text: 'Good morning, how are you?', language: 'en' }]);
   });
 });
