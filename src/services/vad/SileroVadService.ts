@@ -142,11 +142,30 @@ export class SileroVadService {
   async initialize(): Promise<void> {
     if (this.initialized) return;
     try {
+      log.info('[vad] initializing — resolving model path');
       const modelPath = await resolveModelPath('silero_vad.onnx');
-      this.session = await this.sessionFactory(modelPath);
+
+      // Creating the ONNX session is the one step here that runs native code
+      // we cannot supervise: if it takes the process down, no JS catch sees it
+      // and no log line follows. Claim the attempt on disk first, so the next
+      // launch can tell "the model failed" from "the model never came back".
+      if (await claimModelLoad()) {
+        log.info('[vad] creating ONNX session');
+        this.session = await this.sessionFactory(modelPath);
+        await clearModelLoadClaim();
+        log.info('[vad] Silero model loaded');
+      } else {
+        this.session = null;
+        log.warn(
+          '[vad] skipping the ONNX model — a previous load never returned, ' +
+          'so hands-free is running on energy detection alone',
+        );
+      }
       this.initialized = true;
-      log.info('[vad] Silero model loaded');
     } catch (e) {
+      // A throw is a clean failure: the model load returned, it just failed.
+      // Release the claim so the next launch still gets to try.
+      await clearModelLoadClaim();
       const err = e instanceof Error ? e : new Error(String(e));
       log.error('[vad] initialization failed', err);
       throw err;
@@ -159,7 +178,10 @@ export class SileroVadService {
    * prevent concurrent ONNX calls (which would corrupt state tensors).
    */
   feedFrame(pcmInt16: Int16Array): void {
-    if (!this.initialized || !this.session || !this.active) return;
+    // No session is not the same as no VAD: the energy path below needs no
+    // model, and on hardware where the model returns near-zero for real speech
+    // it is already the thing taking every turn.
+    if (!this.initialized || !this.active) return;
     if (pcmInt16.length !== VAD_FRAME_SAMPLES) return;
 
     this.inferenceQueue.push(new Int16Array(pcmInt16)); // copy to own buffer
@@ -246,7 +268,6 @@ export class SileroVadService {
   }
 
   private async runFrame(pcmInt16: Int16Array): Promise<void> {
-    if (!this.session) return;
     try {
       // Normalise Int16 → Float32 in [-1, 1].
       const input = new Float32Array(VAD_FRAME_SAMPLES);
@@ -262,20 +283,25 @@ export class SileroVadService {
       if (frameMaxAbs > this.maxAmpWindow) this.maxAmpWindow = frameMaxAbs;
       if (frameRms > this.maxRmsWindow) this.maxRmsWindow = frameRms;
 
-      const ort = getOrt();
-      const feeds: Record<string, OrtTensor> = {
-        input: new ort.Tensor('float32', input, [1, VAD_FRAME_SAMPLES]),
-        state: new ort.Tensor('float32', new Float32Array(this.state), STATE_DIMS),
-        sr: new ort.Tensor('int64', SR_DATA, [1]),
-      };
+      // Without a model there is no probability to have — 0 lets the energy
+      // threshold in processProbability() decide on its own.
+      let prob = 0;
+      if (this.session) {
+        const ort = getOrt();
+        const feeds: Record<string, OrtTensor> = {
+          input: new ort.Tensor('float32', input, [1, VAD_FRAME_SAMPLES]),
+          state: new ort.Tensor('float32', new Float32Array(this.state), STATE_DIMS),
+          sr: new ort.Tensor('int64', SR_DATA, [1]),
+        };
 
-      const results = await this.session.run(feeds);
+        const results = await this.session.run(feeds);
 
-      const prob = (results['output'].data as Float32Array)[0];
-      // Copy stateN into a JS-owned buffer so subsequent session.run() calls
-      // cannot corrupt the reference via native buffer reuse.
-      const stateNRaw = results['stateN'].data as Float32Array;
-      this.state = new Float32Array(stateNRaw);
+        prob = (results['output'].data as Float32Array)[0];
+        // Copy stateN into a JS-owned buffer so subsequent session.run() calls
+        // cannot corrupt the reference via native buffer reuse.
+        const stateNRaw = results['stateN'].data as Float32Array;
+        this.state = new Float32Array(stateNRaw);
+      }
 
       this.processProbability(prob, frameRms);
     } catch (e) {
@@ -370,28 +396,110 @@ async function defaultOrtSessionFactory(modelPath: string): Promise<OrtSession> 
   return ort.InferenceSession.create(modelPath);
 }
 
+interface Fs {
+  DocumentDirectoryPath: string;
+  MainBundlePath: string;
+  exists: (path: string) => Promise<boolean>;
+  copyFileAssets: (src: string, dest: string) => Promise<void>;
+  copyFile: (src: string, dest: string) => Promise<void>;
+  moveFile?: (src: string, dest: string) => Promise<void>;
+  unlink?: (path: string) => Promise<void>;
+  stat?: (path: string) => Promise<{ size: number | string }>;
+  writeFile?: (path: string, contents: string, encoding: string) => Promise<void>;
+}
+
+function fs(): Fs {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require('@dr.pogodin/react-native-fs') as Fs;
+}
+
+/** The real model is ≈2 MB. Anything dramatically smaller is not a model — it
+ *  is the wreckage of a copy that was interrupted partway. */
+const MIN_MODEL_BYTES = 500_000;
+
 async function resolveModelPath(assetName: string): Promise<string> {
   // On Android, bundle assets cannot be opened directly by ONNX Runtime — we
   // copy them to the document directory on first launch.
   // On iOS, the model is in the main bundle and can be referenced directly.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const RNFS = require('@dr.pogodin/react-native-fs') as {
-    DocumentDirectoryPath: string;
-    MainBundlePath: string;
-    exists: (path: string) => Promise<boolean>;
-    copyFileAssets: (src: string, dest: string) => Promise<void>;
-    copyFile: (src: string, dest: string) => Promise<void>;
-  };
+  const RNFS = fs();
 
   if (Platform.OS === 'ios') {
     return `${RNFS.MainBundlePath}/${assetName}`;
   }
 
   const destPath = `${RNFS.DocumentDirectoryPath}/${assetName}`;
-  const exists = await RNFS.exists(destPath);
-  if (!exists) {
+  if (await modelLooksUsable(RNFS, destPath)) return destPath;
+
+  // copyFileAssets writes straight to its destination, so a copy interrupted
+  // by a kill or a full disk leaves a truncated file that every later launch
+  // accepts on sight — handing ONNX Runtime a malformed model forever. Land it
+  // on a scratch path and rename, which is atomic on the same filesystem.
+  const tmpPath = `${destPath}.part`;
+  try { await RNFS.unlink?.(tmpPath); } catch { /* nothing to clean up */ }
+  if (RNFS.moveFile) {
+    await RNFS.copyFileAssets(assetName, tmpPath);
+    try { await RNFS.unlink?.(destPath); } catch { /* first run */ }
+    await RNFS.moveFile(tmpPath, destPath);
+  } else {
     await RNFS.copyFileAssets(assetName, destPath);
-    log.info(`[vad] model copied to ${destPath}`);
   }
+  log.info(`[vad] model copied to ${destPath}`);
   return destPath;
+}
+
+/** Present, and big enough to be the real thing. A `stat` we can't run leaves
+ *  us with existence alone — which is what this check used to be. */
+async function modelLooksUsable(RNFS: Fs, path: string): Promise<boolean> {
+  if (!(await RNFS.exists(path))) return false;
+  if (!RNFS.stat) return true;
+  try {
+    const size = Number((await RNFS.stat(path)).size);
+    if (Number.isFinite(size) && size < MIN_MODEL_BYTES) {
+      log.warn(`[vad] model on disk is ${size} bytes — truncated, re-copying`);
+      return false;
+    }
+  } catch {
+    return true; // stat unavailable at runtime — trust the existence check
+  }
+  return true;
+}
+
+// ── Crash-loop guard ─────────────────────────────────────────────────────────
+//
+// Creating the ONNX session runs native code. When that native code takes the
+// process down there is no exception to catch and no log line to find — the
+// app simply restarts, and since turning hands-free on is what triggers it,
+// the next attempt does exactly the same thing.
+//
+// So the attempt is claimed on disk before it starts and released when it
+// returns, failure included. A claim still standing at the next launch can
+// only mean the load never returned at all, and this run skips the model —
+// hands-free then runs on the energy detector, which needs no model. A crash
+// costs the model, not the app.
+//
+// Deliberately one-strike and sticky: only a load that actually succeeds
+// clears the claim. Retrying a load that has already killed the process once
+// is how a crash loop starts, and the degraded mode is a working app.
+
+const LOAD_CLAIM = 'silero_vad.loading';
+
+/** True if this run should attempt the load. */
+async function claimModelLoad(): Promise<boolean> {
+  try {
+    const RNFS = fs();
+    const claim = `${RNFS.DocumentDirectoryPath}/${LOAD_CLAIM}`;
+    if (await RNFS.exists(claim)) return false;
+    await RNFS.writeFile?.(claim, String(Date.now()), 'utf8');
+  } catch {
+    // No filesystem, no guard — attempt the load, as every run did before
+    // this existed. The guard must never be the reason the model is skipped.
+  }
+  return true;
+}
+
+async function clearModelLoadClaim(): Promise<void> {
+  try {
+    const RNFS = fs();
+    await RNFS.unlink?.(`${RNFS.DocumentDirectoryPath}/${LOAD_CLAIM}`);
+  } catch { /* never claimed, or already gone */ }
 }

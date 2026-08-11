@@ -15,13 +15,43 @@ jest.mock('onnxruntime-react-native', () => ({
   Tensor: jest.fn().mockImplementation((type, data, dims) => ({ type, data, dims })),
 }), { virtual: true });
 
+// A real enough filesystem to exercise the model copy and the crash-loop
+// claim: both care about which specific paths exist and how big they are, and
+// an `exists` that says yes to everything would have the service permanently
+// convinced a load was already in flight.
+const mockFsFiles = new Map<string, number>();
+
 jest.mock('@dr.pogodin/react-native-fs', () => ({
-  DocumentDirectoryPath: '/data/user/0/com.parly/files',
+  DocumentDirectoryPath: '/docs',
   MainBundlePath: '/bundle',
-  exists: jest.fn().mockResolvedValue(true),
-  copyFileAssets: jest.fn().mockResolvedValue(undefined),
+  exists: jest.fn(async (p: string) => mockFsFiles.has(p)),
+  stat: jest.fn(async (p: string) => {
+    const size = mockFsFiles.get(p);
+    if (size === undefined) throw new Error(`ENOENT: ${p}`);
+    return { size };
+  }),
+  copyFileAssets: jest.fn(async (_src: string, dest: string) => {
+    mockFsFiles.set(dest, mockModelBytes);
+  }),
   copyFile: jest.fn().mockResolvedValue(undefined),
+  moveFile: jest.fn(async (src: string, dest: string) => {
+    mockFsFiles.set(dest, mockFsFiles.get(src) ?? 0);
+    mockFsFiles.delete(src);
+  }),
+  unlink: jest.fn(async (p: string) => { mockFsFiles.delete(p); }),
+  writeFile: jest.fn(async (p: string, contents: string) => {
+    mockFsFiles.set(p, contents.length);
+  }),
 }), { virtual: true });
+
+const MODEL_PATH = '/docs/silero_vad.onnx';
+const CLAIM_PATH = '/docs/silero_vad.loading';
+const mockModelBytes = 2_000_000;
+
+beforeEach(() => {
+  mockFsFiles.clear();
+  mockFsFiles.set(MODEL_PATH, mockModelBytes);
+});
 
 import { SileroVadService, VAD_FRAME_SAMPLES, type OrtSession, type OrtTensor } from '../SileroVadService';
 
@@ -415,5 +445,82 @@ describe('SileroVadService — resuming after a pause hint', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+// ── Surviving the model ──────────────────────────────────────────────────────
+//
+// Reported from a device: turning hands-free on closed the app, relaunch,
+// turn it on, closed again. The log ended at "[orch/hf] enabling" every time —
+// the stretch that follows is 60 ms of JS on a good day, and it hands off to
+// native code that can end the process without raising anything catchable.
+// Creating the ONNX session is the one step in it that runs a model loader, so
+// it now announces itself on disk before it starts.
+
+describe('SileroVadService — when the model load is what kills the process', () => {
+  it('claims the attempt on disk before handing the path to ONNX', async () => {
+    let claimedDuringLoad = false;
+    const factory = jest.fn().mockImplementation(async () => {
+      claimedDuringLoad = mockFsFiles.has(CLAIM_PATH);
+      return makeOrtSession([]);
+    });
+
+    await new SileroVadService({}, factory).initialize();
+
+    expect(claimedDuringLoad).toBe(true);
+  });
+
+  it('clears the claim once the model actually loads', async () => {
+    await new SileroVadService({}, makeSessionFactory(makeOrtSession([]))).initialize();
+
+    expect(mockFsFiles.has(CLAIM_PATH)).toBe(false);
+  });
+
+  it('releases the claim when the load fails cleanly, so the next run retries', async () => {
+    const factory = jest.fn().mockRejectedValue(new Error('bad model'));
+
+    await expect(new SileroVadService({}, factory).initialize()).rejects.toThrow('bad model');
+
+    // A throw means the loader came back. That is a failure, not a killing —
+    // nothing about it says the next attempt would take the process down.
+    expect(mockFsFiles.has(CLAIM_PATH)).toBe(false);
+  });
+
+  it('skips the model when a claim from a previous run is still standing', async () => {
+    mockFsFiles.set(CLAIM_PATH, 13); // the run that never came back
+    const factory = makeSessionFactory(makeOrtSession([0.9]));
+
+    await new SileroVadService({}, factory).initialize();
+
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it('still hears speech with no model at all, on energy alone', async () => {
+    mockFsFiles.set(CLAIM_PATH, 13);
+    const factory = makeSessionFactory(makeOrtSession([]));
+    // A threshold no probability can reach: only the energy path can fire this.
+    const svc = new SileroVadService({ speechProbThreshold: 1.1 }, factory);
+    await svc.initialize();
+
+    const starts: number[] = [];
+    svc.subscribe(() => starts.push(1), () => {});
+
+    svc.feedFrame(voice());
+    await new Promise<void>(r => setTimeout(r, 50));
+
+    expect(factory).not.toHaveBeenCalled();
+    expect(starts).toHaveLength(1);
+  });
+
+  it('re-copies a truncated model rather than handing ONNX the wreckage', async () => {
+    // What an interrupted copyFileAssets leaves behind — and what the old
+    // existence-only check accepted on every launch from then on.
+    mockFsFiles.set(MODEL_PATH, 4_096);
+    const factory = makeSessionFactory(makeOrtSession([]));
+
+    await new SileroVadService({}, factory).initialize();
+
+    expect(mockFsFiles.get(MODEL_PATH)).toBe(mockModelBytes);
+    expect(factory).toHaveBeenCalledWith(MODEL_PATH);
   });
 });

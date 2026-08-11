@@ -19,10 +19,15 @@
 //     so any code (theirs, ours, third-party) ends up in the buffer
 //     automatically.
 //
-// Caveat: a hard native crash (SIGSEGV) may take the process down before the
-// last few queued writes flush to disk. We compensate by logging *before*
-// risky operations, so the most recent entry tells you what was about to
-// happen.
+// Caveat: a hard native crash (SIGSEGV) takes the process down with no
+// warning, so the last few queued writes never flush. Nothing in JS can catch
+// that — the only defence is logging *before* risky operations, so the most
+// recent entry names what was about to happen rather than what happened.
+//
+// A *fatal JS* error used to look identical, for a much more fixable reason:
+// its log entry was written asynchronously while handing the error on killed
+// the process synchronously, so the entry describing the crash died with it.
+// The global handler now waits for that write before handing off.
 
 import * as RNFS from '@dr.pogodin/react-native-fs';
 
@@ -70,6 +75,19 @@ function writeBufferToDisk(): void {
         // Ignore — disk may be full, permissions may be wrong, etc.
       }
     });
+}
+
+/** How long a dying process is given to get its last words onto disk. */
+const FATAL_FLUSH_BUDGET_MS = 400;
+
+/** Resolve once every write queued so far has landed. Never rejects, and adds
+ *  no write of its own — an error-level entry has already forced one, and a
+ *  second full serialization is the last thing a dying process needs. */
+function whenWritesLand(): Promise<void> {
+  return writeChain.then(
+    () => undefined,
+    () => undefined,
+  );
 }
 
 function scheduleFlush(immediate = false): void {
@@ -258,10 +276,25 @@ function hookErrorUtils(): void {
   const prev = eu.getGlobalHandler?.();
   eu.setGlobalHandler((err: Error, isFatal: boolean) => {
     pushEntry('error', `[GLOBAL fatal=${isFatal}] ${err.name}: ${err.message}`, err.stack);
-    try {
-      prev?.(err, isFatal);
-    } catch {
-      // swallow
+    const handOff = () => {
+      try {
+        prev?.(err, isFatal);
+      } catch {
+        // swallow
+      }
+    };
+    if (!isFatal) {
+      handOff();
+      return;
     }
+    // Handing off is what ends the process, and the write above is
+    // asynchronous — done in the other order it never lands, which is exactly
+    // how a fatal error used to leave no trail at all. Wait for the trail,
+    // but not forever: if the disk won't answer, the crash still gets
+    // reported.
+    void Promise.race([
+      whenWritesLand(),
+      new Promise<void>(r => setTimeout(r, FATAL_FLUSH_BUDGET_MS)),
+    ]).then(handOff, handOff);
   });
 }

@@ -700,11 +700,20 @@ export class ConversationOrchestrator {
       .prewarm({ apiKey: cfg.apiKey, model: cfg.translationModel })
       .catch(() => { /* best-effort */ });
 
+    log.info('[orch/hf] voices warming — switching UI to hands-free');
     const store = (this.deps.conversationStore ?? useConversationStore).getState();
     store.setMode('hf');
 
     // 1. Init VAD (no-op on subsequent calls).
+    //
+    // Everything from here to "enabled — listening" is 60 ms of JS on a good
+    // day, and each step below hands off to native code that can end the
+    // process without raising anything catchable. A device once died in this
+    // stretch leaving `enabling` as the last line in the log, which said only
+    // that we got past the permission gate. The breadcrumbs are here so the
+    // next one names the step.
     await this.deps.vad.initialize();
+    log.info('[orch/hf] vad ready — starting capture');
 
     // 2. Start audio capture with dual routing. Stop first to guarantee a clean
     //    state — a failed PTT turn may have left streaming=true (failTurn path).
