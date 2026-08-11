@@ -470,6 +470,24 @@ describe('SileroVadService — when the model load is what kills the process', (
     expect(claimedDuringLoad).toBe(true);
   });
 
+  it('claims it before the asset copy too, which is upstream of the load', async () => {
+    // The first version of this guard staked the claim after the copy. A
+    // device died inside the copy, upstream of it, and every launch walked
+    // into the same hole with the guard sitting uselessly downstream.
+    mockFsFiles.delete(MODEL_PATH); // nothing copied out of the APK yet
+
+    let claimedDuringCopy = false;
+    const RNFS = require('@dr.pogodin/react-native-fs');
+    RNFS.copyFileAssets.mockImplementation(async (_src: string, dest: string) => {
+      claimedDuringCopy = mockFsFiles.has(CLAIM_PATH);
+      mockFsFiles.set(dest, mockModelBytes);
+    });
+
+    await new SileroVadService({}, makeSessionFactory(makeOrtSession([]))).initialize();
+
+    expect(claimedDuringCopy).toBe(true);
+  });
+
   it('clears the claim once the model actually loads', async () => {
     await new SileroVadService({}, makeSessionFactory(makeOrtSession([]))).initialize();
 
@@ -479,11 +497,32 @@ describe('SileroVadService — when the model load is what kills the process', (
   it('releases the claim when the load fails cleanly, so the next run retries', async () => {
     const factory = jest.fn().mockRejectedValue(new Error('bad model'));
 
-    await expect(new SileroVadService({}, factory).initialize()).rejects.toThrow('bad model');
+    // Never throws: the caller is a speaker turning hands-free on, and the
+    // answer to "no model" is a VAD on energy, not a dead feature.
+    await expect(new SileroVadService({}, factory).initialize()).resolves.toBeUndefined();
 
     // A throw means the loader came back. That is a failure, not a killing —
     // nothing about it says the next attempt would take the process down.
     expect(mockFsFiles.has(CLAIM_PATH)).toBe(false);
+  });
+
+  it('stops waiting on a step that never answers, and keeps the claim', async () => {
+    jest.useFakeTimers();
+    try {
+      const factory = jest.fn().mockImplementation(() => new Promise<never>(() => {}));
+      const svc = new SileroVadService({}, factory);
+
+      const settled = svc.initialize();
+      await jest.advanceTimersByTimeAsync(5_000);
+      await expect(settled).resolves.toBeUndefined();
+
+      // A step that stops answering has the shape of the thing that has been
+      // killing the process, so the claim stands and the next launch walks
+      // around it rather than into it.
+      expect(mockFsFiles.has(CLAIM_PATH)).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('skips the model when a claim from a previous run is still standing', async () => {

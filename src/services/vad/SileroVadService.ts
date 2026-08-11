@@ -139,37 +139,48 @@ export class SileroVadService {
     this.sessionFactory = sessionFactory ?? defaultOrtSessionFactory;
   }
 
+  /**
+   * Get the model ready, or decide to live without it. Never throws: the
+   * caller is a speaker turning hands-free on, and the answer to "the model is
+   * unavailable" is a VAD listening on energy, not a dead feature.
+   */
   async initialize(): Promise<void> {
     if (this.initialized) return;
-    try {
-      log.info('[vad] initializing — resolving model path');
-      const modelPath = await resolveModelPath('silero_vad.onnx');
 
-      // Creating the ONNX session is the one step here that runs native code
-      // we cannot supervise: if it takes the process down, no JS catch sees it
-      // and no log line follows. Claim the attempt on disk first, so the next
-      // launch can tell "the model failed" from "the model never came back".
-      if (await claimModelLoad()) {
-        log.info('[vad] creating ONNX session');
-        this.session = await this.sessionFactory(modelPath);
-        await clearModelLoadClaim();
-        log.info('[vad] Silero model loaded');
-      } else {
-        this.session = null;
-        log.warn(
-          '[vad] skipping the ONNX model — a previous load never returned, ' +
-          'so hands-free is running on energy detection alone',
-        );
-      }
+    // Claimed before the FIRST native call, not just before the model load.
+    // The first version of this guard staked the claim after the asset had
+    // been copied out of the APK — and a device then died inside that copy,
+    // upstream of the claim, so every launch walked into it again. Everything
+    // from here to "Silero model loaded" is native work that can end the
+    // process with nothing to catch and nothing to log; the whole stretch is
+    // what the claim has to cover.
+    if (!(await claimModelLoad())) {
+      log.warn(
+        '[vad] skipping the model — the previous attempt never came back, ' +
+        'so hands-free is listening on energy alone',
+      );
+      this.session = null;
       this.initialized = true;
-    } catch (e) {
-      // A throw is a clean failure: the model load returned, it just failed.
-      // Release the claim so the next launch still gets to try.
-      await clearModelLoadClaim();
-      const err = e instanceof Error ? e : new Error(String(e));
-      log.error('[vad] initialization failed', err);
-      throw err;
+      return;
     }
+
+    try {
+      const modelPath = await withDeadline(resolveModelPath('silero_vad.onnx'));
+      log.info('[vad] model ready — creating ONNX session');
+      this.session = await withDeadline(this.sessionFactory(modelPath));
+      await clearModelLoadClaim();
+      log.info('[vad] Silero model loaded');
+    } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e));
+      // A deadline means something native stopped answering — the same shape
+      // as whatever has been taking the process down here, so the claim stays
+      // standing and the next launch walks around it. A plain failure came
+      // back on its own and earns a retry.
+      if (err.name !== DEADLINE) await clearModelLoadClaim();
+      this.session = null;
+      log.error('[vad] model unavailable — listening on energy alone', err);
+    }
+    this.initialized = true;
   }
 
   /**
@@ -413,6 +424,29 @@ function fs(): Fs {
   return require('@dr.pogodin/react-native-fs') as Fs;
 }
 
+/** How long any single step of getting the model ready may take before we stop
+ *  waiting for it. Chosen under Android's ~5 s input-dispatch ANR window: if a
+ *  native call is going to hang, we want our own account of it first, and a
+ *  hands-free session that starts listening rather than one stuck mid-tap. A
+ *  2 MB asset copy is ~50 ms and a session creation well under a second, so
+ *  nothing healthy comes near this. */
+const STEP_DEADLINE_MS = 4_000;
+const DEADLINE = 'VadDeadline';
+
+function withDeadline<T>(work: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const err = new Error(`no answer in ${STEP_DEADLINE_MS} ms`);
+      err.name = DEADLINE;
+      reject(err);
+    }, STEP_DEADLINE_MS);
+    work.then(
+      v => { clearTimeout(timer); resolve(v); },
+      (e: unknown) => { clearTimeout(timer); reject(e instanceof Error ? e : new Error(String(e))); },
+    );
+  });
+}
+
 /** The real model is ≈2 MB. Anything dramatically smaller is not a model — it
  *  is the wreckage of a copy that was interrupted partway. */
 const MIN_MODEL_BYTES = 500_000;
@@ -427,8 +461,19 @@ async function resolveModelPath(assetName: string): Promise<string> {
     return `${RNFS.MainBundlePath}/${assetName}`;
   }
 
+  // Every line below announces the native call it is about to make, not the
+  // one it just finished. A process killed inside one of these leaves no
+  // exception and no completion line, so the last entry in the log IS the
+  // finding — "checking the copy on disk" as a final word means `exists` or
+  // `stat` never came back, and "copying the model out of the APK" means the
+  // asset copy did not. Chatty for one-time work, and the only instrument that
+  // survives the failure it is describing.
   const destPath = `${RNFS.DocumentDirectoryPath}/${assetName}`;
-  if (await modelLooksUsable(RNFS, destPath)) return destPath;
+  log.info('[vad] checking the copy on disk');
+  if (await modelLooksUsable(RNFS, destPath)) {
+    log.info('[vad] model already on disk');
+    return destPath;
+  }
 
   // copyFileAssets writes straight to its destination, so a copy interrupted
   // by a kill or a full disk leaves a truncated file that every later launch
@@ -437,10 +482,13 @@ async function resolveModelPath(assetName: string): Promise<string> {
   const tmpPath = `${destPath}.part`;
   try { await RNFS.unlink?.(tmpPath); } catch { /* nothing to clean up */ }
   if (RNFS.moveFile) {
+    log.info('[vad] copying the model out of the APK');
     await RNFS.copyFileAssets(assetName, tmpPath);
     try { await RNFS.unlink?.(destPath); } catch { /* first run */ }
+    log.info('[vad] renaming the copy into place');
     await RNFS.moveFile(tmpPath, destPath);
   } else {
+    log.info('[vad] copying the model out of the APK');
     await RNFS.copyFileAssets(assetName, destPath);
   }
   log.info(`[vad] model copied to ${destPath}`);
@@ -466,24 +514,31 @@ async function modelLooksUsable(RNFS: Fs, path: string): Promise<boolean> {
 
 // ── Crash-loop guard ─────────────────────────────────────────────────────────
 //
-// Creating the ONNX session runs native code. When that native code takes the
-// process down there is no exception to catch and no log line to find — the
-// app simply restarts, and since turning hands-free on is what triggers it,
-// the next attempt does exactly the same thing.
+// Getting the model ready is native work from end to end: copying 2 MB out of
+// the APK, renaming it into place, handing the path to a model loader. When
+// any of it takes the process down there is no exception to catch and no log
+// line to find — the app simply restarts, and since turning hands-free on is
+// what triggers it, the next attempt does exactly the same thing.
 //
-// So the attempt is claimed on disk before it starts and released when it
-// returns, failure included. A claim still standing at the next launch can
-// only mean the load never returned at all, and this run skips the model —
-// hands-free then runs on the energy detector, which needs no model. A crash
-// costs the model, not the app.
+// So the attempt is claimed on disk before the first native call and released
+// when the last one returns, failure included. A claim still standing at the
+// next launch can only mean the work never returned at all, and this run skips
+// the model — hands-free then runs on the energy detector, which needs no
+// model. A crash costs the model, not the app.
 //
-// Deliberately one-strike and sticky: only a load that actually succeeds
-// clears the claim. Retrying a load that has already killed the process once
-// is how a crash loop starts, and the degraded mode is a working app.
+// The scope of the claim is the whole of that work, and learning that cost a
+// build: the first version staked it after the asset copy, which is precisely
+// where a device was dying, so every launch walked into the same hole with the
+// guard sitting uselessly downstream. A guard that does not cover the first
+// native call does not cover anything.
+//
+// Deliberately one-strike and sticky: only a run that actually succeeds clears
+// the claim. Retrying something that has already killed the process once is
+// how a crash loop starts, and the degraded mode is a working app.
 
 const LOAD_CLAIM = 'silero_vad.loading';
 
-/** True if this run should attempt the load. */
+/** True if this run should attempt to get the model ready. */
 async function claimModelLoad(): Promise<boolean> {
   try {
     const RNFS = fs();
