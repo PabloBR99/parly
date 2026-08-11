@@ -410,6 +410,34 @@ describe('VoxtralRealtimeClient', () => {
       expect(svc.currentState).toBe('streaming');
     });
 
+    it('a second flushUtterance joins the outstanding one instead of opening another', async () => {
+      const fake = createFakeWs();
+      const svc = new VoxtralRealtimeClient(fake.factory);
+      const rec = recording();
+
+      await handshake(fake, svc, rec, { sessionMode: true });
+
+      // The caller speculatively flushes at a pause, then asks again for real
+      // when the turn actually ends. The segment is already closed: a second
+      // flush would only commit an empty buffer and race the first answer.
+      const speculative = svc.flushUtterance(3_000);
+      const forReal = svc.flushUtterance(3_000);
+      const flushes = () =>
+        fake.ws.sent.map(s => JSON.parse(s).type).filter(t => t === 'input_audio.flush');
+      expect(flushes()).toHaveLength(1);
+
+      // One answer settles both callers.
+      fake.ws.fire('message', JSON.stringify({ type: 'transcription.done', text: 'de Madrid' }));
+      expect((await speculative).text).toBe('de Madrid');
+      expect((await forReal).text).toBe('de Madrid');
+
+      // Once answered, the next ask is a genuinely new round trip.
+      const next = svc.flushUtterance(3_000);
+      expect(flushes()).toHaveLength(2);
+      fake.ws.fire('message', JSON.stringify({ type: 'transcription.done', text: 'pero vivo aquí' }));
+      expect((await next).text).toBe('pero vivo aquí');
+    });
+
     it('three back-to-back utterances all resolve via flushUtterance', async () => {
       const fake = createFakeWs();
       const svc = new VoxtralRealtimeClient(fake.factory);

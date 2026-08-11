@@ -48,6 +48,7 @@ function makeMocks() {
 
   let voxtralCallbacks: VoxtralCallbacks | null = null;
   let flushResolver: FlushResolver | null = null;
+  let flushInFlight: Promise<{ text: string; language?: string }> | null = null;
   // Mirrors the real client's accumulator: partials build it up, and either
   // flushUtterance or commitUtterance hands it over and clears it.
   let accumulated = '';
@@ -72,9 +73,15 @@ function makeMocks() {
       return taken;
     }),
     flushUtterance: jest.fn().mockImplementation(() => {
-      return new Promise<{ text: string; language?: string }>((resolve) => {
+      // Mirrors the real client: asking while a flush is outstanding JOINS it.
+      // The segment is already closed, and one transcription.done answers both
+      // callers — which is what lets the orchestrator flush speculatively at
+      // the pause hint and then ask again for real without bookkeeping.
+      if (flushInFlight) return flushInFlight;
+      flushInFlight = new Promise<{ text: string; language?: string }>((resolve) => {
         flushResolver = resolve;
       });
+      return flushInFlight;
     }),
   };
 
@@ -142,6 +149,7 @@ function makeMocks() {
       accumulatedLang = undefined;
       flushResolver?.({ text, language });
       flushResolver = null;
+      flushInFlight = null;
     },
   };
 }
@@ -1656,5 +1664,143 @@ describe('ConversationOrchestrator (waiting for evidence, not for clocks)', () =
     await Promise.resolve();
     expect(m.voxtral.commitUtterance).toHaveBeenCalledTimes(1);
     expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ── Asking for the transcript instead of waiting to be offered it ────────────
+//
+// A conversation is mostly short turns, and for a short utterance Voxtral
+// streams no delta at all: every word arrives in the final. Waiting for the
+// hangover before asking for that final meant the words existed nowhere for
+// ~850 ms after the speaker stopped, and every shortcut declined for want of a
+// transcript. The flush now goes out at the pause hint, so the round trip runs
+// *during* the silence instead of after it.
+
+describe('ConversationOrchestrator (asking for the transcript, not waiting for it)', () => {
+  function makeHfOrchestrator() {
+    const m = makeMocks();
+    const o = new ConversationOrchestrator(m);
+    o.configure({ apiKey: 'sk-test', translationModel: 'mistral-small-latest' });
+    m.translator.translateStream.mockImplementation(async (args) => {
+      args.onFirstToken?.();
+      args.onSentence('Good morning.');
+      args.onDone('Good morning.');
+    });
+    return { m, o };
+  }
+
+  const tick = () => new Promise<void>(r => setTimeout(r, 30));
+  const settle = () => new Promise<void>(r => setTimeout(r, 200));
+  const turnDone = () => new Promise<void>(r => setTimeout(r, 80));
+
+  it('ends the turn on a final it asked for at the pause hint, with no delta ever streamed', async () => {
+    const { m, o } = makeHfOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    // Not a single partial: this is what a short utterance actually looks
+    // like, and it is why every shortcut used to decline as 'no-transcript'.
+    m.fireVadPause();
+    await tick();
+    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(1);
+
+    m.resolveFlush('Buenos días, ¿qué tal estás?', 'es');
+    await turnDone();
+
+    // The hangover never expired — the punctuated final ended the turn — and
+    // the round trip that ended it was the one sent during the silence.
+    expect(m.vad.endUtterance).toHaveBeenCalledTimes(1);
+    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(1);
+    expect(useConversationStore.getState().turns.at(-1)?.sourceText).toBe(
+      'Buenos días, ¿qué tal estás?',
+    );
+  });
+
+  it('has the transcript already in hand when the hangover expires', async () => {
+    const { m, o } = makeHfOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVadPause();
+    await tick();
+    // An unfinished thought: no full stop, so this must NOT end the turn.
+    m.resolveFlush('Buenos días, quería preguntarte una cosa', 'es');
+    await tick();
+    expect(o.getHfState()).toBe('hf-capturing');
+    expect(m.vad.endUtterance).not.toHaveBeenCalled();
+
+    m.fireVadEnd();
+    await turnDone();
+
+    // The ending cost no round trip of its own: the answer was already here.
+    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(1);
+    expect(useConversationStore.getState().turns.at(-1)?.sourceText).toBe(
+      'Buenos días, quería preguntarte una cosa',
+    );
+  });
+
+  it('joins what is spoken next onto the segment the early flush closed', async () => {
+    const { m, o } = makeHfOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVadPause();
+    await tick();
+    m.resolveFlush('Buenos días, quería preguntarte', 'es');
+    await tick();
+
+    // The speaker was only drawing breath. Closing the segment early must not
+    // cost them the rest of the sentence — the words after it stream into a
+    // fresh segment and are stitched back on.
+    m.fireVadResume();
+    m.fireVoxtralPartial('una cosa importante');
+    await settle();
+    m.fireVadEnd();
+    await turnDone();
+
+    expect(useConversationStore.getState().turns.at(-1)?.sourceText).toBe(
+      'Buenos días, quería preguntarte una cosa importante',
+    );
+  });
+
+  it('reports where the transcript came from, so a shortcut cannot fail silently', async () => {
+    const { m, o } = makeHfOrchestrator();
+    await o.enableHandsFree('es', 'en');
+    const lines: string[] = [];
+    const spy = jest.spyOn(log, 'info').mockImplementation((msg: string) => { lines.push(msg); });
+
+    m.fireVadStart();
+    m.fireVadPause();
+    await tick();
+    m.resolveFlush('Buenos días, ¿qué tal estás?', 'es');
+    await turnDone();
+    spy.mockRestore();
+
+    const emitted = lines.find(l => l.startsWith('[hf_turn]'));
+    expect(emitted).toBeDefined();
+    const payload = JSON.parse(emitted!.replace('[hf_turn] ', ''));
+    expect(payload.earlyFlush).toBe('used');
+    expect(payload.endpoint).toBe('punctuation');
+    // The round trip happened inside the silence, so it is reported but is not
+    // part of the wait — the ending's own flush cost nothing.
+    expect(payload.earlyFlushMs).toBeGreaterThanOrEqual(0);
+    expect(payload.flushToFinal).toBeLessThan(20);
+  });
+
+  it('switches to the other voice during the cooldown, because a conversation alternates', async () => {
+    const { m, o } = makeHfOrchestrator();
+    await o.enableHandsFree('es', 'en');
+    m.tts.prewarm.mockClear();
+
+    m.fireVadStart();
+    m.fireVoxtralPartial('Buenos días, ¿qué tal estás?');
+    await settle();
+    m.fireVadEnd();
+    await new Promise<void>(r => setTimeout(r, 400)); // past HF_COOLDOWN_MS
+
+    // The turn was read out in English; the reply will need Spanish. The last
+    // thing warmed before listening resumes is the voice the reply needs.
+    const warmed = m.tts.prewarm.mock.calls.map(c => c[0]);
+    expect(warmed.at(-1)).toBe('es');
   });
 });

@@ -136,6 +136,9 @@ export class VoxtralRealtimeClient {
   private flushResolve: ((result: { text: string; language?: string }) => void) | null = null;
   private flushReject: ((err: Error) => void) | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The outstanding flushUtterance's promise, handed to any caller that asks
+   *  for a flush while it is still in the air — see flushUtterance(). */
+  private flushInFlight: Promise<{ text: string; language?: string }> | null = null;
 
   constructor(private readonly wsFactory: WebSocketFactory = defaultWsFactory) {}
 
@@ -431,19 +434,24 @@ export class VoxtralRealtimeClient {
    * away a whole minute of speech over a slow final frame. The partial is
    * everything but the last few hundred milliseconds — translating it beats
    * silence every time. Rejects only when nothing at all accumulated.
+   *
+   * Asking while a flush is already outstanding JOINS it rather than failing.
+   * The segment is already closed and its transcription.done is the answer to
+   * both calls; a second flush would only close an empty buffer and race the
+   * first one's resolution. This is what lets a caller speculatively flush
+   * early and then ask again for real without tracking which is which.
    */
   async flushUtterance(timeoutMs = 3_000): Promise<{ text: string; language?: string }> {
+    if (this.flushInFlight) return this.flushInFlight;
     if (this.state !== 'streaming') {
       throw new Error(`flushUtterance called in state ${this.state}`);
     }
     if (!this.sessionMode) {
       throw new Error('flushUtterance requires sessionMode=true');
     }
-    if (this.flushResolve) {
-      throw new Error('flushUtterance already in progress');
-    }
 
-    return new Promise<{ text: string; language?: string }>((resolve, reject) => {
+    let sendFailed = false;
+    const pending = new Promise<{ text: string; language?: string }>((resolve, reject) => {
       this.flushResolve = resolve;
       this.flushReject = reject;
       this.flushTimer = setTimeout(() => {
@@ -465,10 +473,16 @@ export class VoxtralRealtimeClient {
       try {
         this.ws?.send(JSON.stringify({ type: 'input_audio.flush' }));
       } catch (e) {
+        sendFailed = true;
         this.clearFlushPending();
         reject(new Error(`Failed to send flush: ${String(e)}`));
       }
     });
+    // Only publish a handle that something can still answer. The send above
+    // runs inside the executor, so a synchronous failure has already cleared
+    // the pending state and must not be re-published here.
+    if (!sendFailed) this.flushInFlight = pending;
+    return pending;
   }
 
   /**
@@ -577,6 +591,7 @@ export class VoxtralRealtimeClient {
     }
     this.flushResolve = null;
     this.flushReject = null;
+    this.flushInFlight = null;
   }
 
   private cleanup(): void {

@@ -252,6 +252,13 @@ type FastPathBlock = 'none' | 'no-transcript' | 'still-arriving' | 'routing-uncl
 const MAX_SPECULATIONS_PER_UTTERANCE = 2;
 
 /**
+ * Whether the transcript for this utterance came from a flush sent at the
+ * pause hint ('used'), one that answered with nothing ('empty'), or no early
+ * flush at all ('none' — no pause hint, or the utterance ended on the first).
+ */
+type EarlyFlushOutcome = 'used' | 'empty' | 'none';
+
+/**
  * How many consecutive utterances must arrive with NO audio language tag
  * before the shortcuts stop insisting on strong text evidence.
  *
@@ -312,6 +319,25 @@ interface SpeculativeTranslation {
  */
 function sameUtterance(a: string, b: string): boolean {
   return foldForCompare(a) === foldForCompare(b);
+}
+
+/** Stitch a segment an early flush closed onto the words spoken after it.
+ *  Either side may be empty, which is the common case both ways. */
+function joinUtterance(head: string, tail: string): string {
+  if (head.length === 0) return tail;
+  if (tail.length === 0) return head;
+  return `${head} ${tail}`;
+}
+
+/** The other language of the configured pair — the one a reply will be spoken
+ *  in. Null when `lang` isn't in the pair at all, which means we don't know
+ *  what comes next and should not guess. */
+function otherOfPair(lang: string, a: string | null, b: string | null): string | null {
+  if (!a || !b) return null;
+  const base = primarySubtag(lang);
+  if (base === primarySubtag(a)) return b;
+  if (base === primarySubtag(b)) return a;
+  return null;
 }
 
 function foldForCompare(s: string): string {
@@ -384,6 +410,19 @@ export class ConversationOrchestrator {
   private hfSpecCount = 0;
   /** Consecutive utterances whose transcript carried no audio language tag. */
   private hfUntaggedStreak = 0;
+  /** Transcript of the segment an early flush already closed for this
+   *  utterance, with whatever language tag it carried. The tail still
+   *  streaming lives in hfPartialText; the utterance is the two joined. */
+  private hfEarlyFinal = '';
+  private hfEarlyFinalLang: string | undefined;
+  /** The pause-hint flush, kept until the utterance ends so the ending can
+   *  wait on that round trip instead of starting a second one. Resolves (never
+   *  rejects) once the answer has been folded in. */
+  private hfEarlyFlush: Promise<void> | null = null;
+  private hfEarlyFlushMs = -1;
+  /** Bumped on every speech start, so a flush answering for an utterance that
+   *  has already ended cannot leak its text into the next speaker's. */
+  private hfUtteranceSeq = 0;
   /** When the room went quiet, while a pause hint is outstanding. */
   private hfPauseHintAt: number | null = null;
   /** Fires when the transcript stops growing after a pause hint — see
@@ -834,6 +873,7 @@ export class ConversationOrchestrator {
     this.hfPartialText = '';
     this.hfPartialAt = 0;
     this.hfSpecCount = 0;
+    this.resetEarlyFlush();
     this.clearSettleCheck();
     this.cancelSpeculation();
     this.setHfState('hf-capturing');
@@ -982,9 +1022,11 @@ export class ConversationOrchestrator {
 
   /** The settled transcript, or why there isn't one. */
   private inspectTranscript(now: number): { text: string | null; blocked: FastPathBlock } {
-    const text = this.hfPartialText;
+    const text = this.utteranceText();
     if (text.length < FAST_PATH_MIN_CHARS) return { text: null, blocked: 'no-transcript' };
-    if (now - this.hfPartialAt < PARTIAL_SETTLED_MS) {
+    // Only a streaming tail can be half-delivered. A server final is complete
+    // by construction, so an utterance that is nothing but one never waits.
+    if (this.hfPartialText.length > 0 && now - this.hfPartialAt < PARTIAL_SETTLED_MS) {
       return { text: null, blocked: 'still-arriving' };
     }
     const pairA = this.hfPairA;
@@ -1013,7 +1055,75 @@ export class ConversationOrchestrator {
   private handleHfSpeechPause(lastSpeechAt: number): void {
     if (!this.hfEnabled || this.hfPaused || this.hfState !== 'hf-capturing') return;
     this.hfPauseHintAt = lastSpeechAt;
+    this.startEarlyFlush();
     this.armSettleCheck();
+  }
+
+  /**
+   * Ask for the transcript instead of waiting to be offered it.
+   *
+   * For a short utterance — which is most of a real conversation — Voxtral
+   * streams no delta at all: every word arrives in the final, and the final is
+   * only requested once the hangover concedes. So the words exist nowhere
+   * until ~850 ms after the speaker stopped, and every shortcut declines for
+   * want of a transcript. That is measured, not theorised: `no-transcript` on
+   * every short turn, while long ones took the fast path fine.
+   *
+   * Sending the flush at the pause hint moves the whole round trip off the
+   * critical path — it runs *during* the silence rather than after it. Both
+   * paths gain: an utterance that closes a sentence can end early on
+   * punctuated evidence, and one that does not still finds its transcript
+   * already in hand when the hangover expires.
+   *
+   * The round trip is also the safety margin. The answer lands ~230 ms later,
+   * around 500 ms of observed silence, and a speaker who was only drawing
+   * breath has resumed by then — which cancels everything this armed. Closing
+   * the segment early does not split the turn either: words spoken after it
+   * stream into a fresh segment and are joined back on.
+   */
+  private startEarlyFlush(): void {
+    if (this.hfEarlyFlush !== null) return;
+    const flush = this.deps.voxtral.flushUtterance;
+    if (!flush) return;
+    const seq = this.hfUtteranceSeq;
+    const startedAt = Date.now();
+    const captured = this.hfCaptureStartAt !== null ? startedAt - this.hfCaptureStartAt : 0;
+    this.hfEarlyFlush = flush.call(this.deps.voxtral, finalTimeoutFor(captured)).then(
+      (r) => {
+        this.hfEarlyFlushMs = Date.now() - startedAt;
+        this.onEarlyFinal(seq, r);
+      },
+      (e: unknown) => {
+        // Not an error the speaker should ever see: the hangover behind this
+        // is the fallback, and it is about to run anyway.
+        log.warn(`[orch/hf] early flush did not answer: ${String(e)}`);
+      },
+    );
+  }
+
+  /** The pause-hint flush answered. Fold it in and re-run the decision it was
+   *  sent to inform — for a short utterance this is the first moment the words
+   *  exist at all. */
+  private onEarlyFinal(seq: number, result: { text: string; language?: string }): void {
+    if (seq !== this.hfUtteranceSeq) return; // answers a turn already gone
+    const text = result.text.trim();
+    if (text.length > 0) {
+      this.hfEarlyFinal = joinUtterance(this.hfEarlyFinal, text);
+      // The final covers every delta of the segment it closed. Keeping both
+      // would put the same words in the utterance twice.
+      this.hfPartialText = '';
+      this.hfPartialAt = 0;
+    }
+    if (result.language) this.hfEarlyFinalLang = result.language;
+    if (!this.hfEnabled || this.hfPaused || this.hfState !== 'hf-capturing') return;
+    this.writeHfLive();
+    this.onTranscriptSettled();
+  }
+
+  /** Everything said in this utterance so far: the segment an early flush has
+   *  already closed, plus whatever has streamed since. */
+  private utteranceText(): string {
+    return joinUtterance(this.hfEarlyFinal, this.hfPartialText);
   }
 
   /** The speaker was not finished. Everything the pause hint set in motion was
@@ -1022,6 +1132,18 @@ export class ConversationOrchestrator {
     if (this.hfPauseHintAt === null) return;
     this.clearSettleCheck();
     this.cancelSpeculation();
+  }
+
+  /** Forget the pause-hint flush and anything it delivered. Bumping the
+   *  sequence is what makes a late answer harmless: it belongs to an utterance
+   *  that no longer exists, so it is dropped rather than joined onto the next
+   *  speaker's words. */
+  private resetEarlyFlush(): void {
+    this.hfUtteranceSeq++;
+    this.hfEarlyFinal = '';
+    this.hfEarlyFinalLang = undefined;
+    this.hfEarlyFlush = null;
+    this.hfEarlyFlushMs = -1;
   }
 
   private clearSettleCheck(): void {
@@ -1064,7 +1186,7 @@ export class ConversationOrchestrator {
     // Whatever happens to the turn, the translation can start now. It is the
     // longest link in the chain, so the silence still being waited out below
     // is time it can spend in flight instead.
-    const stable = this.hfPartialText;
+    const stable = this.utteranceText();
     if (stable.length >= FAST_PATH_MIN_CHARS) this.startSpeculativeTranslation(stable);
 
     if (!this.deps.voxtral.commitUtterance) return;
@@ -1095,7 +1217,24 @@ export class ConversationOrchestrator {
 
     const store0 = (this.deps.conversationStore ?? useConversationStore).getState();
     const commit = this.deps.voxtral.commitUtterance;
-    const inspected = this.inspectTranscript(vadEndAt);
+
+    let inspected = this.inspectTranscript(vadEndAt);
+    if (inspected.text === null && this.hfEarlyFlush !== null) {
+      // Nothing usable in hand — but the flush sent at the pause hint owns
+      // this segment and has been in the air since the silence began. Waiting
+      // on it is most of a round trip already paid for, and it answers with
+      // punctuation the deltas never carried. A transcript we could already
+      // use never gets here: the point of the shortcut is not waiting.
+      await this.hfEarlyFlush;
+      // Read through the accessor: setHfState() above moved us to
+      // 'hf-flushing', but the guard at the top of this method has narrowed
+      // `this.hfState` to 'hf-capturing' for the rest of the body.
+      if (!this.hfEnabled || this.hfPaused || this.getHfState() !== 'hf-flushing') return;
+      inspected = this.inspectTranscript(Date.now());
+    }
+    const earlyHead = this.hfEarlyFinal;
+    const earlyFlush: EarlyFlushOutcome =
+      this.hfEarlyFlush === null ? 'none' : earlyHead.length > 0 ? 'used' : 'empty';
     const settled = commit ? inspected.text : null;
     const fastPathBlock: FastPathBlock = commit ? inspected.blocked : 'no-transcript';
 
@@ -1106,10 +1245,19 @@ export class ConversationOrchestrator {
       // and go — waiting out the round trip here buys punctuation, and costs
       // the listener the pause they notice most.
       const taken = commit.call(this.deps.voxtral);
-      result = { text: taken.text.trim() || settled, language: taken.language };
+      result = {
+        text: joinUtterance(earlyHead, taken.text.trim()) || settled,
+        language: taken.language ?? this.hfEarlyFinalLang,
+      };
     } else {
       try {
-        result = await this.deps.voxtral.flushUtterance(finalTimeoutFor(capturedMs));
+        const tail = await this.deps.voxtral.flushUtterance(finalTimeoutFor(capturedMs));
+        // The early flush, if there was one, closed an earlier segment of the
+        // same utterance. This answer is only what came after it.
+        result = {
+          text: joinUtterance(earlyHead, tail.text.trim()),
+          language: tail.language ?? this.hfEarlyFinalLang,
+        };
       } catch (e) {
         log.error('[orch/hf] flushUtterance failed', e instanceof Error ? e : new Error(String(e)));
         store0.setHfLive(null);
@@ -1121,6 +1269,8 @@ export class ConversationOrchestrator {
       }
     }
     const flushedAt = Date.now();
+    const earlyFlushMs = this.hfEarlyFlushMs;
+    this.resetEarlyFlush();
     if (result.language) this.hfUntaggedStreak = 0;
     else if (this.hfUntaggedStreak < UNTAGGED_UTTERANCES_TO_TRUST_TEXT) {
       this.hfUntaggedStreak++;
@@ -1173,6 +1323,8 @@ export class ConversationOrchestrator {
       endpoint,
       transcriptSource: settled !== null ? 'settled-partial' : 'server-final',
       fastPathBlock,
+      earlyFlush,
+      earlyFlushMs,
       untaggedStreak: this.hfUntaggedStreak,
       routedLanguage: language ?? null,
       configuredPair: [pairA ?? '', pairB ?? ''],
@@ -1182,6 +1334,14 @@ export class ConversationOrchestrator {
     if (this.hfEnabled) {
       store.setHfActiveSpeaker(null);
       this.setHfState('hf-cooldown');
+      // A conversation alternates. The voice the next turn needs is almost
+      // always the one we did NOT just speak, and switching voices costs the
+      // native engine ~250 ms — measured as the entire difference between two
+      // otherwise identical turns. Spend it here, in the cooldown, where
+      // nobody is waiting. Guess wrong and the next turn pays a switch it
+      // would have paid anyway.
+      const nextVoice = otherOfPair(targetLang, pairA, pairB);
+      if (nextVoice) this.deps.tts.prewarm(nextVoice);
       await new Promise<void>((r) => setTimeout(r, HF_COOLDOWN_MS));
       if (this.hfEnabled && !this.hfPaused) {
         // Scrub whatever leaked past the capture gate (chunks in flight when
@@ -1287,6 +1447,10 @@ export class ConversationOrchestrator {
       endpoint: HfEndpoint;
       transcriptSource: 'settled-partial' | 'server-final';
       fastPathBlock: FastPathBlock;
+      earlyFlush: EarlyFlushOutcome;
+      /** Duration of the pause-hint round trip. Off the critical path — it ran
+       *  inside endpointDelay — so it is reported, not summed. */
+      earlyFlushMs: number;
       untaggedStreak: number;
       routedLanguage: string | null;
       configuredPair: [string, string];
@@ -1428,6 +1592,8 @@ export class ConversationOrchestrator {
       endpoint: telemetry.endpoint,
       transcript: telemetry.transcriptSource,
       fastPathBlock: telemetry.fastPathBlock,
+      earlyFlush: telemetry.earlyFlush,
+      earlyFlushMs: telemetry.earlyFlushMs,
       untaggedStreak: telemetry.untaggedStreak,
       translation: adopted !== null ? 'speculative' : 'fresh',
       // How much of the request flew before the turn was even certain.
@@ -1489,18 +1655,26 @@ export class ConversationOrchestrator {
     if (this.hfPauseHintAt !== null) this.armSettleCheck();
     if (now - this.hfLastPartialWriteAt < HF_PARTIAL_WRITE_THROTTLE_MS) return;
     this.hfLastPartialWriteAt = now;
+    this.writeHfLive();
+  }
 
+  /** Put the utterance so far on the speaker's own half — including any
+   *  segment an early flush already closed, or the caption would jump
+   *  backwards to just the words spoken since. */
+  private writeHfLive(): void {
+    const text = this.utteranceText();
+    if (text.length === 0) return;
     if (this.hfLiveSide === null && this.hfPairA && this.hfPairB) {
       const a = primarySubtag(this.hfPairA);
       const b = primarySubtag(this.hfPairB);
       if (a !== b) {
-        const vote = classifyPairText(trimmed, a, b);
+        const vote = classifyPairText(text, a, b);
         if (vote) this.hfLiveSide = vote.side === 'a' ? 'person_a' : 'person_b';
       }
     }
     (this.deps.conversationStore ?? useConversationStore)
       .getState()
-      .setHfLive({ side: this.hfLiveSide, text: trimmed });
+      .setHfLive({ side: this.hfLiveSide, text });
   }
 
   /**
