@@ -532,9 +532,16 @@ async function modelLooksUsable(RNFS: Fs, path: string): Promise<boolean> {
 // guard sitting uselessly downstream. A guard that does not cover the first
 // native call does not cover anything.
 //
-// Deliberately one-strike and sticky: only a run that actually succeeds clears
-// the claim. Retrying something that has already killed the process once is
-// how a crash loop starts, and the degraded mode is a working app.
+// Skip once, then try again — the claim is cleared as it is honoured. An
+// earlier version made it sticky, on the theory that retrying something which
+// had already killed the process once was how a crash loop starts. That was
+// written while this guard was chasing the wrong fault: the crash it was built
+// for turned out to be a pasted diagnostics log going out as an Authorization
+// header, nothing to do with the model at all. Which makes the realistic
+// failure here a false positive, and a sticky claim answers a false positive
+// by disabling on-device speech detection permanently and silently. Skipping
+// one launch is enough to break a loop and cheap enough to be wrong about;
+// the per-step deadline above already covers a load that merely hangs.
 
 const LOAD_CLAIM = 'silero_vad.loading';
 
@@ -543,7 +550,12 @@ async function claimModelLoad(): Promise<boolean> {
   try {
     const RNFS = fs();
     const claim = `${RNFS.DocumentDirectoryPath}/${LOAD_CLAIM}`;
-    if (await RNFS.exists(claim)) return false;
+    if (await RNFS.exists(claim)) {
+      // Honour it and retire it in the same breath: this run goes without the
+      // model, the next one is free to try again.
+      await RNFS.unlink?.(claim);
+      return false;
+    }
     await RNFS.writeFile?.(claim, String(Date.now()), 'utf8');
   } catch {
     // No filesystem, no guard — attempt the load, as every run did before

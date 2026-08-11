@@ -85,7 +85,7 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
       void validateMistralApiKey(apiKey).then(result => {
         if (cancelled) return;
         if (result.status === 'ok') setKeyStatus('valid');
-        else if (result.status === 'invalid') setKeyStatus('invalid');
+        else if (result.status === 'invalid' || result.status === 'malformed') setKeyStatus('invalid');
         // network/unknown: leave 'unvalidated' — never punish a flaky link.
       });
     }, BACKGROUND_VALIDATE_DELAY_MS);

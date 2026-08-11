@@ -36,6 +36,7 @@
 //     Android, NSURLSession on iOS) that honor them.
 
 import type { PersonId } from '../../app/types';
+import { isSendableKey } from '../auth/validateApiKey';
 import { log } from '../log/logStore';
 
 const ENDPOINT = 'wss://api.mistral.ai/v1/audio/transcriptions/realtime';
@@ -168,7 +169,14 @@ export class VoxtralRealtimeClient {
 
     const model = options.model ?? DEFAULT_MODEL;
     const url = `${ENDPOINT}?model=${encodeURIComponent(model)}`;
-    const headers = { Authorization: `Bearer ${options.apiKey}` };
+    // Refused here rather than passed to the socket: a header value the
+    // platform rejects is raised from inside its own networking layer, where
+    // the throw below cannot see it and the process does not survive it.
+    if (!isSendableKey(options.apiKey)) {
+      this.state = 'closed';
+      throw new Error('That API key cannot be used — check it in Settings.');
+    }
+    const headers = { Authorization: `Bearer ${options.apiKey.trim()}` };
 
     log.info(`[voxtral] connecting model=${model} sessionMode=${this.sessionMode}`);
 

@@ -78,7 +78,7 @@ The full picture — state machines, echo gating, latency decisions, the UI desi
 ## Development
 
 ```bash
-npm test           # Jest — 228 tests
+npm test           # Jest — 241 tests
 npm run lint       # ESLint
 npx tsc --noEmit   # typecheck
 ```
@@ -88,7 +88,7 @@ CI builds a release APK and publishes a `dev-<sha>` prerelease on every push to 
 ## Troubleshooting
 
 - **TTS doesn't speak a language** — the OS has no voice installed for it. Android: *Settings → Accessibility → Text-to-speech → Install voice data*. The app shows the text and tells the listener, rather than reading it with a wrong-language voice.
-- **Key won't verify** — regenerate it at [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys) and paste the whole thing. If you're offline, verification retries automatically once you're back.
+- **Key won't verify** — regenerate it at [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys) and paste the whole thing. If you're offline, verification retries automatically once you're back. *NOT A KEY — CHECK THE PASTE* means the clipboard held something else entirely (it happens); *KEY REJECTED* means the key reached Mistral and was turned down.
 - **Logs** — Settings → *Diagnostics* → *View logs*. Raw pipeline errors land there; the conversation surface only ever shows plain-language notices.
 
 ## Privacy

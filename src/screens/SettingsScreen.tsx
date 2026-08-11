@@ -90,7 +90,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
     if (result.status === 'ok') {
       setKeyStatus('valid');
       haptics.tick();
-    } else if (result.status === 'invalid') {
+    } else if (result.status === 'invalid' || result.status === 'malformed') {
       setKeyStatus('invalid');
       haptics.error();
     } else {

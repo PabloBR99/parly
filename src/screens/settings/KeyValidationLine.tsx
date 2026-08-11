@@ -26,6 +26,17 @@ export function KeyValidationLine({ state, validating }: Props): React.JSX.Eleme
       </Text>
     );
   }
+  // Told apart from KEY REJECTED on purpose. "Rejected" sends you to your
+  // account looking for a revoked key; this one means the paste itself went
+  // wrong — the wrong clipboard entry, or the whole diagnostics log, which is
+  // what actually happened to somebody.
+  if (state.status === 'malformed') {
+    return (
+      <Text variant="mono" tone="error" style={styles.keyStatus}>
+        ●  NOT A KEY — CHECK THE PASTE
+      </Text>
+    );
+  }
   if (state.status === 'invalid') {
     return (
       <Text variant="mono" tone="error" style={styles.keyStatus}>

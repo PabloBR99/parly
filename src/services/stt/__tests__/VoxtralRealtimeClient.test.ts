@@ -615,3 +615,26 @@ describe('VoxtralRealtimeClient', () => {
     });
   });
 });
+
+// ── A key that cannot be a header ────────────────────────────────────────────
+
+describe('VoxtralRealtimeClient — refusing a key that cannot be sent', () => {
+  it('never opens the socket with a header the platform would raise on', async () => {
+    const fake = createFakeWs();
+    const svc = new VoxtralRealtimeClient(fake.factory);
+
+    // What was actually in the key field on the device that reported this.
+    const pastedLog = '2026-08-11 INFO [orch/hf] enabling — pair=es↔en\n2026-08-11 INFO more';
+
+    await expect(
+      svc.start({ apiKey: pastedLog }, recording().callbacks),
+    ).rejects.toThrow(/api key/i);
+
+    // The handshake header is built by the platform, and an invalid value is
+    // raised from inside it — past the point where the throw around the
+    // constructor would see it, and past the point where the process
+    // survives. So the socket is never reached at all.
+    expect(fake.capturedUrl).toBeNull();
+    expect(fake.capturedHeaders).toBeNull();
+  });
+});

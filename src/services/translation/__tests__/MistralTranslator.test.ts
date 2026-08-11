@@ -336,3 +336,50 @@ describe('MistralTranslator.translateStream', () => {
     expect(sentences[0]).toContain('reasonably sized');
   });
 });
+
+// ── A key that cannot be a header ────────────────────────────────────────────
+//
+// Reported as a crash on a device: the diagnostics log had been pasted into
+// the API key field. Newlines and em dashes went out as an Authorization
+// header, and the app closed with no error and no trail — the failure was in
+// the platform's networking layer, below anything JS can catch. Nothing
+// unsendable gets handed over now.
+
+describe('MistralTranslator — refusing a key that cannot be sent', () => {
+  const pastedLog = '2026-08-11 INFO [orch/hf] enabling — pair=es↔en\n2026-08-11 INFO next line';
+
+  it('fails the turn with a plain reason instead of handing it to the platform', async () => {
+    const postStream = jest.fn();
+    const t = new MistralTranslator({ postStream });
+    const errors: Error[] = [];
+
+    await t.translateStream({
+      apiKey: pastedLog,
+      sourceText: 'hola',
+      sourceLang: 'es',
+      targetLang: 'en',
+      onSentence: () => {},
+      onDone: () => {},
+      onError: (e: Error) => errors.push(e),
+    });
+
+    expect(postStream).not.toHaveBeenCalled();
+    expect(errors).toHaveLength(1);
+    // The wording routes it to the speaker's plain-language key notice.
+    expect(errors[0].message).toMatch(/api key/i);
+  });
+
+  it('drops the unattended prewarm rather than firing it', async () => {
+    const realFetch = global.fetch;
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      // This one is fire-and-forget from hands-free enable, so a crash here
+      // lands in the middle of an action that has nothing to do with the key.
+      await new MistralTranslator().prewarm({ apiKey: pastedLog });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      global.fetch = realFetch;
+    }
+  });
+});

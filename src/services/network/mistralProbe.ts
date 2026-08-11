@@ -9,6 +9,7 @@
 //     when the host responds — the UI will show the auth error when a transcription is attempted.
 
 import { useSettingsStore } from '../../store/settingsStore';
+import { isSendableKey } from '../auth/validateApiKey';
 import type { ProbeFn } from './NetworkMonitor';
 
 const MODELS_URL = 'https://api.mistral.ai/v1/models';
@@ -20,10 +21,13 @@ export function createMistralProbe(): ProbeFn {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      if (apiKey) {
+      // A key that cannot be a header is not sent as one. The probe runs on a
+      // timer in the background, so handing the platform something it raises
+      // on would take the app down with no user action to connect it to.
+      if (apiKey && isSendableKey(apiKey)) {
         const res = await fetch(MODELS_URL, {
           method: 'GET',
-          headers: { Authorization: `Bearer ${apiKey}` },
+          headers: { Authorization: `Bearer ${apiKey.trim()}` },
           signal: controller.signal,
         });
         // 2xx = reachable + authed. 401/403 = reachable, bad key (adapter will surface).

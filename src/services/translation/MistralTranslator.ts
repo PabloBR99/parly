@@ -37,6 +37,7 @@
 //   is set before `send()` (XMLHttpRequest.js), which is why it is wired first.
 
 import { getLanguage } from '../../app/languages';
+import { isSendableKey } from '../auth/validateApiKey';
 import { log } from '../log/logStore';
 
 const ENDPOINT = 'https://api.mistral.ai/v1/chat/completions';
@@ -320,11 +321,15 @@ export class MistralTranslator {
    */
   async prewarm(args: { apiKey: string; model?: string }): Promise<void> {
     const model = args.model ?? DEFAULT_MODEL;
+    // This one fires unattended — hands-free enable calls it and does not wait
+    // for it — so a key the platform raises on would take the app down in the
+    // middle of an unrelated action, which is exactly how it presented.
+    if (!isSendableKey(args.apiKey)) return;
     try {
       await fetch(ENDPOINT, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${args.apiKey}`,
+          Authorization: `Bearer ${args.apiKey.trim()}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -341,6 +346,14 @@ export class MistralTranslator {
 
   /** Stream a translation, emitting sentences as they complete. */
   async translateStream(args: TranslateStreamArgs): Promise<void> {
+    // Refused before it can become a header — see isSendableKey. The wording
+    // matters as much as the guard: this is a turn the speaker is waiting on,
+    // and "API key" is what routes it to the plain-language notice.
+    if (!isSendableKey(args.apiKey)) {
+      args.onError(new Error('That API key cannot be used (401) — check it in Settings.'));
+      return;
+    }
+
     const model = args.model ?? DEFAULT_MODEL;
     const systemPrompt = buildSystemPrompt(args.sourceLang, args.targetLang);
 
@@ -385,7 +398,7 @@ export class MistralTranslator {
       result = await this.fetcher.postStream({
         url: ENDPOINT,
         headers: {
-          Authorization: `Bearer ${args.apiKey}`,
+          Authorization: `Bearer ${args.apiKey.trim()}`,
           'Content-Type': 'application/json',
           Accept: 'text/event-stream',
         },

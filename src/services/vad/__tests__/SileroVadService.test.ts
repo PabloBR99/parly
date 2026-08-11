@@ -534,6 +534,17 @@ describe('SileroVadService — when the model load is what kills the process', (
     expect(factory).not.toHaveBeenCalled();
   });
 
+  it('retires the claim as it honours it, so one bad run is not a life sentence', async () => {
+    mockFsFiles.set(CLAIM_PATH, 13);
+
+    await new SileroVadService({}, makeSessionFactory(makeOrtSession([]))).initialize();
+
+    // Skipping a launch is enough to break a loop. Leaving the claim standing
+    // would answer a false positive by disabling on-device speech detection
+    // permanently and silently, which is the worse way to be wrong.
+    expect(mockFsFiles.has(CLAIM_PATH)).toBe(false);
+  });
+
   it('still hears speech with no model at all, on energy alone', async () => {
     mockFsFiles.set(CLAIM_PATH, 13);
     const factory = makeSessionFactory(makeOrtSession([]));
