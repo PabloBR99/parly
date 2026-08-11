@@ -48,9 +48,10 @@ function makeMocks() {
 
   let voxtralCallbacks: VoxtralCallbacks | null = null;
   let flushResolver: FlushResolver | null = null;
+  let flushRejecter: ((err: Error) => void) | null = null;
   let flushInFlight: Promise<{ text: string; language?: string }> | null = null;
-  // Mirrors the real client's accumulator: partials build it up, and either
-  // flushUtterance or commitUtterance hands it over and clears it.
+  // Mirrors the real client's accumulator: partials build it up, and
+  // closeSegment hands it over and clears it.
   let accumulated = '';
   let accumulatedLang: string | undefined;
 
@@ -66,22 +67,23 @@ function makeMocks() {
       accumulated = '';
       accumulatedLang = undefined;
     }),
-    commitUtterance: jest.fn().mockImplementation(() => {
-      const taken = { text: accumulated, language: accumulatedLang };
+    closeSegment: jest.fn().mockImplementation(() => {
+      // Mirrors the real client: the text already streamed is handed back
+      // synchronously and the accumulator is emptied, while the server's own
+      // transcript for the same segment arrives later. Closing while a close is
+      // outstanding JOINS it — one transcription.done answers both callers,
+      // which is what lets the orchestrator close early on a guess and then ask
+      // again for real without bookkeeping.
+      const textSoFar = accumulated;
+      const language = accumulatedLang;
+      if (flushInFlight) return { textSoFar, language, final: flushInFlight };
       accumulated = '';
       accumulatedLang = undefined;
-      return taken;
-    }),
-    flushUtterance: jest.fn().mockImplementation(() => {
-      // Mirrors the real client: asking while a flush is outstanding JOINS it.
-      // The segment is already closed, and one transcription.done answers both
-      // callers — which is what lets the orchestrator flush speculatively at
-      // the pause hint and then ask again for real without bookkeeping.
-      if (flushInFlight) return flushInFlight;
-      flushInFlight = new Promise<{ text: string; language?: string }>((resolve) => {
+      flushInFlight = new Promise<{ text: string; language?: string }>((resolve, reject) => {
         flushResolver = resolve;
+        flushRejecter = reject;
       });
-      return flushInFlight;
+      return { textSoFar, language, final: flushInFlight };
     }),
   };
 
@@ -150,6 +152,13 @@ function makeMocks() {
       accumulatedLang = undefined;
       flushResolver?.({ text, language });
       flushResolver = null;
+      flushRejecter = null;
+      flushInFlight = null;
+    },
+    rejectFlush: (message: string) => {
+      flushRejecter?.(new Error(message));
+      flushResolver = null;
+      flushRejecter = null;
       flushInFlight = null;
     },
   };
@@ -840,7 +849,7 @@ describe('ConversationOrchestrator (hands-free)', () => {
     m.resolveFlush('hola', 'es');
     await new Promise<void>(r => setTimeout(r, 50));
 
-    const timeoutArg = (m.voxtral.flushUtterance as jest.Mock).mock.calls[0][0] as number;
+    const timeoutArg = (m.voxtral.closeSegment as jest.Mock).mock.calls[0][0] as number;
     expect(timeoutArg).toBeGreaterThanOrEqual(3_000);
     expect(timeoutArg).toBeLessThanOrEqual(10_000);
   });
@@ -1094,11 +1103,11 @@ describe('ConversationOrchestrator (hands-free)', () => {
     // After enable: voxtral.start called once, vad.setActive(true) called once.
     expect(m.voxtral.start).toHaveBeenCalledTimes(1);
 
-    // Force the next flush to fail.
-    (m.voxtral.flushUtterance as jest.Mock).mockRejectedValueOnce(new Error('flush timeout'));
-
     m.fireVadStart();
     m.fireVadEnd();
+    // The segment close never answers.
+    await Promise.resolve();
+    m.rejectFlush('flush timeout');
 
     // Wait for the rejection + 500ms reconnect delay + the reconnect microtask.
     await new Promise<void>((r) => setTimeout(r, 600));
@@ -1127,8 +1136,6 @@ describe('ConversationOrchestrator (hands-free)', () => {
     const { m, o } = makeHfOrchestrator();
     await enableHf(m, o);
 
-    // First flush fails.
-    (m.voxtral.flushUtterance as jest.Mock).mockRejectedValueOnce(new Error('flush timeout'));
     // Reconnect attempt also fails — second call to voxtral.start rejects.
     // The first call (during enableHandsFree) already resolved, so we use
     // mockRejectedValueOnce here, and it will apply to the next (reconnect) call.
@@ -1136,6 +1143,9 @@ describe('ConversationOrchestrator (hands-free)', () => {
 
     m.fireVadStart();
     m.fireVadEnd();
+    // The segment close never answers.
+    await Promise.resolve();
+    m.rejectFlush('flush timeout');
 
     // Wait for: rejection → 500ms delay → second start rejects → disableHandsFree.
     await new Promise<void>((r) => setTimeout(r, 700));
@@ -1158,12 +1168,12 @@ describe('ConversationOrchestrator (hands-free)', () => {
     const startCallsBefore = m.voxtral.start.mock.invocationCallOrder.length;
     const setActiveCallsBefore = m.vad.setActive.mock.invocationCallOrder.length;
 
-    // Flush rejects → triggers attemptHfReconnect.
-    (m.voxtral.flushUtterance as jest.Mock).mockRejectedValueOnce(new Error('flush timeout'));
-
     // Drive the state machine into hf-capturing then end.
     m.fireVadStart();
     m.fireVadEnd();
+    // The segment close rejects → triggers attemptHfReconnect.
+    await Promise.resolve();
+    m.rejectFlush('flush timeout');
 
     // Wait for the full reconnect cycle (500 ms delay + start).
     await new Promise<void>((r) => setTimeout(r, 600));
@@ -1226,9 +1236,9 @@ describe('ConversationOrchestrator (hands-free latency)', () => {
     m.fireVadEnd();
     await new Promise<void>(r => setTimeout(r, 50));
 
-    // The round trip was closed in the background, never awaited.
-    expect(m.voxtral.commitUtterance).toHaveBeenCalledTimes(1);
-    expect(m.voxtral.flushUtterance).not.toHaveBeenCalled();
+    // The segment was closed, and the turn ran to completion without its
+    // answer ever arriving — the round trip is still outstanding right now.
+    expect(m.voxtral.closeSegment).toHaveBeenCalledTimes(1);
 
     const turn = useConversationStore.getState().turns.at(-1);
     expect(turn?.sourceText).toBe('Buenos días, ¿qué tal estás?');
@@ -1248,8 +1258,10 @@ describe('ConversationOrchestrator (hands-free latency)', () => {
     m.fireVadEnd();
     await Promise.resolve();
 
-    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(1);
-    expect(m.voxtral.commitUtterance).not.toHaveBeenCalled();
+    // The segment is closed either way; what matters is that nothing was
+    // dispatched, because the tail of the sentence is still on its way.
+    expect(m.voxtral.closeSegment).toHaveBeenCalledTimes(1);
+    expect(useConversationStore.getState().turns).toHaveLength(0);
 
     m.resolveFlush('Buenos días, ¿qué tal estás?', 'es');
     await new Promise<void>(r => setTimeout(r, 50));
@@ -1270,8 +1282,10 @@ describe('ConversationOrchestrator (hands-free latency)', () => {
     m.fireVadEnd();
     await Promise.resolve();
 
-    expect(m.voxtral.commitUtterance).not.toHaveBeenCalled();
-    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(1);
+    // Nothing dispatched: the turn is waiting on the answer, because the tag
+    // that comes with it is the only thing that can route this.
+    expect(m.voxtral.closeSegment).toHaveBeenCalledTimes(1);
+    expect(useConversationStore.getState().turns).toHaveLength(0);
   });
 
   it('ends the turn on the pause hint once the transcript closes a sentence', async () => {
@@ -1311,7 +1325,6 @@ describe('ConversationOrchestrator (hands-free latency)', () => {
     await new Promise<void>(r => setTimeout(r, 20));
 
     expect(m.vad.endUtterance).not.toHaveBeenCalled();
-    expect(m.voxtral.commitUtterance).not.toHaveBeenCalled();
     expect(o.getHfState()).toBe('hf-capturing');
     expect(useConversationStore.getState().turns).toHaveLength(0);
   });
@@ -1350,7 +1363,7 @@ describe('ConversationOrchestrator (hands-free latency)', () => {
     expect(payload.endpointDelay).toBeGreaterThanOrEqual(590);
     expect(payload.speechEndToAudio).toBeGreaterThanOrEqual(payload.endpointDelay);
     // The round trip we removed shows up as ~0, not as a missing field.
-    expect(payload.flushToFinal).toBeLessThan(20);
+    expect(payload.closeToFinal).toBeLessThan(20);
   });
 });
 
@@ -1429,15 +1442,15 @@ describe('ConversationOrchestrator (translating ahead of the ending)', () => {
     await tick();
     expect(streams).toHaveLength(1);
 
-    // The server's final says the same words, dressed properly.
-    (m.voxtral.commitUtterance as jest.Mock).mockReturnValueOnce({
-      text: 'Buenos días, ¿quería preguntarte una cosa?',
-      language: 'es',
-    });
-    m.fireVadEnd();
+    // The server's answer says the same words, dressed properly — and closes
+    // a sentence, so it ends the turn where the streamed text could not.
+    m.resolveFlush('Buenos días, ¿quería preguntarte una cosa?', 'es');
     await tick();
 
     expect(m.translator.translateStream).toHaveBeenCalledTimes(1);
+    expect(useConversationStore.getState().turns.at(-1)?.sourceText).toBe(
+      'Buenos días, ¿quería preguntarte una cosa?',
+    );
   });
 
   it('discards the guess when the speaker kept going', async () => {
@@ -1478,11 +1491,9 @@ describe('ConversationOrchestrator (translating ahead of the ending)', () => {
     await tick();
     expect(streams[0].targetLang).toBe('en');
 
-    // The final is English after all — same-ish text, opposite direction.
-    (m.voxtral.commitUtterance as jest.Mock).mockReturnValueOnce({
-      text: 'Good morning, I wanted to ask you something',
-      language: 'en',
-    });
+    // The answer is English after all — same-ish text, opposite direction.
+    m.resolveFlush('Good morning, I wanted to ask you something', 'en');
+    await tick();
     m.fireVadEnd();
     await tick();
 
@@ -1605,27 +1616,27 @@ describe('ConversationOrchestrator (waiting for evidence, not for clocks)', () =
 
     // 'Hola.' is Spanish on a single signal — a weak vote, which normally
     // defers to the audio tag as a second opinion.
-    const speak = async () => {
+    /** Speak one short utterance; true if the turn was taken without waiting
+     *  for the server, which is the whole observable difference. */
+    const speak = async (): Promise<boolean> => {
+      const before = useConversationStore.getState().turns.length;
       m.fireVadStart();
       m.fireVoxtralPartial('Hola.');
       await settle();
       m.fireVadEnd();
-      await Promise.resolve();
+      const tookShortcut = useConversationStore.getState().turns.length > before;
       m.resolveFlush('Hola.'); // no language — as observed on device
       await new Promise<void>(r => setTimeout(r, 350));
+      return tookShortcut;
     };
 
-    await speak();
-    await speak();
     // Two utterances, no tag either time: the second opinion is not coming.
-    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(2);
-    expect(m.voxtral.commitUtterance).not.toHaveBeenCalled();
+    expect(await speak()).toBe(false);
+    expect(await speak()).toBe(false);
 
-    await speak();
     // Same weak evidence, now acted on — it is what routing falls back to
     // anyway once the tag is absent.
-    expect(m.voxtral.commitUtterance).toHaveBeenCalledTimes(1);
-    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(2);
+    expect(await speak()).toBe(true);
   });
 
   it('goes strict again the moment a tag does arrive', async () => {
@@ -1650,21 +1661,22 @@ describe('ConversationOrchestrator (waiting for evidence, not for clocks)', () =
     // The next one takes the shortcut — and the server tags it after all.
     // Voxtral sends `transcription.language` mid-stream, so the shortcut can
     // still see a tag; it does not have to give up watching to go faster.
+    let before = useConversationStore.getState().turns.length;
     m.fireVadStart();
     m.fireVoxtralPartial('Hola.', 'es');
     await settle();
     m.fireVadEnd();
+    expect(useConversationStore.getState().turns.length).toBeGreaterThan(before);
     await new Promise<void>(r => setTimeout(r, 350));
-    expect(m.voxtral.commitUtterance).toHaveBeenCalledTimes(1);
 
     // The second opinion is real after all, so weak evidence defers again.
+    before = useConversationStore.getState().turns.length;
     m.fireVadStart();
     m.fireVoxtralPartial('Hola.');
     await settle();
     m.fireVadEnd();
     await Promise.resolve();
-    expect(m.voxtral.commitUtterance).toHaveBeenCalledTimes(1);
-    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(3);
+    expect(useConversationStore.getState().turns.length).toBe(before);
   });
 });
 
@@ -1703,15 +1715,15 @@ describe('ConversationOrchestrator (asking for the transcript, not waiting for i
     // like, and it is why every shortcut used to decline as 'no-transcript'.
     m.fireVadPause();
     await tick();
-    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(1);
+    expect(m.voxtral.closeSegment).toHaveBeenCalledTimes(1);
 
     m.resolveFlush('Buenos días, ¿qué tal estás?', 'es');
     await turnDone();
 
     // The hangover never expired — the punctuated final ended the turn — and
-    // the round trip that ended it was the one sent during the silence.
+    // the turn ran to completion on the round trip sent during the silence,
+    // without waiting for the one the ending closed behind it.
     expect(m.vad.endUtterance).toHaveBeenCalledTimes(1);
-    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(1);
     expect(useConversationStore.getState().turns.at(-1)?.sourceText).toBe(
       'Buenos días, ¿qué tal estás?',
     );
@@ -1733,10 +1745,41 @@ describe('ConversationOrchestrator (asking for the transcript, not waiting for i
     m.fireVadEnd();
     await turnDone();
 
-    // The ending cost no round trip of its own: the answer was already here.
-    expect(m.voxtral.flushUtterance).toHaveBeenCalledTimes(1);
+    // The ending cost no round trip of its own: the answer was already here,
+    // and the turn completed without anything answering a second close.
     expect(useConversationStore.getState().turns.at(-1)?.sourceText).toBe(
       'Buenos días, quería preguntarte una cosa',
+    );
+  });
+
+  it('asks again at the next pause when the speaker was only drawing breath', async () => {
+    const { m, o } = makeHfOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVadPause();
+    await tick();
+    expect(m.voxtral.closeSegment).toHaveBeenCalledTimes(1);
+    // An unfinished thought, so the turn does not end here.
+    m.resolveFlush('Buenos días, quería preguntarte', 'es');
+    await tick();
+    m.fireVadResume();
+    await tick();
+
+    // They finish the sentence and pause again. Voxtral streams no delta for a
+    // tail this short, so without a second round trip the words exist nowhere
+    // and the ending falls all the way back to the hangover — which is what
+    // used to happen, because the utterance only ever asked once.
+    m.fireVadPause();
+    await tick();
+    expect(m.voxtral.closeSegment).toHaveBeenCalledTimes(2);
+
+    m.resolveFlush('una cosa importante.', 'es');
+    await turnDone();
+
+    expect(m.vad.endUtterance).toHaveBeenCalledTimes(1);
+    expect(useConversationStore.getState().turns.at(-1)?.sourceText).toBe(
+      'Buenos días, quería preguntarte una cosa importante.',
     );
   });
 
@@ -1780,12 +1823,12 @@ describe('ConversationOrchestrator (asking for the transcript, not waiting for i
     const emitted = lines.find(l => l.startsWith('[hf_turn]'));
     expect(emitted).toBeDefined();
     const payload = JSON.parse(emitted!.replace('[hf_turn] ', ''));
-    expect(payload.earlyFlush).toBe('used');
+    expect(payload.earlyClose).toBe('used');
     expect(payload.endpoint).toBe('punctuation');
     // The round trip happened inside the silence, so it is reported but is not
-    // part of the wait — the ending's own flush cost nothing.
-    expect(payload.earlyFlushMs).toBeGreaterThanOrEqual(0);
-    expect(payload.flushToFinal).toBeLessThan(20);
+    // part of the wait — the ending's own close cost nothing.
+    expect(payload.earlyCloseMs).toBeGreaterThanOrEqual(0);
+    expect(payload.closeToFinal).toBeLessThan(20);
   });
 
   it('selects the other voice during the cooldown, because a conversation alternates', async () => {

@@ -24,10 +24,19 @@
 // Session mode (hands-free):
 //   When sessionMode=true, a single WS survives multiple utterances.
 //   After each transcription.done the connection stays open; callers use
-//   flushUtterance() to request a transcript for the latest speech segment,
-//   commitUtterance() to take the transcript already streamed and close the
-//   segment without waiting for the round trip, and endSession() to close the
-//   connection gracefully.
+//   closeSegment() to end the current speech segment and endSession() to close
+//   the connection gracefully.
+//
+//   closeSegment() is the ONLY way to end a segment, and it answers twice:
+//   `textSoFar` is what the server has already streamed, available now, and
+//   `final` is the server's own transcript for the same segment, available
+//   after a round trip. The caller decides which it needs — that decision is
+//   a latency/punctuation trade-off and belongs to the caller, not here.
+//   There were once two methods for this (flushUtterance / commitUtterance),
+//   which forced every caller to pick before it knew, and disagreed about who
+//   owned the deltas arriving between the flush and its answer. They belong to
+//   the segment being closed: the server closes it on receiving the flush, so
+//   anything still arriving is it catching up on audio it already had.
 //
 // Notes on React Native WebSocket:
 //   - Third argument to `new WebSocket(url, protocols, options)` supports
@@ -52,6 +61,15 @@ const HANDSHAKE_TIMEOUT_MS = 4_000;
 export const TARGET_STREAMING_DELAY_MS = 320;
 
 export type StreamingState = 'idle' | 'connecting' | 'streaming' | 'ending' | 'closed';
+
+/** Both answers to "end this segment" — see closeSegment(). */
+export interface SegmentClose {
+  /** What the server has already streamed for this segment, available now. */
+  readonly textSoFar: string;
+  readonly language: string | undefined;
+  /** The server's own transcript for the same segment, one round trip later. */
+  readonly final: Promise<{ text: string; language?: string }>;
+}
 
 export interface StreamingCallbacks {
   /** Fires with the current partial transcript as text-deltas arrive. */
@@ -127,19 +145,14 @@ export class VoxtralRealtimeClient {
   private finalWaiters: Array<() => void> = [];
   private generation = 0;
 
-  /** Segments closed locally by commitUtterance() whose transcription.done has
-   *  not landed yet. A late done belongs to a segment whose text the caller
-   *  already took, so it must be consumed WITHOUT clearing the accumulator —
-   *  by then the next speaker may already be in it. */
-  private pendingCommits = 0;
-
-  // Session-mode flush resolution (one pending flush at a time).
-  private flushResolve: ((result: { text: string; language?: string }) => void) | null = null;
-  private flushReject: ((err: Error) => void) | null = null;
-  private flushTimer: ReturnType<typeof setTimeout> | null = null;
-  /** The outstanding flushUtterance's promise, handed to any caller that asks
-   *  for a flush while it is still in the air — see flushUtterance(). */
-  private flushInFlight: Promise<{ text: string; language?: string }> | null = null;
+  // Session-mode segment closing (one segment closing at a time).
+  private closeResolve: ((result: { text: string; language?: string }) => void) | null = null;
+  private closeReject: ((err: Error) => void) | null = null;
+  private closeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The outstanding close's answer, handed to any caller that closes while one
+   *  is still in the air. The segment is already closed and one
+   *  transcription.done answers everybody — see closeSegment(). */
+  private closeInFlight: Promise<{ text: string; language?: string }> | null = null;
 
   constructor(private readonly wsFactory: WebSocketFactory = defaultWsFactory) {}
 
@@ -292,20 +305,16 @@ export class VoxtralRealtimeClient {
           this.callbacks?.onFinal(finalText, this.detectedLanguage);
 
           if (this.sessionMode) {
-            // Resolve any pending flushUtterance().
-            const resolve = this.flushResolve;
-            const flushedLang = this.detectedLanguage;
+            const resolve = this.closeResolve;
             if (resolve) {
-              this.clearFlushPending();
-              resolve({ text: finalText, language: flushedLang });
-            }
-            if (this.pendingCommits > 0) {
-              // This done closes a segment commitUtterance() already handed
-              // out. Consume it; the accumulator now belongs to whoever spoke
-              // next, and wiping it here would swallow their first words.
-              this.pendingCommits--;
+              // The segment this answers was emptied when it was closed, and
+              // the accumulator has belonged to whoever spoke next ever since.
+              // Wiping it here is how a late answer eats their opening words.
+              this.clearClosePending();
+              resolve({ text: finalText, language: this.detectedLanguage });
             } else {
-              // Reset accumulator for the next utterance — keep WS open.
+              // The server ended a segment on its own — nobody closed it, so
+              // nobody has taken its text. Reset for the next one.
               this.accumulatedText = '';
               this.detectedLanguage = undefined;
             }
@@ -376,7 +385,7 @@ export class VoxtralRealtimeClient {
   /**
    * Signal end-of-utterance. Resolves when transcription.done arrives (or on
    * timeout/error). The onFinal callback fires before this resolves.
-   * Only valid in PTT mode (non-session). In session mode, use flushUtterance().
+   * Only valid in PTT mode (non-session). In session mode, use closeSegment().
    */
   async end(finalTimeoutMs = 5_000): Promise<void> {
     if (this.state === 'connecting') {
@@ -434,100 +443,86 @@ export class VoxtralRealtimeClient {
   }
 
   /**
-   * Session-mode only: send input_audio.flush and resolve with the next
-   * transcription.done. The WS stays open for the next utterance.
+   * Session-mode only: end the current speech segment.
    *
-   * On timeout, the accumulated partial transcript is SALVAGED: long
-   * utterances have long transcription tails, and rejecting used to throw
-   * away a whole minute of speech over a slow final frame. The partial is
-   * everything but the last few hundred milliseconds — translating it beats
-   * silence every time. Rejects only when nothing at all accumulated.
+   * Answers twice, because there are two useful answers and the caller is the
+   * one who knows which it needs:
    *
-   * Asking while a flush is already outstanding JOINS it rather than failing.
-   * The segment is already closed and its transcription.done is the answer to
-   * both calls; a second flush would only close an empty buffer and race the
-   * first one's resolution. This is what lets a caller speculatively flush
-   * early and then ask again for real without tracking which is which.
+   *   textSoFar — every word the server has already streamed for this segment,
+   *     available synchronously. By the time a caller decides an utterance is
+   *     over this is normally the whole thing: the server buffers
+   *     TARGET_STREAMING_DELAY_MS of audio, and the silence the caller waited
+   *     through is longer than that.
+   *   final — the server's own transcript for the same segment, one round trip
+   *     later. Same words, tidier punctuation, several hundred milliseconds of
+   *     dead air. Worth it when textSoFar is empty or still growing; a bad
+   *     trade in a conversation when it isn't.
+   *
+   * The flush goes out either way — the server has to close the segment so the
+   * next speaker starts clean. Closing while a close is already outstanding
+   * JOINS it rather than opening a second: the segment is already closed and
+   * one transcription.done is the answer to everybody. That is what lets a
+   * caller close early on a guess and then ask again for real without tracking
+   * which is which.
+   *
+   * `final` salvages the accumulated partial if the answer never comes — long
+   * utterances have long transcription tails, and losing a minute of speech
+   * over a slow final frame is worse than losing its last comma. It rejects
+   * only when nothing at all accumulated, or when the connection dies.
    */
-  async flushUtterance(timeoutMs = 3_000): Promise<{ text: string; language?: string }> {
-    if (this.flushInFlight) return this.flushInFlight;
-    if (this.state !== 'streaming') {
-      throw new Error(`flushUtterance called in state ${this.state}`);
-    }
+  closeSegment(timeoutMs = 3_000): SegmentClose {
     if (!this.sessionMode) {
-      throw new Error('flushUtterance requires sessionMode=true');
+      throw new Error('closeSegment requires sessionMode=true');
     }
+    if (this.state !== 'streaming' && !this.closeInFlight) {
+      throw new Error(`closeSegment called in state ${this.state}`);
+    }
+    // Take the segment's text as we close it. Everything the accumulator holds
+    // from here on belongs to whoever speaks next — which is what makes a late
+    // answer harmless, and what a ledger of outstanding commits used to fake.
+    const textSoFar = this.accumulatedText;
+    const language = this.detectedLanguage;
+    if (this.closeInFlight) return { textSoFar, language, final: this.closeInFlight };
+    this.accumulatedText = '';
+    this.detectedLanguage = undefined;
 
     let sendFailed = false;
-    const pending = new Promise<{ text: string; language?: string }>((resolve, reject) => {
-      this.flushResolve = resolve;
-      this.flushReject = reject;
-      this.flushTimer = setTimeout(() => {
-        this.clearFlushPending();
-        const salvaged = this.accumulatedText.trim();
+    const final = new Promise<{ text: string; language?: string }>((resolve, reject) => {
+      // The server's answer is authoritative about the words. It may not
+      // repeat the language it already reported for this segment, so the
+      // reading taken at close time stands in.
+      this.closeResolve = (r) => resolve({ text: r.text, language: r.language ?? language });
+      this.closeReject = reject;
+      this.closeTimer = setTimeout(() => {
+        this.clearClosePending();
+        // Whatever streamed after the close is this segment's tail, not the
+        // next speaker: nobody can have started while the server owed us an
+        // answer for the words before it.
+        const salvaged = `${textSoFar}${this.accumulatedText}`.trim();
         if (salvaged.length > 0) {
-          log.warn(`[voxtral] flush timeout after ${timeoutMs} ms — salvaging ${salvaged.length}-char partial`);
-          const language = this.detectedLanguage;
-          // Reset like transcription.done would, so the late done (if it
-          // ever lands) doesn't re-deliver this text into the next turn.
+          log.warn(`[voxtral] close timeout after ${timeoutMs} ms — salvaging ${salvaged.length}-char partial`);
+          const salvagedLang = this.detectedLanguage ?? language;
           this.accumulatedText = '';
           this.detectedLanguage = undefined;
-          resolve({ text: salvaged, language });
+          resolve({ text: salvaged, language: salvagedLang });
           return;
         }
-        reject(new Error(`flushUtterance timeout after ${timeoutMs} ms`));
+        reject(new Error(`closeSegment timeout after ${timeoutMs} ms`));
       }, timeoutMs);
 
       try {
         this.ws?.send(JSON.stringify({ type: 'input_audio.flush' }));
       } catch (e) {
         sendFailed = true;
-        this.clearFlushPending();
+        this.clearClosePending();
         reject(new Error(`Failed to send flush: ${String(e)}`));
       }
     });
     // Only publish a handle that something can still answer. The send above
     // runs inside the executor, so a synchronous failure has already cleared
     // the pending state and must not be re-published here.
-    if (!sendFailed) this.flushInFlight = pending;
-    return pending;
-  }
-
-  /**
-   * Session-mode only: close the current segment and hand back the transcript
-   * we ALREADY have, without waiting for the server's transcription.done.
-   *
-   * Why this exists:
-   *   flushUtterance() is a round trip — flush out, done back — worth several
-   *   hundred milliseconds on the front of every hands-free reply. But by the
-   *   time the caller decides the utterance is over, the deltas have normally
-   *   already delivered every word of it: the server buffers
-   *   TARGET_STREAMING_DELAY_MS of audio, and the silence the caller waited
-   *   through is longer than that. The final that comes back is then the same
-   *   sentence with tidier punctuation. Paying a round trip for punctuation is
-   *   a bad trade in a conversation.
-   *
-   * The flush is still SENT — the server has to close the segment so the next
-   * speaker starts clean — we simply do not block on its answer.
-   *
-   * The caller owns the risk: only commit when the transcript has visibly
-   * stopped growing. Anything still arriving is the tail of the sentence, and
-   * this drops it.
-   */
-  commitUtterance(): { text: string; language?: string } {
-    const text = this.accumulatedText;
-    const language = this.detectedLanguage;
-    this.accumulatedText = '';
-    this.detectedLanguage = undefined;
-    if (this.state === 'streaming') {
-      this.pendingCommits++;
-      try {
-        this.ws?.send(JSON.stringify({ type: 'input_audio.flush' }));
-      } catch (e) {
-        log.warn(`[voxtral] commit flush failed to send: ${String(e)}`);
-      }
-    }
-    return { text, language };
+    if (!sendFailed) this.closeInFlight = final;
+    return { textSoFar, language, final };
   }
 
   /**
@@ -544,17 +539,13 @@ export class VoxtralRealtimeClient {
   }
 
   /**
-   * Session-mode: drop any transcript accumulated since the last flush.
+   * Session-mode: drop any transcript accumulated since the last segment.
    * Used when re-arming VAD after TTS playback — anything captured in the
    * gap is the echo of the phone's own speaker, not the next speaker.
    */
   resetUtterance(): void {
     this.accumulatedText = '';
     this.detectedLanguage = undefined;
-    // Bound the commit ledger: a done that never arrived must not make the
-    // next real one skip its reset. This runs between utterances, where
-    // "forget everything outstanding" is exactly right.
-    this.pendingCommits = 0;
   }
 
   /** Abort without waiting for final. No onFinal fired. */
@@ -592,14 +583,14 @@ export class VoxtralRealtimeClient {
     return null;
   }
 
-  private clearFlushPending(): void {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
+  private clearClosePending(): void {
+    if (this.closeTimer) {
+      clearTimeout(this.closeTimer);
+      this.closeTimer = null;
     }
-    this.flushResolve = null;
-    this.flushReject = null;
-    this.flushInFlight = null;
+    this.closeResolve = null;
+    this.closeReject = null;
+    this.closeInFlight = null;
   }
 
   private cleanup(): void {
@@ -610,10 +601,10 @@ export class VoxtralRealtimeClient {
     }
     this.handshakeReject = null;
     this.flushOnReady = false;
-    // Reject any pending flushUtterance.
-    const flushReject = this.flushReject;
-    this.clearFlushPending();
-    flushReject?.(new Error('VoxtralRealtimeClient closed'));
+    // Reject any pending closeSegment().
+    const closeReject = this.closeReject;
+    this.clearClosePending();
+    closeReject?.(new Error('VoxtralRealtimeClient closed'));
     // Resolve anything awaiting end() — this connection is terminal.
     const waiters = this.finalWaiters;
     this.finalWaiters = [];
@@ -630,7 +621,6 @@ export class VoxtralRealtimeClient {
     this.state = 'closed';
     this.callbacks = null;
     this.preSessionChunkQueue = [];
-    this.pendingCommits = 0;
     this.sessionMode = false;
   }
 }

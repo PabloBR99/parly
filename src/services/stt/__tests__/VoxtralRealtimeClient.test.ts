@@ -388,14 +388,14 @@ describe('VoxtralRealtimeClient', () => {
       expect(svc.currentState).toBe('streaming');
     });
 
-    it('flushUtterance() resolves with next transcription.done', async () => {
+    it('closeSegment() answers with the server final when asked to wait', async () => {
       const fake = createFakeWs();
       const svc = new VoxtralRealtimeClient(fake.factory);
       const rec = recording();
 
       await handshake(fake, svc, rec, { sessionMode: true });
 
-      const flushPromise = svc.flushUtterance(3_000);
+      const closed = svc.closeSegment(3_000);
       // Verify flush was sent
       const types = fake.ws.sent.map(s => JSON.parse(s).type);
       expect(types).toContain('input_audio.flush');
@@ -404,41 +404,41 @@ describe('VoxtralRealtimeClient', () => {
       fake.ws.fire('message', JSON.stringify({ type: 'transcription.language', language: 'es' }));
       fake.ws.fire('message', JSON.stringify({ type: 'transcription.done', text: 'hola mundo' }));
 
-      const result = await flushPromise;
+      const result = await closed.final;
       expect(result.text).toBe('hola mundo');
       expect(result.language).toBe('es');
       expect(svc.currentState).toBe('streaming');
     });
 
-    it('a second flushUtterance joins the outstanding one instead of opening another', async () => {
+    it('a second close joins the outstanding one instead of opening another', async () => {
       const fake = createFakeWs();
       const svc = new VoxtralRealtimeClient(fake.factory);
       const rec = recording();
 
       await handshake(fake, svc, rec, { sessionMode: true });
 
-      // The caller speculatively flushes at a pause, then asks again for real
+      // The caller closes speculatively at a pause, then asks again for real
       // when the turn actually ends. The segment is already closed: a second
-      // flush would only commit an empty buffer and race the first answer.
-      const speculative = svc.flushUtterance(3_000);
-      const forReal = svc.flushUtterance(3_000);
+      // flush would only close an empty buffer and race the first answer.
+      const speculative = svc.closeSegment(3_000);
+      const forReal = svc.closeSegment(3_000);
       const flushes = () =>
         fake.ws.sent.map(s => JSON.parse(s).type).filter(t => t === 'input_audio.flush');
       expect(flushes()).toHaveLength(1);
 
       // One answer settles both callers.
       fake.ws.fire('message', JSON.stringify({ type: 'transcription.done', text: 'de Madrid' }));
-      expect((await speculative).text).toBe('de Madrid');
-      expect((await forReal).text).toBe('de Madrid');
+      expect((await speculative.final).text).toBe('de Madrid');
+      expect((await forReal.final).text).toBe('de Madrid');
 
       // Once answered, the next ask is a genuinely new round trip.
-      const next = svc.flushUtterance(3_000);
+      const next = svc.closeSegment(3_000);
       expect(flushes()).toHaveLength(2);
       fake.ws.fire('message', JSON.stringify({ type: 'transcription.done', text: 'pero vivo aquí' }));
-      expect((await next).text).toBe('pero vivo aquí');
+      expect((await next.final).text).toBe('pero vivo aquí');
     });
 
-    it('three back-to-back utterances all resolve via flushUtterance', async () => {
+    it('three back-to-back utterances all resolve via closeSegment', async () => {
       const fake = createFakeWs();
       const svc = new VoxtralRealtimeClient(fake.factory);
       const rec = recording();
@@ -447,9 +447,9 @@ describe('VoxtralRealtimeClient', () => {
 
       const texts = ['first', 'second', 'third'];
       for (const t of texts) {
-        const fp = svc.flushUtterance();
+        const closed = svc.closeSegment();
         fake.ws.fire('message', JSON.stringify({ type: 'transcription.done', text: t }));
-        const result = await fp;
+        const result = await closed.final;
         expect(result.text).toBe(t);
         expect(svc.currentState).toBe('streaming');
       }
@@ -457,7 +457,7 @@ describe('VoxtralRealtimeClient', () => {
       expect(rec.finals).toHaveLength(3);
     });
 
-    it('flushUtterance() rejects on timeout', async () => {
+    it('closeSegment().final rejects on timeout when nothing was ever transcribed', async () => {
       jest.useFakeTimers();
       try {
         const fake = createFakeWs();
@@ -466,16 +466,16 @@ describe('VoxtralRealtimeClient', () => {
 
         await handshake(fake, svc, rec, { sessionMode: true });
 
-        const flushPromise = svc.flushUtterance(3_000);
+        const closed = svc.closeSegment(3_000);
         jest.advanceTimersByTime(4_000);
 
-        await expect(flushPromise).rejects.toThrow(/timeout/);
+        await expect(closed.final).rejects.toThrow(/timeout/);
       } finally {
         jest.useRealTimers();
       }
     });
 
-    it('flushUtterance() salvages the accumulated partial on timeout instead of dropping the utterance', async () => {
+    it('closeSegment().final salvages the segment on timeout instead of dropping the utterance', async () => {
       jest.useFakeTimers();
       try {
         const fake = createFakeWs();
@@ -489,36 +489,62 @@ describe('VoxtralRealtimeClient', () => {
         fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'una parrafada larga ' }));
         fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'que no debe perderse' }));
 
-        const flushPromise = svc.flushUtterance(3_000);
+        const closed = svc.closeSegment(3_000);
         jest.advanceTimersByTime(4_000);
 
-        const result = await flushPromise;
+        const result = await closed.final;
         expect(result.text).toBe('una parrafada larga que no debe perderse');
         expect(result.language).toBe('es');
-        // The session survives, and the accumulator is reset so a late
+        // The session survives, and the accumulator is empty, so a late
         // transcription.done can't re-deliver the same words.
         expect(svc.currentState).toBe('streaming');
         fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'siguiente' }));
-        const next = svc.flushUtterance(3_000);
+        const next = svc.closeSegment(3_000);
         fake.ws.fire('message', JSON.stringify({ type: 'transcription.done', text: 'siguiente' }));
-        await expect(next).resolves.toEqual({ text: 'siguiente', language: undefined });
+        await expect(next.final).resolves.toEqual({ text: 'siguiente', language: undefined });
       } finally {
         jest.useRealTimers();
       }
     });
 
-    it('flushUtterance() rejects if WS closes while pending', async () => {
+    it('a tail that streams in after the close is salvaged with the head, not instead of it', async () => {
+      jest.useFakeTimers();
+      try {
+        const fake = createFakeWs();
+        const svc = new VoxtralRealtimeClient(fake.factory);
+        const rec = recording();
+
+        await handshake(fake, svc, rec, { sessionMode: true });
+        fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'la primera mitad ' }));
+
+        const closed = svc.closeSegment(3_000);
+        expect(closed.textSoFar).toBe('la primera mitad ');
+        // The server keeps catching up on audio it already had, then never
+        // answers. Nobody can have started speaking while it owed us this.
+        fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'y la segunda' }));
+        jest.advanceTimersByTime(4_000);
+
+        await expect(closed.final).resolves.toEqual({
+          text: 'la primera mitad y la segunda',
+          language: undefined,
+        });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('closeSegment().final rejects if WS closes while pending', async () => {
       const fake = createFakeWs();
       const svc = new VoxtralRealtimeClient(fake.factory);
       const rec = recording();
 
       await handshake(fake, svc, rec, { sessionMode: true });
 
-      const flushPromise = svc.flushUtterance(3_000);
+      const closed = svc.closeSegment(3_000);
       // Simulate unexpected WS close
       fake.ws.fire('close');
 
-      await expect(flushPromise).rejects.toThrow(/VoxtralRealtimeClient closed/);
+      await expect(closed.final).rejects.toThrow(/VoxtralRealtimeClient closed/);
     });
 
     it('endSession() closes the WS and transitions to closed', async () => {
@@ -535,7 +561,7 @@ describe('VoxtralRealtimeClient', () => {
       expect(types).toContain('input_audio.end');
     });
 
-    it('resetUtterance() drops text accumulated since the last flush', async () => {
+    it('resetUtterance() drops text accumulated since the last segment', async () => {
       const fake = createFakeWs();
       const svc = new VoxtralRealtimeClient(fake.factory);
       const rec = recording();
@@ -552,17 +578,17 @@ describe('VoxtralRealtimeClient', () => {
       expect(rec.partials).toEqual(['echo', 'real']);
     });
 
-    it('flushUtterance() throws if called outside sessionMode', async () => {
+    it('closeSegment() throws if called outside sessionMode', async () => {
       const fake = createFakeWs();
       const svc = new VoxtralRealtimeClient(fake.factory);
       const rec = recording();
 
       await handshake(fake, svc, rec); // PTT mode (no sessionMode)
 
-      await expect(svc.flushUtterance()).rejects.toThrow(/sessionMode/);
+      expect(() => svc.closeSegment()).toThrow(/sessionMode/);
     });
 
-    it('commitUtterance() hands back the streamed text and closes the segment', async () => {
+    it('closeSegment() hands back the streamed text without waiting for anything', async () => {
       const fake = createFakeWs();
       const svc = new VoxtralRealtimeClient(fake.factory);
       const rec = recording();
@@ -572,36 +598,37 @@ describe('VoxtralRealtimeClient', () => {
       fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'Buenos ' }));
       fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'días.' }));
 
-      const taken = svc.commitUtterance();
+      const closed = svc.closeSegment();
 
-      expect(taken).toEqual({ text: 'Buenos días.', language: 'es' });
-      // The server still has to close the segment — we simply do not wait.
+      expect(closed.textSoFar).toBe('Buenos días.');
+      expect(closed.language).toBe('es');
+      // The server still has to close the segment — we simply need not wait.
       expect(fake.ws.sent.map(s => JSON.parse(s).type)).toContain('input_audio.flush');
       // And the connection stays open for whoever speaks next.
       expect(svc.currentState).toBe('streaming');
     });
 
-    it('a late final for a committed segment never eats the next speaker', async () => {
+    it('a late final for a closed segment never eats the next speaker', async () => {
       const fake = createFakeWs();
       const svc = new VoxtralRealtimeClient(fake.factory);
       const rec = recording();
 
       await handshake(fake, svc, rec, { sessionMode: true });
       fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'Buenos días.' }));
-      svc.commitUtterance();
+      svc.closeSegment();
 
       // The next speaker is already talking when the server's answer to the
-      // committed segment finally lands.
+      // closed segment finally lands.
       fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'Good ' }));
       fake.ws.fire('message', JSON.stringify({ type: 'transcription.done', text: 'Buenos días.' }));
       fake.ws.fire('message', JSON.stringify({ type: 'transcription.text.delta', text: 'morning.' }));
 
       // Their words survived the late done intact.
       expect(rec.partials.at(-1)).toBe('Good morning.');
-      expect(svc.commitUtterance().text).toBe('Good morning.');
+      expect(svc.closeSegment().textSoFar).toBe('Good morning.');
     });
 
-    it('a normal final still clears the accumulator when nothing was committed', async () => {
+    it('a segment the server ends on its own still clears the accumulator', async () => {
       const fake = createFakeWs();
       const svc = new VoxtralRealtimeClient(fake.factory);
       const rec = recording();
