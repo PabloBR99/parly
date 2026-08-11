@@ -209,3 +209,74 @@ describe('defaultFetcher transport choice', () => {
     expect(sentences).toContain('Hello there, friend.');
   });
 });
+
+// ── Cancellation without DOMException ────────────────────────────────────────
+//
+// Hermes has no `DOMException`. Constructing one to signal cancellation threw
+// a ReferenceError from inside the signal's abort listener, so the error came
+// back out of `controller.abort()` at the call site. It stayed invisible while
+// nothing ever cancelled a translation; sending them speculatively made
+// aborting one routine, and it surfaced on a device as a crash in the middle
+// of a turn.
+
+describe('defaultFetcher cancellation on a runtime without DOMException', () => {
+  const originalFetch = global.fetch;
+  const originalXhr = (global as Record<string, unknown>).XMLHttpRequest;
+  const originalResponse = (global as Record<string, unknown>).Response;
+  const originalDOMException = (global as Record<string, unknown>).DOMException;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    (global as Record<string, unknown>).XMLHttpRequest = originalXhr;
+    (global as Record<string, unknown>).Response = originalResponse;
+    (global as Record<string, unknown>).DOMException = originalDOMException;
+    jest.resetModules();
+  });
+
+  it('aborts cleanly and reports cancellation, with no DOMException in reach', async () => {
+    // The runtime the app actually ships on: XHR transport, no DOMException.
+    class BodylessResponse {}
+    (global as Record<string, unknown>).Response = BodylessResponse as unknown;
+    delete (global as Record<string, unknown>).DOMException;
+
+    let aborted = false;
+    class PendingXhr {
+      onreadystatechange: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readyState = 0;
+      status = 0;
+      responseText = '';
+      open(): void {}
+      setRequestHeader(): void {}
+      send(): void { /* never completes — only the abort ends this */ }
+      abort(): void { aborted = true; }
+    }
+    (global as Record<string, unknown>).XMLHttpRequest = PendingXhr as unknown;
+
+    jest.resetModules();
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { MistralTranslator: Fresh } = require('../MistralTranslator');
+    const t = new Fresh();
+    const controller = new AbortController();
+    const errors: Error[] = [];
+
+    const running = t.translateStream({
+      apiKey: 'sk',
+      sourceText: 'algo',
+      sourceLang: 'es',
+      targetLang: 'en',
+      signal: controller.signal,
+      onSentence: () => {},
+      onDone: () => {},
+      onError: (e: Error) => errors.push(e),
+    });
+
+    // This is the call that used to throw a ReferenceError at the call site.
+    expect(() => controller.abort()).not.toThrow();
+    await running;
+
+    expect(aborted).toBe(true);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].message).toMatch(/cancelled/i);
+  });
+});

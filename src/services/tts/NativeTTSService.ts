@@ -161,6 +161,27 @@ class NativeTTSService {
   }
 
   /**
+   * Select the voice for `language` without speaking anything.
+   *
+   * The full `prewarm` below queues a silent primer, which is a real
+   * synth-and-play cycle in the native engine — fine before a conversation
+   * starts, ruinous between turns: measured on device, priming during the
+   * cooldown roughly tripled the queue-to-audio time of the next sentence,
+   * because the primer was still ahead of it in the native queue.
+   *
+   * This does only the half that is safe to do early. `speakChunk` awaits the
+   * voice switch before it can enqueue anything, so having it already applied
+   * takes that switch off the front of the reply — with nothing left sitting
+   * in the queue behind it.
+   */
+  presetVoice(language: string): void {
+    void this.serial(async () => {
+      if (!this.initialized) await this.init();
+      await this.applyLanguageNow(language);
+    });
+  }
+
+  /**
    * Speculative warmup — load the voice engine for `language` so the first
    * real sentence's TTS first-audio-frame latency drops by ~100-300 ms on
    * Android. Speaks a single space character (inaudible) and does not await.

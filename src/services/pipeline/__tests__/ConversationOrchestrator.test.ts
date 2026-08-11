@@ -89,6 +89,7 @@ function makeMocks() {
   const tts: jest.Mocked<TTSLike> = {
     init: jest.fn().mockResolvedValue(undefined),
     prewarm: jest.fn(),
+    presetVoice: jest.fn(),
     speakChunk: jest
       .fn()
       .mockImplementation((text: string, language: string, onStart?: () => void) => {
@@ -1787,7 +1788,7 @@ describe('ConversationOrchestrator (asking for the transcript, not waiting for i
     expect(payload.flushToFinal).toBeLessThan(20);
   });
 
-  it('switches to the other voice during the cooldown, because a conversation alternates', async () => {
+  it('selects the other voice during the cooldown, because a conversation alternates', async () => {
     const { m, o } = makeHfOrchestrator();
     await o.enableHandsFree('es', 'en');
     m.tts.prewarm.mockClear();
@@ -1798,9 +1799,13 @@ describe('ConversationOrchestrator (asking for the transcript, not waiting for i
     m.fireVadEnd();
     await new Promise<void>(r => setTimeout(r, 400)); // past HF_COOLDOWN_MS
 
-    // The turn was read out in English; the reply will need Spanish. The last
-    // thing warmed before listening resumes is the voice the reply needs.
-    const warmed = m.tts.prewarm.mock.calls.map(c => c[0]);
-    expect(warmed.at(-1)).toBe('es');
+    // The turn was read out in English; the reply will need Spanish.
+    expect(m.tts.presetVoice).toHaveBeenCalledWith('es');
+    // And the cooldown SELECTS rather than warms. A silent primer is a real
+    // synth-and-play cycle: queued between turns it sits in the native queue
+    // ahead of the reply, and measured on device that roughly tripled the
+    // next sentence's time to audio. (Warming the voice being spoken *now*,
+    // which is what the calls during the turn are, stays as it was.)
+    expect(m.tts.prewarm).not.toHaveBeenCalledWith('es');
   });
 });

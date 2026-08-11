@@ -122,6 +122,8 @@ export type TTSSpeakOutcome = 'spoken' | 'no-voice' | 'error' | 'skipped';
 export interface TTSLike {
   init(): Promise<void>;
   prewarm(language: string): void;
+  /** Select a voice without speaking a primer — safe to do between turns. */
+  presetVoice(language: string): void;
   /** `onStart` fires when this chunk actually becomes audible. */
   speakChunk(
     text: string,
@@ -1091,7 +1093,13 @@ export class ConversationOrchestrator {
     this.hfEarlyFlush = flush.call(this.deps.voxtral, finalTimeoutFor(captured)).then(
       (r) => {
         this.hfEarlyFlushMs = Date.now() - startedAt;
-        this.onEarlyFinal(seq, r);
+        // Anything thrown in here would reject the handle the ending awaits,
+        // turning a bad guess into a lost turn.
+        try {
+          this.onEarlyFinal(seq, r);
+        } catch (e) {
+          log.error('[orch/hf] early final handler threw', e instanceof Error ? e : new Error(String(e)));
+        }
       },
       (e: unknown) => {
         // Not an error the speaker should ever see: the hangover behind this
@@ -1225,7 +1233,14 @@ export class ConversationOrchestrator {
       // on it is most of a round trip already paid for, and it answers with
       // punctuation the deltas never carried. A transcript we could already
       // use never gets here: the point of the shortcut is not waiting.
-      await this.hfEarlyFlush;
+      // Never throws — the handlers below absorb both outcomes — but this is
+      // the one await standing between a speaker and their turn, so it does
+      // not get to be the thing that loses it.
+      try {
+        await this.hfEarlyFlush;
+      } catch (e) {
+        log.warn(`[orch/hf] early flush settled badly: ${String(e)}`);
+      }
       // Read through the accessor: setHfState() above moved us to
       // 'hf-flushing', but the guard at the top of this method has narrowed
       // `this.hfState` to 'hf-capturing' for the rest of the body.
@@ -1334,14 +1349,18 @@ export class ConversationOrchestrator {
     if (this.hfEnabled) {
       store.setHfActiveSpeaker(null);
       this.setHfState('hf-cooldown');
-      // A conversation alternates. The voice the next turn needs is almost
-      // always the one we did NOT just speak, and switching voices costs the
-      // native engine ~250 ms — measured as the entire difference between two
-      // otherwise identical turns. Spend it here, in the cooldown, where
-      // nobody is waiting. Guess wrong and the next turn pays a switch it
-      // would have paid anyway.
+      // A conversation alternates, so the voice the next turn needs is almost
+      // always the one we did NOT just speak. Select it now, in the cooldown,
+      // where nobody is waiting for it — guess wrong and the next turn pays a
+      // switch it would have paid anyway.
+      //
+      // Selecting, not warming. The first version of this called prewarm(),
+      // whose silent primer is a real synth-and-play cycle; measured on
+      // device it left that primer in the native queue ahead of the next
+      // reply and roughly tripled its queue-to-audio time. Warming between
+      // turns costs more than it saves.
       const nextVoice = otherOfPair(targetLang, pairA, pairB);
-      if (nextVoice) this.deps.tts.prewarm(nextVoice);
+      if (nextVoice) this.deps.tts.presetVoice(nextVoice);
       await new Promise<void>((r) => setTimeout(r, HF_COOLDOWN_MS));
       if (this.hfEnabled && !this.hfPaused) {
         // Scrub whatever leaked past the capture gate (chunks in flight when

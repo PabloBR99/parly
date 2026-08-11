@@ -109,6 +109,16 @@ const STOPWORDS: Record<string, readonly string[]> = {
     'at', 'have', 'has', 'had', 'can', 'will', 'would', 'could', 'should',
     'yes', 'yeah', 'okay', 'hello', 'hi', 'thanks', 'thank', 'please',
     'good', 'well', 'right', 'want', 'need', 'know', 'think', 'see', 'go',
+    // Ordinary function words whose absence made ordinary sentences abstain:
+    // "I'm from Madrid" scored zero and got routed by blind alternation, so
+    // English was handed to the translator as Spanish and came back unchanged.
+    // Checked against every other profile in this file for collisions; words
+    // that also exist in another pair language (a, me, no, so, us, back) stay
+    // out, because a tie is worse than a gap.
+    'from', 'about', 'there', 'here', 'them', 'him', 'because', 'if', 'just',
+    'very', 'than', 'then', 'after', 'before', 'always', 'never', 'again',
+    'only', 'much', 'many', 'get', 'make', 'take', 'say', 'look', 'like',
+    'little', 'something', 'really',
   ],
   es: [
     'yo', 'usted', 'ustedes', 'ella', 'ellos', 'nosotros', 'el', 'él', 'la',
@@ -329,7 +339,17 @@ function lexScore(lowerText: string, tokens: readonly string[], lang: string): n
   if (stopwords && stopwords.length > 0) {
     const set = new Set(stopwords);
     for (const t of tokens) {
-      if (set.has(t)) score += 2;
+      if (set.has(t)) {
+        score += 2;
+        continue;
+      }
+      // Contractions. The tokenizer keeps the apostrophe, so "i'm" is one
+      // token and matched neither 'i' nor 'am' — which is how the most
+      // ordinary English sentence could score nothing at all. Profiles that
+      // list a contraction whole (en "don't", fr "c'est") match above; this
+      // catches the rest by their stem.
+      const apos = t.indexOf("'");
+      if (apos > 0 && set.has(t.slice(0, apos))) score += 2;
     }
   }
   const chars = CHARS[lang];

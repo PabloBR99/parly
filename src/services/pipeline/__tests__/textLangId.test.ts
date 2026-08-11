@@ -95,3 +95,50 @@ describe('classifyPairText — confidence tiers and abstention', () => {
     expect(classifyPairText('   ', 'es', 'en')).toBeNull();
   });
 });
+
+// ── Contractions ─────────────────────────────────────────────────────────────
+//
+// Reported from a device: "I'm from Madrid" came back untranslated. Not the
+// proper noun — the apostrophe. The tokenizer keeps it, so "i'm" is one token
+// matching neither 'i' nor 'am', and 'from' was missing from the profile
+// outright. The sentence scored 0–0, the router abstained, and blind
+// alternation handed English to the translator as Spanish.
+
+describe('classifyPairText — contractions and everyday function words', () => {
+  it('reads an ordinary contracted sentence as confidently as the long form', () => {
+    expect(classifyPairText("I'm from Madrid", 'es', 'en')).toEqual({
+      side: 'b',
+      strength: 'strong',
+    });
+    expect(classifyPairText('I am from Madrid', 'es', 'en')).toEqual({
+      side: 'b',
+      strength: 'strong',
+    });
+  });
+
+  it('handles the contractions that carry most English speech', () => {
+    for (const text of [
+      "you're right",
+      "it's not what I think",
+      "we're going there",
+      "that's what they said",
+      "I don't know",
+    ]) {
+      expect(classifyPairText(text, 'es', 'en')?.side).toBe('b');
+    }
+  });
+
+  it('still lets the other side win when the text really is Spanish', () => {
+    expect(classifyPairText('soy de Madrid', 'es', 'en')?.side).toBe('a');
+    expect(classifyPairText('¿de dónde eres tú?', 'es', 'en')?.side).toBe('a');
+  });
+
+  it('still abstains on a bare proper noun, which belongs to neither', () => {
+    expect(classifyPairText('Madrid', 'es', 'en')).toBeNull();
+  });
+
+  it('does not let a stem match invent evidence out of an apostrophe alone', () => {
+    // A leading apostrophe has no stem before it; nothing should be scored.
+    expect(classifyPairText("'", 'es', 'en')).toBeNull();
+  });
+});

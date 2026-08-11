@@ -276,18 +276,37 @@ const defaultFetcher: StreamingFetcher = {
       if (signal) {
         if (signal.aborted) {
           xhr.abort();
-          reject(new DOMException('aborted', 'AbortError'));
+          reject(abortError());
           return;
         }
         signal.addEventListener('abort', () => {
           xhr.abort();
-          reject(new DOMException('aborted', 'AbortError'));
+          reject(abortError());
         }, { once: true });
       }
       xhr.send(body);
     });
   },
 };
+
+/**
+ * Cancellation, without `DOMException`.
+ *
+ * Hermes has no `DOMException`, so constructing one threw a ReferenceError —
+ * and it was constructed inside the signal's abort listener, which meant the
+ * ReferenceError came back out of `controller.abort()` at the call site.
+ * Every cancelled translation blew up there. It stayed invisible while the
+ * fetch path was in use and nothing ever cancelled; the moment translations
+ * started being sent speculatively, aborting one became routine.
+ *
+ * Nothing downstream ever needed a DOMException: cancellation is recognised by
+ * `name`, and a plain Error carries that just as well.
+ */
+function abortError(): Error {
+  const err = new Error('aborted');
+  err.name = 'AbortError';
+  return err;
+}
 
 // ── Translator class ─────────────────────────────────────────────────────────
 
