@@ -15,6 +15,41 @@
 // closed a sentence) can end the turn without paying for the hangover, while
 // anything ambiguous still waits it out.
 //
+// ── What makes a frame speech ────────────────────────────────────────────────
+//
+// Two questions, asked separately and ANDed, because they are genuinely
+// different questions and one detector cannot answer both:
+//
+//   1. Is this loud enough to be the person at this table?  — the near-field
+//      gate, a distance in dB above the tracked noise floor (see noiseFloor).
+//   2. Does it sound like speech at all?                     — the model.
+//
+// The model cannot answer (1) and it is important to see why, because it is
+// the whole reason a room with a television in it defeats a VAD that is doing
+// its job perfectly. Silero reports p≈0.95 on a news anchor across the room,
+// and it is *right*: that is speech. It is simply not speech anyone is trying
+// to translate. No probability threshold separates the two, because the
+// difference between them is not in the signal's speechness — it is in how far
+// away it was spoken. Only level relative to the room carries that.
+//
+// The gate cannot answer (2) either: a plate set down next to the phone clears
+// any distance test there is. So both, and both every frame.
+//
+// The AND replaced an OR — the model's probability OR a fixed RMS threshold —
+// and the OR was the bug. A disjunction can only ever add detections, so its
+// energy arm was a permanent one-way ratchet towards more speech; the fixed
+// level it compared against (0.05 RMS ≈ -26 dBFS) sits inside the range of
+// ordinary conversational speech, which means that in any room noisier than a
+// living room it was simply always true. The detector latched on and the
+// hangover never expired.
+//
+// The model keeps a veto rather than a vote, so its threshold is set low: with
+// the gate carrying near/far, the model's job here is to refuse cutlery and
+// door slams, not to be the primary detector Silero's own default of 0.5
+// assumes it is. And the veto is withdrawn entirely on hardware where the
+// model returns near-zero for real speech — see modelMute below. A detector
+// that goes deaf is worse than one that is occasionally credulous.
+//
 // Setup:
 //   1. `npm install onnxruntime-react-native`
 //   2. Download silero_vad.onnx into:
@@ -29,6 +64,8 @@
 
 import { log } from '../log/logStore';
 import { Platform } from 'react-native';
+import { FRAME_MS } from '../audio/audioLevelBus';
+import { NoiseFloorTracker, rmsToDbfs } from '../audio/noiseFloor';
 
 /** Number of PCM samples per frame. 512 @ 16 kHz = 32 ms. */
 export const VAD_FRAME_SAMPLES = 512;
@@ -54,14 +91,31 @@ export interface VadConfig {
    */
   readonly pauseHintMs?: number;
   /**
-   * RMS energy threshold for energy-based speech detection (0-1). When > 0,
-   * a frame is considered speech if EITHER the model prob exceeds
-   * speechProbThreshold OR the RMS exceeds this value. Acts as a fallback when
-   * the ONNX model produces near-zero probabilities despite real audio.
-   * Default 0.05 (observed speech RMS ≈ 0.22, silence ≈ 0.0003 on CMF Phone 1).
-   * Set to 0 to disable energy fallback and rely solely on model probability.
+   * How far above the tracked noise floor a frame must sit to be treated as
+   * the person at this table rather than the room behind them (dB). See
+   * DEFAULT_MARGIN_DB in noiseFloor for how the number was chosen. Set to a
+   * large negative value to effectively disable the gate.
    */
-  readonly energySpeechThreshold?: number;
+  readonly snrMarginDb?: number;
+  /**
+   * How long a run of speech-positive frames must last before it counts as
+   * someone starting to talk (ms).
+   *
+   * A single 32 ms frame was never enough evidence to open a turn on, and in a
+   * room with plates and chairs in it that showed. Impulsive noise is short by
+   * nature — cutlery, a door, a knock on the table are all under ~100 ms — so
+   * requiring a run is what separates them from the shortest real word, which
+   * is several times longer. The cost is that speech_start arrives this much
+   * later, which nothing downstream can see: audio reaches the transcriber
+   * continuously and independently of this, so the delay costs state latency,
+   * never words.
+   */
+  readonly minSpeechMs?: number;
+  /**
+   * How much room tone `calibrate()` samples before the detector starts
+   * answering (ms). See calibrate().
+   */
+  readonly calibrationMs?: number;
 }
 
 type Unsubscribe = () => void;
@@ -107,6 +161,19 @@ function getOrt(): OrtModule {
 // JNI corruption + DataView aliasing issues seen in earlier revisions.
 const SR_DATA = new BigInt64Array([16000n]);
 
+/**
+ * How much clearly-near-field audio the model may stay silent through before
+ * its veto is withdrawn. ≈3 s — long enough that it cannot be tripped by one
+ * quiet sentence, short enough that a device whose model is mute loses at most
+ * the opening exchange of a conversation rather than the whole of it.
+ */
+const MODEL_MUTE_FRAMES = 96;
+
+/** Grace on top of the calibration window before it gives up waiting for
+ *  frames. Capture can take a moment to deliver its first chunk, and a
+ *  calibration that never finishes is a detector that never listens. */
+const CALIBRATION_GRACE_MS = 1_000;
+
 export class SileroVadService {
   private session: OrtSession | null = null;
   private state: Float32Array = new Float32Array(STATE_SIZE);
@@ -125,17 +192,43 @@ export class SileroVadService {
   private maxAmpWindow = 0;
   private maxRmsWindow = 0;
 
+  /** How loud the room is when nobody at this table is talking. */
+  private readonly noise: NoiseFloorTracker;
+  /** Consecutive speech-positive frames. A run shorter than minSpeechFrames is
+   *  not speech yet — see minSpeechMs. */
+  private speechRun = 0;
+  /** Near-field frames the model has had the chance to call speech and has
+   *  not. Reset by any frame it does call speech. */
+  private modelSilentFrames = 0;
+  /** The model has been observed to return near-zero through audio it should
+   *  have had an opinion about; its veto is withdrawn for this session. */
+  private modelMute = false;
+  /** Room tone being collected right now. Non-null means every frame is a
+   *  measurement and no frame is an event. */
+  private calibration: {
+    levels: number[];
+    frames: number;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
+
   private readonly threshold: number;
   private readonly hangoverMs: number;
   private readonly pauseHintMs: number;
-  private readonly energyThreshold: number;
+  private readonly minSpeechFrames: number;
+  private readonly calibrationMs: number;
   private readonly sessionFactory: OrtSessionFactory;
 
   constructor(config: VadConfig = {}, sessionFactory?: OrtSessionFactory) {
-    this.threshold = config.speechProbThreshold ?? 0.08;
+    // Low on purpose, and lower than Silero's own default of 0.5. The model is
+    // a veto here, not the detector — the near-field gate decides who is
+    // talking, and this only has to refuse the things that are not talking at
+    // all. See the header.
+    this.threshold = config.speechProbThreshold ?? 0.3;
     this.hangoverMs = config.silenceHangoverMs ?? 800;
     this.pauseHintMs = config.pauseHintMs ?? 0;
-    this.energyThreshold = config.energySpeechThreshold ?? 0.05;
+    this.minSpeechFrames = Math.max(1, Math.round((config.minSpeechMs ?? 96) / FRAME_MS));
+    this.calibrationMs = config.calibrationMs ?? 400;
+    this.noise = new NoiseFloorTracker({ marginDb: config.snrMarginDb });
     this.sessionFactory = sessionFactory ?? defaultOrtSessionFactory;
   }
 
@@ -189,9 +282,9 @@ export class SileroVadService {
    * prevent concurrent ONNX calls (which would corrupt state tensors).
    */
   feedFrame(pcmInt16: Int16Array): void {
-    // No session is not the same as no VAD: the energy path below needs no
-    // model, and on hardware where the model returns near-zero for real speech
-    // it is already the thing taking every turn.
+    // No session is not the same as no VAD: the near-field gate needs no model,
+    // and on hardware where the model returns near-zero for real speech it is
+    // already the thing taking every turn.
     if (!this.initialized || !this.active) return;
     if (pcmInt16.length !== VAD_FRAME_SAMPLES) return;
 
@@ -220,7 +313,63 @@ export class SileroVadService {
     this.active = active;
     if (!active) {
       this.clearSilenceTimers();
+      this.speechRun = 0;
     }
+  }
+
+  /**
+   * Listen to the room for a moment before answering questions about it.
+   *
+   * Every threshold in here is a distance above the room's own level, and the
+   * tracker that measures that level needs a few seconds of audio to converge
+   * from its starting guess. Those seconds are the beginning of the
+   * conversation. Seeding it with a short sample first means the first thing
+   * anyone says is judged against the room they said it in, instead of being
+   * the utterance that pays for the measurement.
+   *
+   * Deliberately not a moment anyone can see. There is no "hold still while we
+   * calibrate" — it runs in the ~400 ms between tapping hands-free on and the
+   * first word, it is over before a hand leaves the screen, and speech events
+   * are simply suppressed while it runs. A calibration the user has to perform
+   * is a calibration that tells them the app is fragile.
+   *
+   * Being invisible, it can also be walked over: someone may already be
+   * talking. Three things make that survivable — the sample is a lower
+   * quartile rather than a mean, the installed floor is capped, and the
+   * tracker falls fast, so a floor seeded on a voice is back on the room within
+   * about a second of quiet. Worth knowing about, not worth a dialog.
+   *
+   * Requires the detector to be active; frames do not reach it otherwise.
+   */
+  calibrate(): void {
+    this.cancelCalibration();
+    this.calibration = {
+      levels: [],
+      frames: Math.max(1, Math.round(this.calibrationMs / FRAME_MS)),
+      // Frames normally finish this well before the timer does. The timer is
+      // for the case where they never arrive at all.
+      timer: setTimeout(
+        () => this.finishCalibration('timeout'),
+        this.calibrationMs + CALIBRATION_GRACE_MS,
+      ),
+    };
+  }
+
+  /**
+   * What the detector currently believes about the room and about itself.
+   *
+   * Read-only, and the read model for two things: the log line below, and
+   * anything that wants to tell the speakers their room is too loud for
+   * hands-free to work — which, when the gate is pinned at its ceiling and
+   * nothing is getting through, is a more useful thing to say than nothing.
+   */
+  diagnostics(): { floorDb: number; gateDb: number; seeded: boolean; modelMute: boolean } {
+    return {
+      floorDb: this.noise.floor,
+      gateDb: this.noise.gate,
+      seeded: this.noise.seeded,
+      modelMute: this.modelMute,
+    };
   }
 
   /**
@@ -234,6 +383,9 @@ export class SileroVadService {
     this.clearSilenceTimers();
     this.pauseHintEmitted = false;
     this.speaking = false;
+    // The next speaker starts from no evidence, not from whatever the last one
+    // left on the counter.
+    this.speechRun = 0;
   }
 
   /** Reset the RNN state and speaking flag without destroying the ONNX session.
@@ -241,23 +393,37 @@ export class SileroVadService {
    *  affecting speech detection in the new session. */
   resetState(): void {
     this.clearSilenceTimers();
+    this.cancelCalibration();
     this.pauseHintEmitted = false;
     this.state = new Float32Array(STATE_SIZE);
     this.speaking = false;
+    this.speechRun = 0;
     this.frameCount = 0;
     this.maxProbWindow = 0;
     this.maxAmpWindow = 0;
     this.maxRmsWindow = 0;
     this.inferenceQueue = [];
+    // A room heard in the last session is not evidence about this one — the
+    // phone may be in a different building. The next calibrate() reseeds.
+    this.noise.reset();
+    // The model gets its veto back for every session. Withdrawing it is a
+    // judgement made from a few seconds of audio, and a judgement that cheap
+    // should not be able to disable the model for the life of the process: the
+    // cost of re-testing is three seconds of gate-only detection, and the cost
+    // of a sticky false positive is a device that never uses its model again.
+    this.modelMute = false;
+    this.modelSilentFrames = 0;
   }
 
   destroy(): void {
     this.clearSilenceTimers();
+    this.cancelCalibration();
     this.pauseHintEmitted = false;
     this.subscribers = [];
     this.session = null;
     this.initialized = false;
     this.speaking = false;
+    this.speechRun = 0;
     this.inferenceQueue = [];
     this.inferenceRunning = false;
     this.state = new Float32Array(STATE_SIZE);
@@ -265,6 +431,9 @@ export class SileroVadService {
     this.maxProbWindow = 0;
     this.maxAmpWindow = 0;
     this.maxRmsWindow = 0;
+    this.noise.reset();
+    this.modelMute = false;
+    this.modelSilentFrames = 0;
   }
 
   // ── Internal ──────────────────────────────────────────────────────────────
@@ -294,8 +463,8 @@ export class SileroVadService {
       if (frameMaxAbs > this.maxAmpWindow) this.maxAmpWindow = frameMaxAbs;
       if (frameRms > this.maxRmsWindow) this.maxRmsWindow = frameRms;
 
-      // Without a model there is no probability to have — 0 lets the energy
-      // threshold in processProbability() decide on its own.
+      // Without a model there is no probability to have — 0, and the veto is
+      // withdrawn below so the near-field gate decides on its own.
       let prob = 0;
       if (this.session) {
         const ort = getOrt();
@@ -314,25 +483,70 @@ export class SileroVadService {
         this.state = new Float32Array(stateNRaw);
       }
 
-      this.processProbability(prob, frameRms);
+      this.processFrame(prob, frameRms);
     } catch (e) {
       log.error('[vad] frame inference error', e instanceof Error ? e : new Error(String(e)));
     }
   }
 
-  private processProbability(prob: number, frameRms: number): void {
+  private processFrame(prob: number, frameRms: number): void {
+    const levelDb = rmsToDbfs(frameRms);
+
+    // While calibrating, every frame is a measurement of the room and none of
+    // them is an event. Returning here is what makes the window invisible.
+    if (this.calibration !== null) {
+      this.calibration.levels.push(levelDb);
+      if (this.calibration.levels.length >= this.calibration.frames) {
+        this.finishCalibration('sampled');
+      }
+      return;
+    }
+
+    const nearField = this.noise.passes(levelDb);
+    // The floor learns from everything except the person in front of it. Let a
+    // near-field frame push it up and a long utterance walks the floor along
+    // under its own voice until the speaker gates themselves out mid-sentence.
+    this.noise.observe(levelDb, nearField || this.speaking);
+
     this.frameCount++;
     if (prob > this.maxProbWindow) this.maxProbWindow = prob;
     if (this.frameCount % 50 === 0) {
-      log.info(`[vad] frames=${this.frameCount} maxProb=${this.maxProbWindow.toFixed(3)} maxAmp=${this.maxAmpWindow.toFixed(3)} maxRms=${this.maxRmsWindow.toFixed(4)} threshold=${this.threshold} energyThr=${this.energyThreshold} speaking=${this.speaking}`);
+      log.info(`[vad] frames=${this.frameCount} maxProb=${this.maxProbWindow.toFixed(3)} maxAmp=${this.maxAmpWindow.toFixed(3)} maxRms=${this.maxRmsWindow.toFixed(4)} floor=${this.noise.floor.toFixed(1)}dB gate=${this.noise.gate.toFixed(1)}dB level=${levelDb.toFixed(1)}dB threshold=${this.threshold} modelMute=${this.modelMute} speaking=${this.speaking}`);
       this.maxProbWindow = 0;
       this.maxAmpWindow = 0;
       this.maxRmsWindow = 0;
     }
 
-    const isModelSpeech = prob >= this.threshold;
-    const isEnergySpeech = this.energyThreshold > 0 && frameRms >= this.energyThreshold;
-    const isSpeech = isModelSpeech || isEnergySpeech;
+    // A model that never fires on audio this close and this loud is not
+    // vetoing noise, it is broken — and a broken veto ANDed with the gate is a
+    // detector that hears nothing at all. Withdraw it and let the gate work
+    // alone, which is what this device was effectively doing anyway.
+    if (this.session !== null && !this.modelMute && nearField) {
+      if (prob >= this.threshold) {
+        this.modelSilentFrames = 0;
+      } else if (++this.modelSilentFrames >= MODEL_MUTE_FRAMES) {
+        this.modelMute = true;
+        log.warn(
+          `[vad] the model stayed silent through ${MODEL_MUTE_FRAMES} near-field frames — ` +
+          'dropping its veto and listening on the noise floor alone',
+        );
+      }
+    }
+
+    // Both questions, ANDed. The model's half is skipped only when there is no
+    // model to ask, or when asking it has been shown to be pointless.
+    const modelSpeech = prob >= this.threshold;
+    const modelUsable = this.session !== null && !this.modelMute;
+    const candidate = nearField && (modelSpeech || !modelUsable);
+
+    // One run, one meaning of "speech", used everywhere below. A frame only
+    // counts once it is part of a run long enough to not be a plate — which
+    // makes it exactly as true for cancelling a hangover mid-sentence as it is
+    // for opening a turn. That matters more than it sounds: a lone frame of
+    // clatter clearing the gate during the hangover would otherwise keep
+    // extending an utterance that ended, one plate at a time, forever.
+    this.speechRun = candidate ? this.speechRun + 1 : 0;
+    const isSpeech = this.speechRun >= this.minSpeechFrames;
 
     if (isSpeech) {
       this.lastSpeechAt = Date.now();
@@ -366,6 +580,34 @@ export class SileroVadService {
         this.emit('end', since);
       }, this.hangoverMs);
     }
+  }
+
+  /** Install whatever room tone was collected and start answering again.
+   *  Idempotent — the frame count and the timer both race to call it. */
+  private finishCalibration(reason: 'sampled' | 'timeout'): void {
+    const c = this.calibration;
+    if (c === null) return;
+    clearTimeout(c.timer);
+    this.calibration = null;
+
+    if (c.levels.length === 0) {
+      // No audio arrived in the window. Say so plainly and carry on with the
+      // starting guess, which is permissive: a calibration that could not run
+      // must never be the reason hands-free hears nothing.
+      log.warn('[vad] calibration heard no audio — keeping the default noise floor');
+      return;
+    }
+    const floor = this.noise.seed(c.levels);
+    log.info(
+      `[vad] room measured (${reason}, ${c.levels.length} frames): ` +
+      `floor=${floor.toFixed(1)}dBFS gate=${this.noise.gate.toFixed(1)}dBFS`,
+    );
+  }
+
+  private cancelCalibration(): void {
+    if (this.calibration === null) return;
+    clearTimeout(this.calibration.timer);
+    this.calibration = null;
   }
 
   private clearPauseTimer(): void {

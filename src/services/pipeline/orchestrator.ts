@@ -34,6 +34,14 @@ const HF_SILENCE_HANGOVER_MS = 600;
 // Must stay below HF_SILENCE_HANGOVER_MS.
 const HF_PAUSE_HINT_MS = 280;
 
+// Nothing about noise is configured here on purpose. How loud a room is, and
+// how far above it someone has to be to be the one talking, are facts about a
+// microphone and a room rather than about this pipeline — they live with the
+// detector, in SileroVadService and services/audio/noiseFloor.ts, which is
+// also where the constants are explained. The two timings below are the
+// opposite kind of number: they are about how long this pipeline can afford to
+// wait, so they belong here.
+
 let instance: ConversationOrchestrator | null = null;
 
 export function getOrchestrator(): ConversationOrchestrator {

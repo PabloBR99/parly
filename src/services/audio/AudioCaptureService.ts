@@ -12,15 +12,36 @@ const BITS_PER_SAMPLE = 16;
 
 // Android AudioSource constants:
 //   1 = MIC (raw, no processing)
-//   6 = VOICE_RECOGNITION (AGC on, noise suppression off — good for STT)
-//   7 = VOICE_COMMUNICATION (AGC + AEC + NS — best for conversations)
+//   6 = VOICE_RECOGNITION (minimal processing — the source tuned for STT)
+//   7 = VOICE_COMMUNICATION (AGC + AEC + NS — the source tuned for telephony)
 //
-// VOICE_COMMUNICATION (7) is better for Parly because:
-//   - Automatic Gain Control normalizes volume for soft/far speakers
-//   - Acoustic Echo Cancellation helps when TTS plays from speaker
-//   - Noise suppression helps in noisy environments (restaurants, etc.)
+// Currently 7, and it is the least settled decision in the audio path. Two
+// things argue against it and are written down here rather than acted on,
+// because the near-field gating in SileroVadService landed in the same stretch
+// of work and changing the microphone underneath it at the same time would
+// leave neither change measurable:
 //
-// If audio quality is still too low on specific devices, try switching to 6.
+//   · AOSP's own guidance is that noise suppression should not be enabled for
+//     recognition — it is tuned to make speech pleasant to a human ear over a
+//     narrowband link, and an ASR is neither. That is what source 6 exists for.
+//     https://source.android.com/docs/core/audio/implement-pre-processing
+//
+//   · The AGC on this source works directly against the noise floor tracking
+//     in services/audio/noiseFloor.ts, which decides who is talking from how
+//     far a frame sits above the room. AGC's whole job is to compress that
+//     distance: it lifts the room in the gaps, which is precisely the quantity
+//     being measured. Relative gating survives it — everything moves together
+//     — but with less headroom than it would have on a source that leaves the
+//     levels alone.
+//
+// The counter-argument for 7 is the AEC, which matters because TTS plays out
+// of the same speaker the mic is listening to. But hands-free does not lean on
+// it: ConversationOrchestrator gates the capture path by state and never feeds
+// the transcriber while the phone is talking, precisely because the AEC here
+// is too device-dependent to trust.
+//
+// So: an A/B worth running on device, as its own change, with the noise-floor
+// numbers now being logged from SileroVadService as the measurement.
 const ANDROID_AUDIO_SOURCE = 7;
 
 // react-native-audio-record prepends getFilesDir() to wavFile, so pass just the filename.
