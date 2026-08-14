@@ -15,34 +15,44 @@ const BITS_PER_SAMPLE = 16;
 //   6 = VOICE_RECOGNITION (minimal processing — the source tuned for STT)
 //   7 = VOICE_COMMUNICATION (AGC + AEC + NS — the source tuned for telephony)
 //
-// Currently 7, and it is the least settled decision in the audio path. Two
-// things argue against it and are written down here rather than acted on,
-// because the near-field gating in SileroVadService landed in the same stretch
-// of work and changing the microphone underneath it at the same time would
-// leave neither change measurable:
+// Now 6, changed from 7 on device evidence rather than on the documentation
+// alone. Three arguments, in the order they became convincing:
 //
 //   · AOSP's own guidance is that noise suppression should not be enabled for
 //     recognition — it is tuned to make speech pleasant to a human ear over a
 //     narrowband link, and an ASR is neither. That is what source 6 exists for.
 //     https://source.android.com/docs/core/audio/implement-pre-processing
 //
-//   · The AGC on this source works directly against the noise floor tracking
-//     in services/audio/noiseFloor.ts, which decides who is talking from how
-//     far a frame sits above the room. AGC's whole job is to compress that
-//     distance: it lifts the room in the gaps, which is precisely the quantity
-//     being measured. Relative gating survives it — everything moves together
-//     — but with less headroom than it would have on a source that leaves the
-//     levels alone.
+//   · The AGC on source 7 works directly against the noise floor tracking in
+//     services/audio/noiseFloor.ts, which decides who is talking from how far
+//     a frame sits above the room. AGC's whole job is to compress exactly that
+//     distance: it lifts the room in the gaps. Relative gating survives it —
+//     everything moves together — but with less headroom than it would have on
+//     a source that leaves the levels alone.
 //
-// The counter-argument for 7 is the AEC, which matters because TTS plays out
-// of the same speaker the mic is listening to. But hands-free does not lean on
-// it: ConversationOrchestrator gates the capture path by state and never feeds
-// the transcriber while the phone is talking, precisely because the AEC here
-// is too device-dependent to trust.
+//   · And the one that settled it. A capture session on device under source 7
+//     logged `maxAmp=1.000` — full scale, clipping — with Silero returning
+//     maxProb=0.023 on that same window, and a peak of 0.144 across an entire
+//     conversation of ordinary speech. A VAD does not report 0.02 on speech
+//     loud enough to clip unless something upstream has damaged the signal it
+//     is being shown, and an AGC driving a near speaker into saturation is a
+//     candidate with means and opportunity. The model being effectively mute
+//     on this hardware has been treated as a property of the device since it
+//     was first seen; it may turn out to be a property of the microphone
+//     configuration instead, and that is worth an APK to find out.
 //
-// So: an A/B worth running on device, as its own change, with the noise-floor
-// numbers now being logged from SileroVadService as the measurement.
-const ANDROID_AUDIO_SOURCE = 7;
+// The counter-argument for 7 is its AEC, since TTS plays out of the same
+// speaker the mic is listening to. Hands-free does not lean on it:
+// ConversationOrchestrator gates the capture path by state and never feeds the
+// transcriber while the phone is talking, precisely because the AEC here was
+// always too device-dependent to trust. PTT never overlaps playback at all.
+//
+// What would send this back to 7: speech levels collapsing far enough that the
+// gate's floor clamp (GATE_MIN_DBFS, -60 dBFS) starts rejecting real speech,
+// or echo surviving the state gate during the 250 ms cooldown. Both are
+// visible in the same [vad] log line this was decided from. It is a one-line
+// revert.
+const ANDROID_AUDIO_SOURCE = 6;
 
 // react-native-audio-record prepends getFilesDir() to wavFile, so pass just the filename.
 const RECORDING_FILENAME = 'parly_recording.wav';

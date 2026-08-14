@@ -169,6 +169,17 @@ const SR_DATA = new BigInt64Array([16000n]);
  */
 const MODEL_MUTE_FRAMES = 96;
 
+/**
+ * Amplitude at or above which a frame is counted as clipped. Int16 full scale
+ * normalises to 0.99997, so anything this close to 1.0 has hit the ceiling.
+ *
+ * Counted and logged because it is the one number that tells you whether the
+ * capture path is damaging the signal before either half of the detector sees
+ * it. `maxAmp` alone only says that at least one frame in fifty saturated; a
+ * count says whether that was a shout or the whole utterance.
+ */
+const CLIP_AMPLITUDE = 0.99;
+
 /** Grace on top of the calibration window before it gives up waiting for
  *  frames. Capture can take a moment to deliver its first chunk, and a
  *  calibration that never finishes is a detector that never listens. */
@@ -191,6 +202,7 @@ export class SileroVadService {
   private maxProbWindow = 0;
   private maxAmpWindow = 0;
   private maxRmsWindow = 0;
+  private clippedWindow = 0;
 
   /** How loud the room is when nobody at this table is talking. */
   private readonly noise: NoiseFloorTracker;
@@ -402,6 +414,7 @@ export class SileroVadService {
     this.maxProbWindow = 0;
     this.maxAmpWindow = 0;
     this.maxRmsWindow = 0;
+    this.clippedWindow = 0;
     this.inferenceQueue = [];
     // A room heard in the last session is not evidence about this one — the
     // phone may be in a different building. The next calibrate() reseeds.
@@ -431,6 +444,7 @@ export class SileroVadService {
     this.maxProbWindow = 0;
     this.maxAmpWindow = 0;
     this.maxRmsWindow = 0;
+    this.clippedWindow = 0;
     this.noise.reset();
     this.modelMute = false;
     this.modelSilentFrames = 0;
@@ -462,6 +476,7 @@ export class SileroVadService {
       const frameRms = Math.sqrt(rmsSum / VAD_FRAME_SAMPLES);
       if (frameMaxAbs > this.maxAmpWindow) this.maxAmpWindow = frameMaxAbs;
       if (frameRms > this.maxRmsWindow) this.maxRmsWindow = frameRms;
+      if (frameMaxAbs >= CLIP_AMPLITUDE) this.clippedWindow++;
 
       // Without a model there is no probability to have — 0, and the veto is
       // withdrawn below so the near-field gate decides on its own.
@@ -511,10 +526,11 @@ export class SileroVadService {
     this.frameCount++;
     if (prob > this.maxProbWindow) this.maxProbWindow = prob;
     if (this.frameCount % 50 === 0) {
-      log.info(`[vad] frames=${this.frameCount} maxProb=${this.maxProbWindow.toFixed(3)} maxAmp=${this.maxAmpWindow.toFixed(3)} maxRms=${this.maxRmsWindow.toFixed(4)} floor=${this.noise.floor.toFixed(1)}dB gate=${this.noise.gate.toFixed(1)}dB level=${levelDb.toFixed(1)}dB threshold=${this.threshold} modelMute=${this.modelMute} speaking=${this.speaking}`);
+      log.info(`[vad] frames=${this.frameCount} maxProb=${this.maxProbWindow.toFixed(3)} maxAmp=${this.maxAmpWindow.toFixed(3)} clipped=${this.clippedWindow}/50 maxRms=${this.maxRmsWindow.toFixed(4)} floor=${this.noise.floor.toFixed(1)}dB gate=${this.noise.gate.toFixed(1)}dB level=${levelDb.toFixed(1)}dB threshold=${this.threshold} modelMute=${this.modelMute} speaking=${this.speaking}`);
       this.maxProbWindow = 0;
       this.maxAmpWindow = 0;
       this.maxRmsWindow = 0;
+      this.clippedWindow = 0;
     }
 
     // A model that never fires on audio this close and this loud is not
