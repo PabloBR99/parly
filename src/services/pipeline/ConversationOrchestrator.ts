@@ -60,7 +60,7 @@ import { frameRms, publishAudioFrame, resetAudioLevel } from '../audio/audioLeve
 import { log } from '../log/logStore';
 import type { SegmentClose } from '../stt/VoxtralRealtimeClient';
 import { classifyError } from './errors';
-import { classifyPairText } from './textLangId';
+import { classifyPairText, writtenInScriptOf } from './textLangId';
 import { probeNetworkNow } from '../network/monitor';
 
 /** Tiny non-cryptographic ID generator. */
@@ -2038,6 +2038,29 @@ export class ConversationOrchestrator {
       this.completeTurn(turnId);
       return;
     }
+
+    // A transcript in the wrong writing system is not a bad guess at what was
+    // said — it is evidence the transcriber heard something that was not the
+    // sentence. Speaking it anyway costs more than staying quiet: the text
+    // goes to the translator labelled as a language it is not, comes back as
+    // whatever that produces, and is then read aloud to a listener who has no
+    // way to tell a mistranscription from the speaker actually saying it.
+    //
+    // The speaker, on the other hand, is right there and holding the button.
+    // "I didn't catch that" is both true and immediately actionable, which is
+    // the whole reason this lands on the same path as an empty transcript
+    // rather than inventing a failure of its own.
+    if (!writtenInScriptOf(trimmed, primarySubtag(args.sourceLang))) {
+      log.warn(
+        `[orch] transcript is not written in ${args.sourceLang} — dropping it ` +
+        `rather than translating it: ${JSON.stringify(trimmed.slice(0, 60))}`,
+      );
+      store.endTurn(turnId, { sourceText: '', translatedText: '', stage: 'done' });
+      store.setNotice(args.speakerId, { key: 'didntCatch', kind: 'info' });
+      this.completeTurn(turnId);
+      return;
+    }
+
     store.updateTurn(turnId, { sourceText: trimmed, stage: 'translating' });
     this.state = 'translating';
 

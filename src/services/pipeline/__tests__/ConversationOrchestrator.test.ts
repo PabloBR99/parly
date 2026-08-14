@@ -433,6 +433,48 @@ describe('ConversationOrchestrator (PTT)', () => {
     });
   });
 
+  it('says nothing at all rather than speak a transcript in the wrong language', async () => {
+    const m = makeMocks();
+    const o = new ConversationOrchestrator(m);
+    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+
+    const turnPromise = o.beginTurn({ speakerId: 'person_a', sourceLang: 'fr', targetLang: 'en' });
+    await Promise.resolve();
+    await o.endTurn();
+    // French was selected and held; Voxtral answered in Han characters. That
+    // is not a French sentence rendered badly, it is the wrong sentence.
+    m.fireVoxtralFinal('你好我很好谢谢');
+    await turnPromise;
+
+    // Nothing was translated and nothing was spoken — the two things that
+    // would have carried the mistake to the listener.
+    expect(m.translator.translateStream).not.toHaveBeenCalled();
+    expect(m.tts.speakChunk).not.toHaveBeenCalled();
+
+    // And the speaker, who can act on it, is told plainly.
+    expect(useConversationStore.getState().notices.person_a).toEqual({
+      key: 'didntCatch',
+      kind: 'info',
+    });
+  });
+
+  it('still translates an ordinary sentence in the language that was selected', async () => {
+    const m = makeMocks();
+    const o = new ConversationOrchestrator(m);
+    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+
+    const turnPromise = o.beginTurn({ speakerId: 'person_a', sourceLang: 'fr', targetLang: 'en' });
+    await Promise.resolve();
+    await o.endTurn();
+    m.fireVoxtralFinal("bonjour, je voudrais un café s'il vous plaît");
+    await turnPromise;
+
+    // The guard must be invisible to everybody speaking the language they
+    // chose — which is everybody, almost always.
+    expect(m.translator.translateStream).toHaveBeenCalled();
+    expect(useConversationStore.getState().notices.person_a).toBeNull();
+  });
+
   it('a fresh press clears the speaker\'s previous notice', async () => {
     const m = makeMocks();
     const o = new ConversationOrchestrator(m);

@@ -87,6 +87,61 @@ function scriptsFor(lang: string): readonly Script[] {
   return LANG_SCRIPTS[lang] ?? ['latin'];
 }
 
+/**
+ * Enough scripted characters to have an opinion. Below this a transcript is
+ * "Oui.", "42", "OK" — true answers whose writing system says nothing, and
+ * rejecting them would be worse than the problem being solved.
+ */
+const MIN_SCRIPTED_CHARS = 4;
+
+/**
+ * Could this transcript be the language the speaker chose?
+ *
+ * Not language identification — a much smaller question, asked only where the
+ * expected language is already known: is this even written in an alphabet that
+ * language uses? Push-to-talk knows exactly which language the speaker
+ * selected, so a transcript that comes back in Han characters for a French
+ * turn is not a bad guess to be translated anyway. It is the transcriber
+ * having heard something that was not the sentence, and the only honest
+ * output is nothing.
+ *
+ * Deliberately one-sided and deliberately blunt. It answers *no* only for a
+ * clear script mismatch and abstains (true) everywhere else, because the cost
+ * of the two mistakes is nowhere near symmetric: a wrong rejection loses a
+ * sentence the speaker has to repeat, while a wrong acceptance sends the
+ * translator text in a language it was not told about and speaks the result
+ * aloud to someone who then has to work out what happened.
+ *
+ * What it therefore does NOT catch: French returned as Spanish, or any other
+ * confusion inside one writing system. That needs the lexical machinery below,
+ * which is built for choosing between two known languages and is not reliable
+ * enough one-sided — most short utterances score nothing at all, and a
+ * classifier that abstains on "Bonjour" would reject half of what anybody
+ * says. Script is the part that can be decided from a single character, and it
+ * is the part the flagrant failures live in.
+ *
+ * `lang` must be a primary subtag ("fr", not "fr-CA").
+ */
+export function writtenInScriptOf(text: string, lang: string): boolean {
+  const expected = scriptsFor(lang);
+  let total = 0;
+  let matching = 0;
+  for (const ch of text.normalize('NFC')) {
+    const s = scriptOf(ch.codePointAt(0) ?? 0);
+    // Digits, punctuation and emoji belong to no writing system and are
+    // evidence for nobody — they are simply not counted on either side.
+    if (s === null) continue;
+    total++;
+    if (expected.includes(s)) matching++;
+  }
+  if (total < MIN_SCRIPTED_CHARS) return true;
+  // A simple majority, because the realistic mixed case is a correct
+  // transcript carrying a foreign name or a unit ("Bonjour, je suis à Tokyo
+  // 東京"), and the failure case is not mixed at all — it is a whole sentence
+  // in the wrong script.
+  return matching * 2 >= total;
+}
+
 // ── Lexical profiles ─────────────────────────────────────────────────────────
 //
 // Curation rules:
