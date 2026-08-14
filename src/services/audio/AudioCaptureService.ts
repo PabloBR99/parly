@@ -12,16 +12,39 @@ const BITS_PER_SAMPLE = 16;
 
 // Android AudioSource constants:
 //   1 = MIC (raw, no processing)
-//   6 = VOICE_RECOGNITION (AGC on, noise suppression off — good for STT)
-//   7 = VOICE_COMMUNICATION (AGC + AEC + NS — best for conversations)
+//   6 = VOICE_RECOGNITION (the source tuned for speech recognition)
+//   7 = VOICE_COMMUNICATION (AGC + AEC + NS — the source tuned for telephony)
 //
-// VOICE_COMMUNICATION (7) is better for Parly because:
-//   - Automatic Gain Control normalizes volume for soft/far speakers
-//   - Acoustic Echo Cancellation helps when TTS plays from speaker
-//   - Noise suppression helps in noisy environments (restaurants, etc.)
+// This was 7 for most of the app's life, chosen on the reasoning that more
+// processing is more help: gain control for soft speakers, echo cancellation
+// under TTS, noise suppression in restaurants. Two of those three turn out to
+// be arguments against it.
 //
-// If audio quality is still too low on specific devices, try switching to 6.
-const ANDROID_AUDIO_SOURCE = 7;
+// Noise suppression is the one that matters here. It is a spectral gate, and
+// what a gate does for a living is delete low-level signal — which is what
+// quiet speech IS. A speaker talking softly is exactly the input it was built
+// to remove, and "soft speech gets lost" is the symptom that sent us looking.
+// It is also tuned to make a voice pleasant to a human ear over a narrowband
+// link, and an ASR is not a human ear. AOSP says so directly, and having a
+// separate source for recognition is what it says it with:
+//   https://source.android.com/docs/core/audio/implement-pre-processing
+//
+// The gain control is not free either. A capture session on device under 7
+// logged maxAmp=1.000 — full scale, clipping — on ordinary conversational
+// speech. An AGC driving a near speaker into saturation is doing damage, not
+// help, and there is nothing downstream that can undo it.
+//
+// That leaves the echo canceller as the only real argument for 7, and neither
+// mode leans on it. PTT never overlaps playback at all — the button is held or
+// it is not. Hands-free gates the capture path by state in
+// ConversationOrchestrator and never feeds the transcriber while the phone is
+// talking, precisely because the AEC here was always too device-dependent to
+// trust on its own.
+//
+// What would send this back to 7: echo surviving the state gate during the
+// 250 ms cooldown — hands-free translating its own voice. It is a one-line
+// revert, and it is the only thing to watch for.
+const ANDROID_AUDIO_SOURCE = 6;
 
 // react-native-audio-record prepends getFilesDir() to wavFile, so pass just the filename.
 const RECORDING_FILENAME = 'parly_recording.wav';

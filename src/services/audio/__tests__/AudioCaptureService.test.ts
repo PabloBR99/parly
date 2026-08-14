@@ -1,7 +1,8 @@
 /**
- * AudioCaptureService — focused on the stop/start interleave that killed the
- * mic on the recovery press: stopStreaming's continuation must never remove a
- * listener registered by a NEWER startStreaming.
+ * AudioCaptureService — the capture configuration, and the stop/start
+ * interleave that killed the mic on the recovery press: stopStreaming's
+ * continuation must never remove a listener registered by a NEWER
+ * startStreaming.
  */
 
 jest.mock('react-native', () => ({
@@ -26,6 +27,54 @@ jest.mock('react-native-audio-record', () => ({
 
 import AudioRecord from 'react-native-audio-record';
 import { AudioCaptureService } from '../AudioCaptureService';
+
+describe('AudioCaptureService capture format', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  // Every one of these four numbers is load-bearing and none of them is
+  // visible from anywhere else in the codebase, which is how the audio source
+  // got silently reset to the telephony value by a revert that was aimed at
+  // something else entirely. The format has to be 16 kHz mono 16-bit because
+  // that is what Voxtral is fed and what the VAD frames assume; the source has
+  // to be VOICE_RECOGNITION (6) and not VOICE_COMMUNICATION (7), whose noise
+  // suppressor deletes quiet speech and whose gain control was clipping at
+  // full scale. If this test fails, read the comment above the constant before
+  // changing the number — the reasoning is there, not here.
+  it('records what the transcriber needs, from the source meant for recognition', () => {
+    const svc = new AudioCaptureService();
+    svc.startStreaming(() => {});
+
+    expect(AudioRecord.init).toHaveBeenCalledTimes(1);
+    expect(AudioRecord.init).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sampleRate: 16000,
+        channels: 1,
+        bitsPerSample: 16,
+        audioSource: 6,
+      }),
+    );
+  });
+
+  it('configures the native recorder once, not once per turn', async () => {
+    (AudioRecord.stop as jest.Mock).mockResolvedValue('/mock/file.wav');
+    const svc = new AudioCaptureService();
+
+    svc.startStreaming(() => {});
+    await svc.stopStreaming();
+    svc.startStreaming(() => {});
+
+    expect(AudioRecord.init).toHaveBeenCalledTimes(1);
+
+    // …unless the settings are meant to change, which is the only reason
+    // reinit() exists.
+    svc.reinit();
+    await svc.stopStreaming();
+    svc.startStreaming(() => {});
+    expect(AudioRecord.init).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('AudioCaptureService streaming interleave', () => {
   beforeEach(() => {

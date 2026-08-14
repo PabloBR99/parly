@@ -18,12 +18,18 @@
 /** Audio covered by one VAD frame (512 samples @ 16 kHz). */
 export const FRAME_MS = 32;
 
-// The normalisation window. Fixed, not auto-ranging: the Android capture path
-// already runs VOICE_COMMUNICATION with AGC, so the input is pre-normalised,
-// and a second adaptive gain stage on top of it would "pump" — a quiet room
-// would slowly bloom to full scale and make silence look like speech. Values
-// come from the levels logged on-device: silence sits near -70 dBFS, ordinary
-// speech frames land in the -35..-20 range, peaks touch -13.
+// The normalisation window. Fixed, not auto-ranging — an adaptive gain stage
+// here would "pump": a quiet room would slowly bloom to full scale and make
+// silence look like speech. That is a property of what this drives (a meter a
+// person is watching), not of what feeds it, which is why the reasoning
+// survived the capture path moving off VOICE_COMMUNICATION's AGC to the
+// unprocessed VOICE_RECOGNITION source.
+//
+// Values come from the levels logged on-device: silence sits near -70 dBFS,
+// ordinary speech frames land in the -35..-20 range, peaks touch -13. Those
+// were measured under the old source, so without its gain control the needle
+// may simply sit lower — cosmetic, and worth re-reading off a device log
+// before anyone moves these two numbers to chase it.
 export const LEVEL_FLOOR_DBFS = -60;
 export const LEVEL_CEIL_DBFS = -18;
 

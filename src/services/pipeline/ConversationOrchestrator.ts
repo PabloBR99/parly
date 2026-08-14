@@ -1104,7 +1104,11 @@ export class ConversationOrchestrator {
    * cooldown) the mic is hearing the phone's own TTS — that audio must NOT
    * reach the Voxtral session, or the accumulator grows an echo prefix the
    * router later detects as the other language (a feedback-loop ingredient).
-   * VOICE_COMMUNICATION's AEC is too device-dependent to rely on alone.
+   *
+   * This gate is the whole defence, not a belt beside a brace. Hardware echo
+   * cancellation was always too device-dependent to lean on, and the capture
+   * path now uses VOICE_RECOGNITION, which does not offer any — so nothing
+   * downstream of here removes the phone's own voice if this lets it through.
    */
   private readonly hfOnAudio = (base64Pcm: string): void => {
     // One question decides both consumers: is this the room talking, or the
