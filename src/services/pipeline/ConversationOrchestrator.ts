@@ -149,9 +149,6 @@ export interface VadLike {
   ): () => void;
   setActive(active: boolean): void;
   resetState(): void;
-  /** Measure the room before answering questions about it. Requires the
-   *  detector to already be active — frames do not reach it otherwise. */
-  calibrate?(): void;
   /** Close the utterance without emitting an end event — the caller already
    *  took the turn from an `onSpeechPause`. */
   endUtterance?(): void;
@@ -993,10 +990,6 @@ export class ConversationOrchestrator {
     this.deps.vad.resetState();
     // Always re-arm VAD on enable — disableHandsFree leaves it inactive.
     this.deps.vad.setActive(true);
-    // Then measure the room, which needs the frames the line above just let
-    // through. Speech events are suppressed for the ~400 ms it takes, which is
-    // the gap between tapping the toggle and saying anything.
-    this.deps.vad.calibrate?.();
 
     log.info('[orch/hf] enabled — listening');
   }
@@ -1097,11 +1090,6 @@ export class ConversationOrchestrator {
     }
     this.hfPaused = false;
     this.deps.vad?.setActive(true);
-    // A pause means the mic was shut and the tracker stopped learning, and an
-    // outage long enough to notice is long enough to have walked somewhere
-    // else. Measure again rather than resuming against a room that may not be
-    // the room any more.
-    this.deps.vad?.calibrate?.();
   }
 
   /** Whether hands-free is currently paused (e.g. due to offline). */
@@ -1156,44 +1144,6 @@ export class ConversationOrchestrator {
   private handleHfSpeechStart(): void {
     if (!this.hfEnabled || this.hfPaused || this.hfState !== 'hf-idle') return;
     log.info('[orch/hf] speech_start → capturing');
-    // Everything the transcriber has accumulated up to this instant is the
-    // room, not the speaker.
-    //
-    // The mic is open continuously and the Voxtral session is fed continuously
-    // — that is what lets a turn keep the words spoken before the VAD had
-    // enough of them to call it speech. But it also means that between turns,
-    // in a room with a television or a next table in it, the accumulator has
-    // been quietly transcribing that. Nothing was clearing it: `resetUtterance`
-    // ran once per turn, on the cooldown edge, so every second of the room's
-    // own conversation since then arrived as the prefix of this one. In a
-    // quiet room that prefix is empty and the bug is invisible. In a loud one
-    // the speaker's first sentence has a stranger's sentence stapled to the
-    // front of it — which then goes to the translator, and can route the whole
-    // turn to the wrong half if the stranger was speaking the other language.
-    //
-    // Scrubbing here is safe in the direction that matters. Voxtral streams
-    // roughly TARGET_STREAMING_DELAY_MS behind the audio, so at the moment
-    // speech_start fires the accumulator holds text for audio from *before*
-    // this utterance began; the speaker's own opening words have not been
-    // transcribed yet and arrive after the scrub. Words are never lost by
-    // dropping text that describes a time before anyone spoke.
-    //
-    // What this fixes and what it does not, precisely, because the difference
-    // matters to whoever reads this next. It empties OUR accumulator, which is
-    // what the live caption renders and what the fast path in `inspect` reads
-    // — both are clean from here. It does not move the SERVER's segment
-    // boundary, which is still wherever the last close left it, so a turn that
-    // falls through to `await closed.final` still gets a transcript covering
-    // the room's audio as well as the speaker's.
-    //
-    // Closing that gap means not sending the room to the transcriber in the
-    // first place — a pre-roll ring buffer, held while idle and flushed in at
-    // speech_start, which is the standard shape and also stops paying to
-    // transcribe an empty room. It is deliberately not being done here: it
-    // changes when audio reaches a live API whose behaviour under a gapped
-    // feed nothing in this repo can test, and that belongs in its own change
-    // with a device in hand, not bolted onto a detector rework.
-    this.deps.voxtral.resetUtterance?.();
     // A new object, not a reset: whatever the last utterance still has in the
     // air now answers to something nothing points at, and is dropped.
     this.endHfUtterance();

@@ -125,7 +125,6 @@ function makeMocks() {
     }),
     setActive: jest.fn(),
     resetState: jest.fn(),
-    calibrate: jest.fn(),
     endUtterance: jest.fn(),
     destroy: jest.fn(),
   };
@@ -1202,75 +1201,6 @@ describe('ConversationOrchestrator (hands-free)', () => {
     expect(pauseOrder).toBeDefined();
     expect(pauseOrder!).toBeLessThan(reconnectStartOrder);
   });
-
-  // ── The room the mic hears when nobody at the table is talking ─────────────
-
-  it('empties the transcriber of the room before the speaker opens a turn', async () => {
-    const { m, o } = makeHfOrchestrator();
-    m.translator.translateStream.mockImplementation(async (args) => {
-      args.onSentence('Hi.');
-      args.onDone('Hi.');
-    });
-    await enableHf(m, o);
-
-    // The mic is open and the transcriber is running whether or not anyone at
-    // this table is talking, which is what lets a turn keep the words spoken
-    // before the detector had enough of them to be sure. In a room with a
-    // television in it, it is also what has been quietly transcribing the
-    // television since the last turn ended.
-    m.fireVoxtralPartial('and now the weather');
-    expect(useConversationStore.getState().hfLive).toBeNull();
-
-    // Optional on the interface, always present on the mock.
-    const scrub = m.voxtral.resetUtterance as jest.Mock;
-    scrub.mockClear();
-    m.fireVadStart();
-
-    // None of that is the opening of this turn, and it has to be gone before
-    // the first word of this turn arrives — not at the end of it, by which
-    // time it has already been translated and read out to somebody.
-    expect(scrub).toHaveBeenCalledTimes(1);
-
-    m.fireVoxtralPartial('hola');
-    m.fireVadEnd();
-    await Promise.resolve();
-    m.resolveFlush('hola', 'es');
-    await new Promise<void>(r => setTimeout(r, 20));
-
-    expect(useConversationStore.getState().turns[0].sourceText).toBe('hola');
-  });
-
-  it('measures the room only once the detector can actually hear it', async () => {
-    const { m, o } = makeHfOrchestrator();
-    await enableHf(m, o);
-
-    const calibrate = m.vad.calibrate as jest.Mock;
-    expect(calibrate).toHaveBeenCalledTimes(1);
-
-    // Ordering is the whole of it. Frames do not reach the detector until it
-    // is armed, so a calibration started before that measures an empty room
-    // and installs a floor from nothing.
-    const armedAt = Math.min(
-      ...m.vad.setActive.mock.calls
-        .map((c, i) => (c[0] === true ? m.vad.setActive.mock.invocationCallOrder[i] : Infinity)),
-    );
-    expect(calibrate.mock.invocationCallOrder[0]).toBeGreaterThan(armedAt);
-  });
-
-  it('measures the room again after an outage, in case it is a different room', async () => {
-    const { m, o } = makeHfOrchestrator();
-    await enableHf(m, o);
-    expect(m.vad.calibrate).toHaveBeenCalledTimes(1);
-
-    await o.pauseHandsFree();
-    await o.resumeHandsFree();
-
-    // The mic was shut for the length of the outage, so the tracker learned
-    // nothing during it — and an outage long enough to notice is long enough
-    // to have walked somewhere else.
-    expect(m.vad.calibrate).toHaveBeenCalledTimes(2);
-  });
-
 });
 
 // ── Latency: the two shortcuts out of a turn ─────────────────────────────────

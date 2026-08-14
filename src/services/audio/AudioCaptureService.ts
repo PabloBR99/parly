@@ -12,47 +12,16 @@ const BITS_PER_SAMPLE = 16;
 
 // Android AudioSource constants:
 //   1 = MIC (raw, no processing)
-//   6 = VOICE_RECOGNITION (minimal processing — the source tuned for STT)
-//   7 = VOICE_COMMUNICATION (AGC + AEC + NS — the source tuned for telephony)
+//   6 = VOICE_RECOGNITION (AGC on, noise suppression off — good for STT)
+//   7 = VOICE_COMMUNICATION (AGC + AEC + NS — best for conversations)
 //
-// Now 6, changed from 7 on device evidence rather than on the documentation
-// alone. Three arguments, in the order they became convincing:
+// VOICE_COMMUNICATION (7) is better for Parly because:
+//   - Automatic Gain Control normalizes volume for soft/far speakers
+//   - Acoustic Echo Cancellation helps when TTS plays from speaker
+//   - Noise suppression helps in noisy environments (restaurants, etc.)
 //
-//   · AOSP's own guidance is that noise suppression should not be enabled for
-//     recognition — it is tuned to make speech pleasant to a human ear over a
-//     narrowband link, and an ASR is neither. That is what source 6 exists for.
-//     https://source.android.com/docs/core/audio/implement-pre-processing
-//
-//   · The AGC on source 7 works directly against the noise floor tracking in
-//     services/audio/noiseFloor.ts, which decides who is talking from how far
-//     a frame sits above the room. AGC's whole job is to compress exactly that
-//     distance: it lifts the room in the gaps. Relative gating survives it —
-//     everything moves together — but with less headroom than it would have on
-//     a source that leaves the levels alone.
-//
-//   · And the one that settled it. A capture session on device under source 7
-//     logged `maxAmp=1.000` — full scale, clipping — with Silero returning
-//     maxProb=0.023 on that same window, and a peak of 0.144 across an entire
-//     conversation of ordinary speech. A VAD does not report 0.02 on speech
-//     loud enough to clip unless something upstream has damaged the signal it
-//     is being shown, and an AGC driving a near speaker into saturation is a
-//     candidate with means and opportunity. The model being effectively mute
-//     on this hardware has been treated as a property of the device since it
-//     was first seen; it may turn out to be a property of the microphone
-//     configuration instead, and that is worth an APK to find out.
-//
-// The counter-argument for 7 is its AEC, since TTS plays out of the same
-// speaker the mic is listening to. Hands-free does not lean on it:
-// ConversationOrchestrator gates the capture path by state and never feeds the
-// transcriber while the phone is talking, precisely because the AEC here was
-// always too device-dependent to trust. PTT never overlaps playback at all.
-//
-// What would send this back to 7: speech levels collapsing far enough that the
-// gate's floor clamp (GATE_MIN_DBFS, -60 dBFS) starts rejecting real speech,
-// or echo surviving the state gate during the 250 ms cooldown. Both are
-// visible in the same [vad] log line this was decided from. It is a one-line
-// revert.
-const ANDROID_AUDIO_SOURCE = 6;
+// If audio quality is still too low on specific devices, try switching to 6.
+const ANDROID_AUDIO_SOURCE = 7;
 
 // react-native-audio-record prepends getFilesDir() to wavFile, so pass just the filename.
 const RECORDING_FILENAME = 'parly_recording.wav';
