@@ -574,3 +574,177 @@ describe('SileroVadService — when the model load is what kills the process', (
     expect(factory).toHaveBeenCalledWith(MODEL_PATH);
   });
 });
+
+// ── Energy hysteresis ─────────────────────────────────────────────────────────
+//
+// These tests are all model-mute on purpose: makeOrtSession([]) returns 0 for
+// every frame, which is not a contrivance but the only behaviour any device log
+// has ever shown. What decides a turn here is RMS, so RMS is what is tested.
+
+/** A frame whose RMS is exactly `rms` (full scale = 1). */
+function frameAtRms(rms: number): Int16Array {
+  const frame = new Int16Array(VAD_FRAME_SAMPLES);
+  const amp = Math.round(rms * 32768);
+  for (let i = 0; i < VAD_FRAME_SAMPLES; i++) frame[i] = i % 2 === 0 ? amp : -amp;
+  return frame;
+}
+
+/** Let the inference queue drain — each frame costs a couple of microtasks. */
+async function drain(frames = 1): Promise<void> {
+  for (let i = 0; i < frames * 4 + 4; i++) await Promise.resolve();
+}
+
+describe('SileroVadService energy hysteresis', () => {
+  // Loud enough to open a turn; the peak of an ordinary sentence on device.
+  const LOUD = frameAtRms(0.1);
+  // Between the two thresholds: the unstressed middle of the same sentence.
+  // This is the level that used to read as silence and cut people off.
+  const MIDDLE = frameAtRms(0.03);
+
+  it('will not open a turn on speech quieter than the entry threshold', async () => {
+    const svc = new SileroVadService({ energySpeechThreshold: 0.05 }, makeSessionFactory(makeOrtSession([])));
+    await svc.initialize();
+    const starts: number[] = [];
+    svc.subscribe(() => starts.push(1), () => {});
+
+    for (let i = 0; i < 5; i++) svc.feedFrame(MIDDLE);
+    await drain(5);
+
+    // The entry bar is what keeps a television out of the conversation. It has
+    // not moved, and this is the test that says so.
+    expect(starts).toHaveLength(0);
+  });
+
+  it('keeps a turn open through the quiet middle of a sentence', async () => {
+    jest.useFakeTimers();
+    try {
+      const svc = new SileroVadService(
+        { energySpeechThreshold: 0.05, silenceHangoverMs: 600 },
+        makeSessionFactory(makeOrtSession([])),
+      );
+      await svc.initialize();
+      const starts: number[] = [];
+      const ends: number[] = [];
+      svc.subscribe(() => starts.push(1), () => ends.push(1));
+
+      svc.feedFrame(LOUD);
+      await drain();
+      expect(starts).toHaveLength(1);
+
+      // The speaker keeps talking, just not at the volume of a stressed vowel.
+      for (let i = 0; i < 10; i++) svc.feedFrame(MIDDLE);
+      await drain(10);
+
+      jest.advanceTimersByTime(1200); // twice the hangover
+      expect(ends).toHaveLength(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('without hysteresis the same sentence is cut in half', async () => {
+    // The bug, written down. Collapsing the sustain bar onto the entry bar is
+    // exactly the detector that shipped, and it ends the turn 600 ms into a
+    // sentence the speaker is still in the middle of.
+    jest.useFakeTimers();
+    try {
+      const svc = new SileroVadService(
+        { energySpeechThreshold: 0.05, energySustainThreshold: 0.05, silenceHangoverMs: 600 },
+        makeSessionFactory(makeOrtSession([])),
+      );
+      await svc.initialize();
+      const ends: number[] = [];
+      svc.subscribe(() => {}, () => ends.push(1));
+
+      svc.feedFrame(LOUD);
+      await drain();
+      for (let i = 0; i < 10; i++) svc.feedFrame(MIDDLE);
+      await drain(10);
+
+      jest.advanceTimersByTime(1200);
+      expect(ends).toHaveLength(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('never lets the sustain threshold sit at or above the entry threshold', async () => {
+    // A config that asks for it silently gets one threshold back, which is the
+    // failure this whole mechanism exists to prevent. Clamped instead.
+    jest.useFakeTimers();
+    try {
+      const svc = new SileroVadService(
+        { energySpeechThreshold: 0.05, energySustainThreshold: 0.9, silenceHangoverMs: 600 },
+        makeSessionFactory(makeOrtSession([])),
+      );
+      await svc.initialize();
+      const ends: number[] = [];
+      svc.subscribe(() => {}, () => ends.push(1));
+
+      svc.feedFrame(LOUD);
+      await drain();
+      // 0.06 clears the clamped sustain bar (0.05) but not the requested 0.9.
+      for (let i = 0; i < 5; i++) svc.feedFrame(frameAtRms(0.06));
+      await drain(5);
+
+      jest.advanceTimersByTime(1200);
+      expect(ends).toHaveLength(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('ends a turn that the sustain threshold would otherwise hold open forever', async () => {
+    // A room noisier than the sustain bar — a television — would keep feeding
+    // frames that count as speech, and no later frame could ever close the
+    // turn. The ceiling is the only thing that can, so it has to work.
+    jest.useFakeTimers();
+    try {
+      const svc = new SileroVadService(
+        // Hangover long enough that it cannot be what ends this turn.
+        { energySpeechThreshold: 0.05, silenceHangoverMs: 60_000, maxUtteranceMs: 2000 },
+        makeSessionFactory(makeOrtSession([])),
+      );
+      await svc.initialize();
+      const ends: number[] = [];
+      svc.subscribe(() => {}, () => ends.push(1));
+
+      svc.feedFrame(LOUD);
+      await drain();
+
+      jest.advanceTimersByTime(2500);
+      svc.feedFrame(LOUD);
+      await drain();
+
+      expect(ends).toHaveLength(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('re-arms after the ceiling so the next speaker is still heard', async () => {
+    jest.useFakeTimers();
+    try {
+      const svc = new SileroVadService(
+        { energySpeechThreshold: 0.05, silenceHangoverMs: 60_000, maxUtteranceMs: 2000 },
+        makeSessionFactory(makeOrtSession([])),
+      );
+      await svc.initialize();
+      const starts: number[] = [];
+      svc.subscribe(() => starts.push(1), () => {});
+
+      svc.feedFrame(LOUD);
+      await drain();
+      jest.advanceTimersByTime(2500);
+      svc.feedFrame(LOUD); // hits the ceiling, ends the turn
+      await drain();
+
+      svc.feedFrame(LOUD); // the next thing anybody says
+      await drain();
+
+      expect(starts).toHaveLength(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});

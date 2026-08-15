@@ -7,6 +7,12 @@
 // with a configurable silence hangover so short gaps (breathing, pauses) don't
 // fragment an utterance.
 //
+// Read the energy path as the primary one, not the fallback the naming
+// suggests. On the hardware this ships against the model returns 0.001–0.002
+// for speech loud enough to clip — every turn in every device log so far has
+// been decided by RMS alone, and until that is understood the two energy
+// thresholds are the detector.
+//
 // Endpointing is two-stage. `onSpeechPause` fires early (pauseHintMs) and
 // `onSpeechEnd` late (silenceHangoverMs). Silence alone is weak evidence that
 // someone finished talking — strong enough only after a long wait, which is
@@ -54,14 +60,49 @@ export interface VadConfig {
    */
   readonly pauseHintMs?: number;
   /**
-   * RMS energy threshold for energy-based speech detection (0-1). When > 0,
-   * a frame is considered speech if EITHER the model prob exceeds
-   * speechProbThreshold OR the RMS exceeds this value. Acts as a fallback when
-   * the ONNX model produces near-zero probabilities despite real audio.
-   * Default 0.05 (observed speech RMS ≈ 0.22, silence ≈ 0.0003 on CMF Phone 1).
-   * Set to 0 to disable energy fallback and rely solely on model probability.
+   * RMS energy at which a SILENT room is considered to have started speaking
+   * (0-1). A frame is speech if EITHER the model prob exceeds
+   * speechProbThreshold OR the RMS exceeds this value. Nominally a fallback for
+   * when the ONNX model returns near-zero for real speech; on the hardware this
+   * runs on that is not the exception, it is every turn.
+   *
+   * Default 0.05. Deliberately high: this is the bar for deciding somebody
+   * started talking, and a room with a television in it clears anything lower.
+   * Set to 0 to disable the energy path and rely solely on model probability.
    */
   readonly energySpeechThreshold?: number;
+  /**
+   * RMS energy at which an ALREADY-SPEAKING room is considered to still be
+   * speaking (0-1). Lower than energySpeechThreshold, and the gap between them
+   * is the whole point.
+   *
+   * One threshold cannot do both jobs. Speech is not a plateau — inside a
+   * single sentence the vowels are ten to twenty dB above the consonants, so a
+   * bar set high enough to ignore a quiet room sits *inside* the dynamic range
+   * of the sentence it is supposed to be tracking. With one threshold the
+   * detector sees a sentence as a handful of loud syllables separated by
+   * "silence", and the hangover expires somewhere in the middle of it. Measured
+   * on device: 96 ms, 180 ms and 410 ms of "speech" for three utterances that
+   * were each a whole sentence, two of which reached the transcriber as
+   * nothing at all.
+   *
+   * So entering costs more evidence than staying costs. Standard squelch
+   * design, and it separates the two failures cleanly: raising the entry bar
+   * fights false starts, lowering the sustain bar fights chopped sentences,
+   * and neither move drags the other with it.
+   *
+   * Defaults to 40% of energySpeechThreshold (≈8 dB below it).
+   */
+  readonly energySustainThreshold?: number;
+  /**
+   * Hard limit on a single utterance (ms). Nothing about a conversation turn
+   * needs this — it exists because the sustain threshold above is, by design,
+   * close to the noise in a bad room, and a detector that can hold a turn open
+   * needs something that cannot fail to close one. Reaching it is a bug
+   * report, not a feature; the alternative is an app that silently never
+   * answers. Default 15 s.
+   */
+  readonly maxUtteranceMs?: number;
 }
 
 type Unsubscribe = () => void;
@@ -111,6 +152,7 @@ export class SileroVadService {
   private session: OrtSession | null = null;
   private state: Float32Array = new Float32Array(STATE_SIZE);
   private speaking = false;
+  private speakingSince = 0;
   private hangoverTimer: ReturnType<typeof setTimeout> | null = null;
   private pauseTimer: ReturnType<typeof setTimeout> | null = null;
   private pauseHintEmitted = false;
@@ -129,6 +171,8 @@ export class SileroVadService {
   private readonly hangoverMs: number;
   private readonly pauseHintMs: number;
   private readonly energyThreshold: number;
+  private readonly energySustainThreshold: number;
+  private readonly maxUtteranceMs: number;
   private readonly sessionFactory: OrtSessionFactory;
 
   constructor(config: VadConfig = {}, sessionFactory?: OrtSessionFactory) {
@@ -136,6 +180,15 @@ export class SileroVadService {
     this.hangoverMs = config.silenceHangoverMs ?? 800;
     this.pauseHintMs = config.pauseHintMs ?? 0;
     this.energyThreshold = config.energySpeechThreshold ?? 0.05;
+    // Derived, not a second literal: a caller that moves the entry bar for its
+    // own room should carry the sustain bar with it. Clamped below the entry
+    // bar because a sustain threshold at or above it is not hysteresis, and
+    // silently behaving like one threshold is how this was broken before.
+    this.energySustainThreshold = Math.min(
+      config.energySustainThreshold ?? this.energyThreshold * 0.4,
+      this.energyThreshold,
+    );
+    this.maxUtteranceMs = config.maxUtteranceMs ?? 15000;
     this.sessionFactory = sessionFactory ?? defaultOrtSessionFactory;
   }
 
@@ -324,18 +377,40 @@ export class SileroVadService {
     this.frameCount++;
     if (prob > this.maxProbWindow) this.maxProbWindow = prob;
     if (this.frameCount % 50 === 0) {
-      log.info(`[vad] frames=${this.frameCount} maxProb=${this.maxProbWindow.toFixed(3)} maxAmp=${this.maxAmpWindow.toFixed(3)} maxRms=${this.maxRmsWindow.toFixed(4)} threshold=${this.threshold} energyThr=${this.energyThreshold} speaking=${this.speaking}`);
+      log.info(`[vad] frames=${this.frameCount} maxProb=${this.maxProbWindow.toFixed(3)} maxAmp=${this.maxAmpWindow.toFixed(3)} maxRms=${this.maxRmsWindow.toFixed(4)} threshold=${this.threshold} energyThr=${this.energyThreshold} sustainThr=${this.energySustainThreshold.toFixed(3)} speaking=${this.speaking}`);
       this.maxProbWindow = 0;
       this.maxAmpWindow = 0;
       this.maxRmsWindow = 0;
     }
 
     const isModelSpeech = prob >= this.threshold;
-    const isEnergySpeech = this.energyThreshold > 0 && frameRms >= this.energyThreshold;
+    // Which bar this frame has to clear depends on whether anyone is already
+    // talking: starting a turn is a claim about a silent room, continuing one
+    // is a claim about a sentence already in progress. See energySustainThreshold.
+    const energyBar = this.speaking ? this.energySustainThreshold : this.energyThreshold;
+    const isEnergySpeech = this.energyThreshold > 0 && frameRms >= energyBar;
     const isSpeech = isModelSpeech || isEnergySpeech;
 
     if (isSpeech) {
-      this.lastSpeechAt = Date.now();
+      const now = Date.now();
+      // The one thing that can end a turn the sustain bar is holding open. A
+      // room noisy enough to sit above that bar would otherwise keep an
+      // utterance alive with nobody speaking, and no later frame could ever
+      // close it — the detector would simply stop answering.
+      if (this.speaking && now - this.speakingSince >= this.maxUtteranceMs) {
+        log.warn(
+          `[vad] utterance hit the ${this.maxUtteranceMs} ms ceiling — ending it. ` +
+          `The room is probably sitting above the sustain threshold ` +
+          `(${this.energySustainThreshold.toFixed(3)}).`,
+        );
+        this.clearSilenceTimers();
+        this.pauseHintEmitted = false;
+        this.speaking = false;
+        this.lastSpeechAt = now;
+        this.emit('end', now);
+        return;
+      }
+      this.lastSpeechAt = now;
       this.clearSilenceTimers();
       if (this.pauseHintEmitted) {
         this.pauseHintEmitted = false;
@@ -343,6 +418,7 @@ export class SileroVadService {
       }
       if (!this.speaking) {
         this.speaking = true;
+        this.speakingSince = this.lastSpeechAt;
         this.emit('start', this.lastSpeechAt);
       }
     } else if (this.speaking && this.hangoverTimer === null) {

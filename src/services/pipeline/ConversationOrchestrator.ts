@@ -1434,6 +1434,15 @@ export class ConversationOrchestrator {
 
     const trimmed = u.text().trim();
     if (trimmed.length === 0) {
+      // Scrub before going back to listening. The segment was closed, but audio
+      // keeps reaching the session while this runs — the tail of a sentence the
+      // endpoint cut short — and the accumulator is not per-utterance. Left
+      // alone it becomes the PREFIX of whatever the next person says, which is
+      // "I spoke, nothing happened, I spoke again and it translated both at
+      // once": the speaker sees one failure and then a second turn carrying the
+      // wreckage of the first, routed by text that is half somebody else's.
+      // Orphaned words are worth less than a clean next turn.
+      this.deps.voxtral.resetUtterance?.();
       this.setHfState('hf-idle');
       return;
     }
@@ -1455,6 +1464,9 @@ export class ConversationOrchestrator {
           })}`,
         );
       }
+      // Same reasoning as the empty transcript above: this text belongs to no
+      // turn, so it must not survive into the next one.
+      this.deps.voxtral.resetUtterance?.();
       this.setHfState('hf-idle');
       return;
     }

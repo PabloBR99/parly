@@ -141,6 +141,19 @@ function makeMocks() {
       if (lang !== undefined) accumulatedLang = lang;
       voxtralCallbacks?.onPartial(text);
     },
+    /**
+     * One transcription.text.delta, appended — which is what the wire actually
+     * carries. `fireVoxtralPartial` above sets the whole accumulator at once,
+     * matching the shape of the onPartial callback (always the full text so
+     * far) rather than the shape of the accumulator underneath it. The
+     * difference is invisible until something is left in there between
+     * utterances, which is precisely the bug worth testing.
+     */
+    fireVoxtralDelta: (text: string, lang?: string) => {
+      accumulated += text;
+      if (lang !== undefined) accumulatedLang = lang;
+      voxtralCallbacks?.onPartial(accumulated);
+    },
     fireVoxtralFinal: (text: string, lang?: string) => voxtralCallbacks?.onFinal(text, lang),
     fireVoxtralError: (msg: string) => voxtralCallbacks?.onError(new Error(msg)),
     fireVadStart: () => vadStart?.(),
@@ -148,8 +161,12 @@ function makeMocks() {
     fireVadPause: (lastSpeechAt = Date.now()) => vadPause?.(lastSpeechAt),
     fireVadResume: () => vadResume?.(),
     resolveFlush: (text: string, language?: string) => {
-      accumulated = '';
-      accumulatedLang = undefined;
+      // Deliberately does NOT clear the accumulator, because the real client
+      // does not: closeSegment already emptied it, and anything in there now
+      // arrived AFTER the close and belongs to whoever speaks next. See the
+      // comment on transcription.done in VoxtralRealtimeClient — wiping it
+      // here is described there as the way a late answer eats the next
+      // speaker's opening words, and a mock that wipes it cannot show the bug.
       flushResolver?.({ text, language });
       flushResolver = null;
       flushRejecter = null;
@@ -1310,6 +1327,40 @@ describe('ConversationOrchestrator (hands-free latency)', () => {
     expect(useConversationStore.getState().turns.at(-1)?.sourceText).toBe(
       'Buenos días, ¿qué tal estás?',
     );
+  });
+
+  it('does not let an utterance that transcribed to nothing become the next turn', async () => {
+    // The complaint this comes from: "I spoke, nothing happened, and when I
+    // spoke again it translated both at once." An utterance the endpoint cut
+    // short can transcribe to nothing at all, but the audio kept flowing while
+    // that was being decided — and the accumulator it landed in belongs to the
+    // next speaker now.
+    const { m, o } = makeHfOrchestrator();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVadEnd();
+    await Promise.resolve();
+
+    // The tail of the sentence, arriving after the segment was closed.
+    m.fireVoxtralDelta('y entonces le dije que ');
+    m.resolveFlush('', undefined);
+    await new Promise<void>(r => setTimeout(r, 50));
+
+    expect(useConversationStore.getState().turns).toHaveLength(0);
+
+    // Now somebody speaks. What they said is what gets translated — not their
+    // sentence with the wreckage of the last one glued to the front of it.
+    // This is the assertion that reproduces the report; the scrub below is
+    // merely how it is achieved.
+    m.fireVadStart();
+    m.fireVoxtralDelta('Buenos días.');
+    await settle();
+    m.fireVadEnd();
+    await new Promise<void>(r => setTimeout(r, 50));
+
+    expect(useConversationStore.getState().turns.at(-1)?.sourceText).toBe('Buenos días.');
+    expect(m.voxtral.resetUtterance).toHaveBeenCalled();
   });
 
   it('waits for the server final when the transcript alone cannot route the turn', async () => {
