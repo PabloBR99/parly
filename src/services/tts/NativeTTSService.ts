@@ -54,14 +54,12 @@ interface TtsSubscription {
   remove?(): void;
 }
 
-type AddTtsListener = <T extends TtsEvents>(
+// SAFETY: the library declares this as returning void while returning
+// `this.addListener(...)`. The declaration is what is wrong, not the runtime.
+const addTtsListener = Tts.addEventListener as <T extends TtsEvents>(
   type: T,
   handler: TtsEventHandler<T>,
 ) => TtsSubscription;
-
-// SAFETY: the library declares this as returning void while returning
-// `this.addListener(...)`. The declaration is what is wrong, not the runtime.
-const addTtsListener = Tts.addEventListener as AddTtsListener;
 
 /**
  * Result of a speakChunk call.

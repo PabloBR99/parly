@@ -32,7 +32,7 @@
 import * as RNFS from '@dr.pogodin/react-native-fs';
 import type { ErrorUtils as ReactNativeErrorUtils } from 'react-native';
 
-import { asText, isJsonArray, isJsonObject, isNumber, isString, parseJson } from '../../app/json';
+import { asText, isJsonObject, isNumber, isString, parseJson } from '../../app/json';
 import type { JsonValue } from '../../app/json';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -130,7 +130,7 @@ function isLogLevel(value: JsonValue | undefined): value is LogLevel {
  *  Entries that don't decode are dropped, not resurrected as half-objects. */
 function decodeLogEntries(raw: string): readonly LogEntry[] {
   const parsed = parseJson(raw);
-  if (!isJsonArray(parsed)) return [];
+  if (!Array.isArray(parsed)) return [];
   const entries: LogEntry[] = [];
   for (const value of parsed) {
     const entry = decodeLogEntry(value);

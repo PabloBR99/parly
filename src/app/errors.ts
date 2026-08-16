@@ -1,6 +1,5 @@
 // JavaScript lets anything be thrown, so what a boundary catches is a cause,
-// not yet an error. Seventeen call sites spelled the conversion out by hand,
-// and the ones that reached for `.message` first printed "[object Object]".
+// not yet an error. Seventeen call sites spelled this out by hand.
 
 /** The thrown value as an Error, wrapping it only when it was not one. */
 export function toError(cause: unknown): Error {
@@ -11,9 +10,8 @@ export function toError(cause: unknown): Error {
 export function errorMessage(cause: unknown): string {
   if (cause instanceof Error) return cause.message;
   if (typeof cause !== 'object' || cause === null) return String(cause);
-  // A thrown object stringifies to "[object Object]", which names nothing.
-  // Its JSON carries the fields somebody meant to send — unless there are
-  // none to carry, as with a DOMException, whose toString is the better one.
+  // "[object Object]" names nothing; the JSON at least carries the fields.
+  // A DOMException has none, so its own toString is the better answer.
   try {
     const json = JSON.stringify(cause);
     return json === undefined || json === '{}' ? String(cause) : json;

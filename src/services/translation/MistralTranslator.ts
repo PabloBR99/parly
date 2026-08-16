@@ -37,7 +37,7 @@
 //   is set before `send()` (XMLHttpRequest.js), which is why it is wired first.
 
 import { isAbortError } from '../../app/errors';
-import { isJsonArray, isJsonObject, isString, parseJson } from '../../app/json';
+import { isJsonObject, isString, parseJson } from '../../app/json';
 import { getLanguage } from '../../app/languages';
 import { isSendableKey } from '../auth/validateApiKey';
 import { log } from '../log/logStore';
@@ -229,7 +229,7 @@ export function parseSseEvent(event: string): string | null {
   const frame = parseJson(payload);
   if (!isJsonObject(frame)) return null;
   const choices = frame.choices;
-  if (!isJsonArray(choices)) return '';
+  if (!Array.isArray(choices)) return '';
   const first = choices[0];
   if (!isJsonObject(first)) return '';
   const delta = first.delta;

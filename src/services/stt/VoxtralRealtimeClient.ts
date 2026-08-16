@@ -46,7 +46,7 @@
 
 import { asText, isJsonObject, isNumber, isString, parseJson } from '../../app/json';
 import { toError } from '../../app/errors';
-import type { JsonValue } from '../../app/json';
+import type { JsonObject, JsonValue } from '../../app/json';
 import type { PersonId } from '../../app/types';
 import { isSendableKey } from '../auth/validateApiKey';
 import { log } from '../log/logStore';
@@ -80,50 +80,15 @@ export const TARGET_STREAMING_DELAY_MS = STREAMING_DELAY_ACCURATE_MS;
 
 export type StreamingState = 'idle' | 'connecting' | 'streaming' | 'ending' | 'closed';
 
-// ── Wire boundary ───────────────────────────────────────────────────────────
-//
-// `decodeServerEvent` is the only code here that looks at the wire. Everything
-// below it branches on a `ServerEvent`, whose fields are already the types the
-// protocol promises — or the frame never reached the handler at all.
-
-/** A server frame the client acts on, after decoding. See the header for how
- *  each maps to the protocol; `done.text` is absent when the server sent none
- *  and the accumulated deltas stand instead. */
-type ServerEvent =
-  | { readonly kind: 'session-ready' }
-  | { readonly kind: 'text-delta'; readonly text: string }
-  | { readonly kind: 'language'; readonly language: string }
-  | { readonly kind: 'segment' }
-  | { readonly kind: 'done'; readonly text: string | undefined }
-  | { readonly kind: 'error'; readonly message: string };
-
-function decodeServerEvent(data: SocketFrame): ServerEvent | null {
+/** A server frame worth looking at, or null. Unreadable frames and binary ones
+ *  are dropped here so the handler never sees them. */
+function parseFrame(data: SocketFrame): JsonObject | null {
   if (typeof data !== 'string') return null;
   const frame = parseJson(data);
-  if (!isJsonObject(frame)) return null;
-
-  switch (frame.type) {
-    case 'session.created':
-    case 'session.updated':
-      return { kind: 'session-ready' };
-    case 'transcription.text.delta':
-      return { kind: 'text-delta', text: asText(frame.text) ?? '' };
-    case 'transcription.language': {
-      const language = asText(frame.language);
-      return language === undefined ? null : { kind: 'language', language };
-    }
-    case 'transcription.segment':
-      return { kind: 'segment' };
-    case 'transcription.done':
-      return { kind: 'done', text: asText(frame.text) };
-    case 'error':
-      return { kind: 'error', message: decodeErrorMessage(frame.error) };
-    default:
-      return null;
-  }
+  return isJsonObject(frame) && isString(frame.type) ? frame : null;
 }
 
-function decodeErrorMessage(error: JsonValue | undefined): string {
+function errorFrameMessage(error: JsonValue | undefined): string {
   if (isJsonObject(error)) {
     const message = asText(error.message);
     if (message !== undefined) return message;
@@ -347,10 +312,10 @@ export class VoxtralRealtimeClient {
 
       ws.onmessage = (ev) => {
         if (gen !== this.generation) return;
-        const event = decodeServerEvent(ev.data);
-        if (!event) return;
+        const frame = parseFrame(ev.data);
+        if (!frame) return;
 
-        if (event.kind === 'session-ready') {
+        if (frame.type === 'session.created' || frame.type === 'session.updated') {
           if (!this.sessionReady) {
             this.sessionReady = true;
             this.state = 'streaming';
@@ -377,26 +342,28 @@ export class VoxtralRealtimeClient {
           return;
         }
 
-        if (event.kind === 'text-delta') {
-          if (event.text) {
-            this.accumulatedText += event.text;
+        if (frame.type === 'transcription.text.delta') {
+          const delta = asText(frame.text);
+          if (delta) {
+            this.accumulatedText += delta;
             this.callbacks?.onPartial(this.accumulatedText);
           }
           return;
         }
 
-        if (event.kind === 'language') {
-          this.detectedLanguage = event.language;
+        if (frame.type === 'transcription.language') {
+          const language = asText(frame.language);
+          if (language) this.detectedLanguage = language;
           return;
         }
 
-        if (event.kind === 'segment') {
+        if (frame.type === 'transcription.segment') {
           // Emitted by Voxtral in streaming mode. Not used today.
           return;
         }
 
-        if (event.kind === 'done') {
-          const finalText = event.text ?? this.accumulatedText;
+        if (frame.type === 'transcription.done') {
+          const finalText = asText(frame.text) ?? this.accumulatedText;
           this.callbacks?.onFinal(finalText, this.detectedLanguage);
 
           if (this.sessionMode) {
@@ -419,8 +386,8 @@ export class VoxtralRealtimeClient {
           return;
         }
 
-        if (event.kind === 'error') {
-          const err = new Error(event.message);
+        if (frame.type === 'error') {
+          const err = new Error(errorFrameMessage(frame.error));
           if (!this.sessionReady) {
             settle(() => { this.cleanup(); reject(err); });
           } else {

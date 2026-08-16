@@ -1,18 +1,15 @@
 // The globals a test swaps out. TypeScript declares them as constants, so this
-// is the writable view; the loose types are deliberate, because a test double
-// is never the whole real thing. Without it every test that replaced a global
-// wrote `as Record<string, unknown>` and lost its types on the way past.
+// is the writable view — without it, tests wrote `as Record<string, unknown>`.
 
 import type { ErrorUtils } from 'react-native';
 
-/** Whatever the code under test reads off a response: a status, maybe a body. */
+/** What the code under test reads off a response. */
 export interface FakeResponse {
   readonly status: number;
   readonly ok?: boolean;
   readonly body?: { getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }> } } | null;
 }
 
-/** The XMLHttpRequest surface the XHR transport uses. */
 export interface FakeXhr {
   readyState: number;
   status: number;
