@@ -1,6 +1,7 @@
 import {
   ConversationOrchestrator,
   type AudioCapture,
+  type OrchestratorConfig,
   type VoxtralLike,
   type TranslatorLike,
   type TTSLike,
@@ -183,6 +184,15 @@ function makeMocks() {
   };
 }
 
+/** A configured orchestrator and the mocks behind it — where every test but
+ *  the "refuses without configure()" one starts. */
+function makeOrchestrator(config: Partial<OrchestratorConfig> = {}) {
+  const m = makeMocks();
+  const o = new ConversationOrchestrator(m);
+  o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest', ...config });
+  return { m, o };
+}
+
 beforeEach(() => {
   resetAudioLevel();
   useConversationStore.getState().clear();
@@ -203,9 +213,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('starts in idle, transitions through recording → transcribing → translating → idle', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
 
     expect(o.getState()).toBe('idle');
 
@@ -255,9 +263,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('clears activeTurnId after empty-transcription turn', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
 
     const turnPromise = o.beginTurn({ speakerId: 'person_a', sourceLang: 'es', targetLang: 'en' });
     await Promise.resolve();
@@ -270,9 +276,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('queues multiple TTS chunks and awaits all before completing', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
 
     const ttsResolvers: Array<() => void> = [];
     m.tts.speakChunk.mockImplementation((text, language) => {
@@ -304,9 +308,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('marks turn as error and releases lock on translator failure', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
 
     m.translator.translateStream.mockImplementation(async (args) => {
       args.onError(new Error('HTTP 401: Authentication failed'));
@@ -325,9 +327,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('fails turn cleanly when Voxtral fires an error mid-recording', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
 
     const turnPromise = o.beginTurn({ speakerId: 'person_a', sourceLang: 'es', targetLang: 'en' });
     await Promise.resolve();
@@ -341,9 +341,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('handles empty transcription as a clean no-op turn', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
 
     const turnPromise = o.beginTurn({ speakerId: 'person_a', sourceLang: 'es', targetLang: 'en' });
     await Promise.resolve();
@@ -357,9 +355,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('rejects a second beginTurn while a turn is in flight', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
 
     const t1 = o.beginTurn({ speakerId: 'person_a', sourceLang: 'es', targetLang: 'en' });
     await Promise.resolve();
@@ -380,9 +376,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('prewarm() initializes TTS and pings translator', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
 
     await o.prewarm();
     expect(m.tts.init).toHaveBeenCalled();
@@ -393,9 +387,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('cancelTurn aborts an in-flight turn quietly (done, no error, no notice)', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
 
     const turnPromise = o.beginTurn({ speakerId: 'person_a', sourceLang: 'es', targetLang: 'en' });
     await Promise.resolve();
@@ -414,9 +406,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('surfaces a speaker-side notice when the turn fails (humanized, keyed)', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
 
     m.translator.translateStream.mockImplementation(async (args) => {
       args.onError(new Error('HTTP 401: Authentication failed (check API key).'));
@@ -436,9 +426,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('empty transcript sets a quiet didntCatch notice for the speaker', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
 
     const turnPromise = o.beginTurn({ speakerId: 'person_b', sourceLang: 'en', targetLang: 'es' });
     await Promise.resolve();
@@ -453,9 +441,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('says nothing at all rather than speak a transcript in the wrong language', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
 
     const turnPromise = o.beginTurn({ speakerId: 'person_a', sourceLang: 'fr', targetLang: 'en' });
     await Promise.resolve();
@@ -478,9 +464,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('still translates an ordinary sentence in the language that was selected', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
 
     const turnPromise = o.beginTurn({ speakerId: 'person_a', sourceLang: 'fr', targetLang: 'en' });
     await Promise.resolve();
@@ -495,9 +479,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('a fresh press clears the speaker\'s previous notice', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
     useConversationStore.getState().setNotice('person_a', { key: 'generic', kind: 'error' });
 
     const turnPromise = o.beginTurn({ speakerId: 'person_a', sourceLang: 'es', targetLang: 'en' });
@@ -532,9 +514,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('streams translation deltas into translatedText before any sentence completes', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
 
     m.translator.translateStream.mockImplementation(async (args) => {
       args.onDelta?.('Hel');
@@ -555,9 +535,7 @@ describe('ConversationOrchestrator (PTT)', () => {
   });
 
   it('fires speculative TTS prewarm at beginTurn AND on first translation token', async () => {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
 
     m.translator.translateStream.mockImplementation(async (args) => {
       args.onFirstToken?.();
@@ -581,9 +559,7 @@ describe('ConversationOrchestrator (PTT)', () => {
 
 describe('ConversationOrchestrator (hands-free)', () => {
   function makeHfOrchestrator() {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator();
     return { m, o };
   }
 
@@ -1273,9 +1249,7 @@ describe('ConversationOrchestrator (hands-free)', () => {
 
 describe('ConversationOrchestrator (hands-free latency)', () => {
   function makeHfOrchestrator() {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk-test', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator({ apiKey: 'sk-test' });
     m.translator.translateStream.mockImplementation(async (args) => {
       args.onFirstToken?.();
       args.onSentence('Good morning.');
@@ -1474,9 +1448,7 @@ type TranslateArgs = Parameters<TranslatorLike['translateStream']>[0];
 
 describe('ConversationOrchestrator (translating ahead of the ending)', () => {
   function makeSpecOrchestrator() {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk-test', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator({ apiKey: 'sk-test' });
     const streams: TranslateArgs[] = [];
     m.translator.translateStream.mockImplementation(
       (args: TranslateArgs) =>
@@ -1653,10 +1625,8 @@ describe('ConversationOrchestrator (translating ahead of the ending)', () => {
 // that this server never sends.
 
 describe('ConversationOrchestrator (waiting for evidence, not for clocks)', () => {
-  function makeOrchestrator() {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk-test', translationModel: 'mistral-small-latest' });
+  function makeCapturing() {
+    const { m, o } = makeOrchestrator({ apiKey: 'sk-test' });
     const streams: TranslateArgs[] = [];
     m.translator.translateStream.mockImplementation((args: TranslateArgs) => {
       streams.push(args);
@@ -1670,7 +1640,7 @@ describe('ConversationOrchestrator (waiting for evidence, not for clocks)', () =
   const SPANISH = 'Buenos días, quería preguntarte una cosa';
 
   it('holds the pause hint open until the words actually land', async () => {
-    const { m, o, streams } = makeOrchestrator();
+    const { m, o, streams } = makeCapturing();
     await o.enableHandsFree('es', 'en');
 
     m.fireVadStart();
@@ -1688,7 +1658,7 @@ describe('ConversationOrchestrator (waiting for evidence, not for clocks)', () =
   });
 
   it('drops everything the hint started when the speaker carries on', async () => {
-    const { m, o, streams } = makeOrchestrator();
+    const { m, o, streams } = makeCapturing();
     await o.enableHandsFree('es', 'en');
 
     m.fireVadStart();
@@ -1702,7 +1672,7 @@ describe('ConversationOrchestrator (waiting for evidence, not for clocks)', () =
   });
 
   it('stops holding out for an audio tag the server never sends', async () => {
-    const { m, o } = makeOrchestrator();
+    const { m, o } = makeCapturing();
     m.translator.translateStream.mockImplementation(async (args: TranslateArgs) => {
       args.onSentence('Hello.');
       args.onDone('Hello.');
@@ -1735,7 +1705,7 @@ describe('ConversationOrchestrator (waiting for evidence, not for clocks)', () =
   });
 
   it('goes strict again the moment a tag does arrive', async () => {
-    const { m, o } = makeOrchestrator();
+    const { m, o } = makeCapturing();
     m.translator.translateStream.mockImplementation(async (args: TranslateArgs) => {
       args.onSentence('Hello.');
       args.onDone('Hello.');
@@ -1790,9 +1760,7 @@ describe('ConversationOrchestrator (waiting for evidence, not for clocks)', () =
 
 describe('ConversationOrchestrator (asking for the transcript, not waiting for it)', () => {
   function makeHfOrchestrator() {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk-test', translationModel: 'mistral-small-latest' });
+    const { m, o } = makeOrchestrator({ apiKey: 'sk-test' });
     m.translator.translateStream.mockImplementation(async (args) => {
       args.onFirstToken?.();
       args.onSentence('Good morning.');
@@ -1969,10 +1937,8 @@ describe('ConversationOrchestrator (a direction nobody had evidence for)', () =>
   /** Answer each request from a table keyed "sourceText|source>target". A
    *  missing entry means the model handed the input straight back, which is
    *  what asking for a language to be translated into itself produces. */
-  function makeOrchestrator(replies: Record<string, string>) {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk-test', translationModel: 'mistral-small-latest' });
+  function makeReplying(replies: Record<string, string>) {
+    const { m, o } = makeOrchestrator({ apiKey: 'sk-test' });
     const asked: string[] = [];
     m.translator.translateStream.mockImplementation(async (args: TranslateArgs) => {
       const dir = `${args.sourceLang}>${args.targetLang}`;
@@ -2005,7 +1971,7 @@ describe('ConversationOrchestrator (a direction nobody had evidence for)', () =>
   const OPENER = 'Buenos días, ¿qué tal estás?';
 
   it('never speaks a translation that is its own input', async () => {
-    const { m, o, asked } = makeOrchestrator({
+    const { m, o, asked } = makeReplying({
       [`${OPENER}|es>en`]: 'Good morning, how are you?',
       'Genial.|es>en': 'Great.',
       // 'Genial.|en>es' is absent: asked that way the word comes back as-is.
@@ -2035,7 +2001,7 @@ describe('ConversationOrchestrator (a direction nobody had evidence for)', () =>
   });
 
   it('leaves a word that survives translation alone, at a cost of one retry', async () => {
-    const { m, o, asked } = makeOrchestrator({
+    const { m, o, asked } = makeReplying({
       [`${OPENER}|es>en`]: 'Good morning, how are you?',
       // "Madrid" is "Madrid" whichever way it is asked — no entry either way.
     });
@@ -2055,7 +2021,7 @@ describe('ConversationOrchestrator (a direction nobody had evidence for)', () =>
   });
 
   it('does not second-guess a direction the transcript itself chose', async () => {
-    const { m, o, asked } = makeOrchestrator({
+    const { m, o, asked } = makeReplying({
       [`${OPENER}|es>en`]: 'Good morning, how are you?',
     });
     await o.enableHandsFree('es', 'en');
@@ -2080,9 +2046,7 @@ describe('ConversationOrchestrator (a direction nobody had evidence for)', () =>
 
 describe('ConversationOrchestrator (early close, gated)', () => {
   function makeHf(people?: readonly string[]) {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk-test', translationModel: 'mistral-small-latest', people });
+    const { m, o } = makeOrchestrator({ apiKey: 'sk-test', people });
     m.translator.translateStream.mockImplementation(async (args) => {
       args.onFirstToken?.();
       args.onSentence('translated');
@@ -2164,9 +2128,7 @@ describe('ConversationOrchestrator (early close, gated)', () => {
 
 describe('ConversationOrchestrator (names and context)', () => {
   function makeHf(people: readonly string[]) {
-    const m = makeMocks();
-    const o = new ConversationOrchestrator(m);
-    o.configure({ apiKey: 'sk-test', translationModel: 'mistral-small-latest', people });
+    const { m, o } = makeOrchestrator({ apiKey: 'sk-test', people });
     m.translator.translateStream.mockImplementation(async (args) => {
       args.onFirstToken?.();
       args.onSentence('translated');
