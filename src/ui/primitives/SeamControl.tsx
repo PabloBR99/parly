@@ -1,42 +1,31 @@
 // SeamControl — the hands-free toggle, as a horizontal "voice wave" seated
 // dead-centre on the seam.
 //
-// Why here, why neutral?
-//   Hands-free is not a property of either speaker — it's a property of the
-//   conversation. So it belongs on the seam (the encounter line), not in one
-//   speaker's footer. It's neutral white for the same reason the seam is:
-//   colour lives in the atmosphere, never in the chrome.
+// It lives on the seam, neutral white, because hands-free is a property of the
+// conversation and not of either speaker — colour lives in the atmosphere,
+// never in the chrome.
 //
-// Why a wave, and no text?
-//   The shape tells you the state. Off (reposo): a flat, dim equaliser that
-//   breathes a faint invite halo — "tappable". On + listening (escuchando):
-//   a wave driven by the actual microphone — "the room is going in". On + TTS
-//   (traduciendo): a calm, synchronised swell — "the voice is going out".
-//   Offline (paused): dimmed and still. No caption — the wave is the word.
+// The shape is the caption. Off (reposo): a flat, dim equaliser breathing a
+// faint invite halo, "tappable". Listening (escuchando): a wave driven by the
+// actual microphone, "the room is going in". Speaking (traduciendo): a calm
+// synchronised swell, "the voice is going out". Offline: dimmed and still.
 //
-// Why the listening wave is real:
-//   A canned loop is a lie the user can catch. Speak and nothing changes; stay
-//   silent and it keeps dancing — and the one question hands-free has to answer
-//   at a glance ("is it hearing me?") goes unanswered. So `escuchando` reads the
-//   live level off `audioLevelBus`, which is fed by the very frames the VAD uses
-//   to take turns. The bars ARE the turn detector's input, drawn.
-//   `traduciendo` stays synthetic on purpose: the OS text-to-speech engine
-//   exposes no output level, and mirroring the mic there would be visualising
-//   the phone's own voice — the exact echo the half-duplex gate exists to
-//   prevent.
+// The listening wave is real because a canned loop is a lie the user can catch
+// — speak and nothing changes, stay silent and it keeps dancing — leaving the
+// one question hands-free must answer at a glance ("is it hearing me?")
+// unanswered. `escuchando` reads the live level off audioLevelBus, fed by the
+// very frames the VAD takes turns on: the bars ARE the detector's input, drawn.
+// `traduciendo` stays synthetic, since the OS exposes no output level and
+// mirroring the mic there would visualise the phone's own voice — the echo the
+// half-duplex gate exists to prevent.
 //
-// The shape:
-//   A ripple radiating outward from the centre bar, with the height arching
-//   toward the middle like a waveform envelope. Outward-from-the-seam is the
-//   app's spatial grammar — this control sits on the line between two people,
-//   and energy leaves it in both directions at once.
+// Bars ripple outward from the centre, arching toward the middle like a
+// waveform envelope: this control sits on the line between two people, and
+// energy leaves it in both directions at once.
 //
-// Implementation note: each bar is an Animated.View whose `scaleY` is driven
-// by a shared value (rock-solid on Android — far smoother than animating
-// height). The live wave is computed on the UI thread from two shared values —
-// a free-running phase clock and the mic level — so a whole utterance costs
-// zero React renders. The pill's background + border cross-fade via
-// interpolateColor.
+// Each bar is an Animated.View driven by `scaleY` (far smoother on Android than
+// animating height). The live wave is computed on the UI thread from a phase
+// clock and the mic level, so a whole utterance costs zero React renders.
 
 import React, { useEffect } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';

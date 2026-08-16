@@ -1,32 +1,22 @@
 // FadeEdges — dissolves a scrolling region's top and bottom ends into nothing.
 //
-// A mask, not a scrim. The difference is the whole point:
+// A mask, not a scrim, and the difference is the whole point. A scrim darkens
+// everything under it — background included — so its own boundary is a step in
+// brightness, and against near-black that step reads as a line: an overlay
+// meant to be invisible drawing the outline of its container. The edge IS the
+// technique. A mask instead sets the alpha of the region's own pixels, leaving
+// the background untouched: nothing is added to the scene, so nothing has an
+// edge.
 //
-//   A scrim is a dark overlay painted *on top of* the region. It hides text by
-//   darkening everything under it — including the background — so its own
-//   boundary is a step in background brightness. Against near-black that step
-//   reads as a line, which is how an overlay meant to be invisible ends up
-//   drawing the outline of its container. There is no way to soften this away;
-//   the edge is what the technique is.
+// The caller must pad the scroll content by `height` too. The mask always fades
+// its two bands, so matching padding parks resting text clear of them — text
+// dissolves only while travelling through a band on its way out of view, and
+// the newest line always stays at full strength.
 //
-//   A mask sets the *alpha* of the region's own pixels. Where the mask is
-//   transparent, the text is simply not there — and the background behind it is
-//   untouched. Nothing is added to the scene, so there is nothing to have an
-//   edge.
-//
-// Why the caller must also pad the scroll content by `height`:
-//   The mask is static — it always fades the two bands. Padding the content by
-//   the same amount parks the resting text below the top band and above the
-//   bottom one, so nothing is dimmed while it fits; text only dissolves as it
-//   travels through a band on its way out of view. That keeps the newest line
-//   at full strength, which is the one line that always matters.
-//
-// The fallback:
-//   RNCMaskedView is a legacy Android ViewGroupManager reached through Fabric's
-//   interop layer (on by default in this React Native). If that ever stops
-//   resolving, rendering it would throw on the app's main screen. So we ask the
-//   registry first and, failing that, render the children plain — no fade, but
-//   also no crash and no edge.
+// RNCMaskedView is a legacy Android ViewGroupManager reached through Fabric's
+// interop layer, so if it ever stops resolving, rendering it would throw on the
+// app's main screen. We ask the registry first and otherwise render the children
+// plain: no fade, but no crash and no edge either.
 
 import React from 'react';
 import { StyleSheet, UIManager, View, type StyleProp, type ViewStyle } from 'react-native';

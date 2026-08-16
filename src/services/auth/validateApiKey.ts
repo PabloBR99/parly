@@ -19,29 +19,24 @@ export type KeyValidation =
 /**
  * Whether `key` can be put in an `Authorization` header at all.
  *
- * This is a safety check before it is a validation one. An HTTP header value
- * may only hold printable ASCII, and Android's HTTP stack raises on anything
- * else from deep inside the networking layer, where no `catch` of ours is
- * standing. A pasted key is the one string in this app that arrives entirely
- * unexamined and goes straight into a header — a stray newline off the end of
- * a copy, a non-breaking space out of a web page, or the wrong clipboard
- * entry altogether, and it is the platform that decides what happens next.
+ * A safety check before a validation one. Header values may only hold
+ * printable ASCII, and Android's HTTP stack raises on anything else from deep
+ * in the networking layer where no `catch` of ours is standing — while a pasted
+ * key is the one string here that goes into a header entirely unexamined. This
+ * came back from a device as a crash: the diagnostics log had been pasted into
+ * the key field, and kilobytes of newlines and em dashes went out as a header.
+ * The app closed with no error and no trail, because the failure was below the
+ * language.
  *
- * So nothing unexaminable is ever handed over. Trimming first means the
- * ordinary copy-with-trailing-newline still works; what remains must be one
- * solid run of printable ASCII, which every API key is and no accident is.
- * This was reported from a device as a crash: the diagnostics log had been
- * pasted into the key field, and a few kilobytes of newlines and em dashes
- * went out as a header on the next request. The app closed with no error and
- * no trail, because the failure was below the language.
+ * Trimming first keeps the ordinary copy-with-trailing-newline working; what
+ * remains must be one solid run of printable ASCII, which every API key is and
+ * no accident is.
  *
- * Deliberately not a format check: no prefix, no length floor, no alphabet
- * beyond "could be sent". Guessing at the shape of a key is how you lock
- * someone out of a perfectly good one the day the issuer changes it, and a
- * short wrong key is the server's to refuse — it gets a clear 401 and an
- * honest "rejected", which is the truth about it. The only bound is a ceiling
- * set where no credential could live: an oversized header is a hazard in its
- * own right, whatever it spells.
+ * Deliberately not a format check — no prefix, no length floor. Guessing at the
+ * shape of a key is how you lock someone out of a good one the day the issuer
+ * changes it, and a short wrong key is the server's to refuse with an honest
+ * 401. The only bound is a ceiling where no credential could live, since an
+ * oversized header is a hazard whatever it spells.
  */
 export function isSendableKey(key: string): boolean {
   const trimmed = key.trim();

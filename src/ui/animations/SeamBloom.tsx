@@ -5,30 +5,22 @@
 // turn is the text arriving. This gives that moment a direction, a beat before
 // the words land.
 //
-// Why a radial bloom and not a band:
-//   The first pass painted an 80 px tall rectangle filled with a
-//   left-to-right gradient. A horizontal gradient leaves the *top and bottom*
-//   as hard cuts, so it read as a pale rectangle with visible edges sliding
-//   across the screen — and it sat at 7 % opacity permanently, so it was there
-//   even when nothing had happened. Both are the failure mode Bloom.tsx
-//   already documents: against near-black, a couple of percent of light held
-//   in a straight line is enough to read as an edge.
+// A radial bloom, not a band. The first pass was an 80 px rectangle of
+// left-to-right gradient, which leaves the top and bottom as hard cuts — a pale
+// rectangle with visible edges sliding across the screen, permanently at 7%
+// opacity. Both are the failure Bloom.tsx documents: against near-black, a few
+// percent of light held in a straight line reads as an edge. So this uses
+// Bloom's 10-stop falloff, whose alpha asymptotes toward zero in every
+// direction, and sits at zero unless a turn is crossing — atmosphere that is
+// always on is just a tint.
 //
-//   This uses Bloom's 10-stop, gaussian-like falloff instead. Alpha asymptotes
-//   toward zero in every direction, so there is no boundary anywhere to catch
-//   the eye — the glow dissolves rather than ending. And it is at zero unless
-//   a turn is actually crossing: atmosphere that is always on is just a tint.
+// It takes the LISTENER's colour: peach for person A at the bottom, periwinkle
+// for person B at the top. A horizon leaning warm tells the reader at the
+// bottom "this one is for you" without a glyph or a word.
 //
-// Why the listener's colour rather than white:
-//   Peach for person A at the bottom, periwinkle for person B at the top — the
-//   accents each half already owns. The horizon leaning warm tells the reader
-//   at the bottom "this one is for you" without a glyph or a word. Colour
-//   lives in the atmosphere; the chrome stays neutral.
-//
-// Why a circle stretched by a transform, never rx/ry on the gradient:
-//   react-native-svg renders elliptical radial gradients with visible banding
-//   (Bloom.tsx hit this too). A circular gradient squashed by a scaleY is
-//   perfectly smooth.
+// The circle is stretched by a transform, never rx/ry on the gradient —
+// react-native-svg bands visibly on elliptical radial gradients, while a
+// circular one squashed by scaleY is perfectly smooth.
 
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, View, useWindowDimensions } from 'react-native';

@@ -1,30 +1,19 @@
 // LanguagePickerSheet — language picker that docks to either the top or
 // bottom edge of the screen.
 //
-// In the conversation screen the phone is a flat table between two
-// speakers. Each speaker has THEIR OWN picker that slides from THEIR side
-// of the table, with content oriented for THEIR view:
-//   - Bottom picker (`side='bottom'`): the conventional bottom sheet for
-//     the local user.
-//   - Top picker (`side='top'`): anchored to the screen's top edge, with
-//     bottom-rounded corners (mirror of the bottom variant) and the entire
-//     inner content rotated 180° so the partner reads it upright.
+// The phone is a flat table between two speakers, so each has their own picker
+// sliding from their own side: `side='bottom'` is the conventional sheet for
+// the local user, `side='top'` mirrors it against the top edge with its inner
+// content rotated 180° so the partner reads it upright.
 //
-// Implementation: an in-screen overlay (NOT a native <Modal>), animated by
-// Reanimated. The sheet is always mounted; opening/closing translates it
-// in and out via a shared value. We chose this over the platform Modal
-// because the Modal's Android Dialog window kept producing a visible
-// upward jump whenever the user touched the sheet — multiple iterations
-// of fixes inside the Modal couldn't make the slide stable. An in-screen
-// overlay sidesteps the entire native Dialog layer.
-//
-// Two earlier risks we explicitly handle:
-//   1) JNI crash from a previous Reanimated-on-Modal layering — doesn't
-//      apply here because the views are never unmounted; we only
-//      translate them off-screen on close.
-//   2) Bottom-anchored content shifting when its measured height changed
-//      mid-animation — we cache the exclude-language during render via a
-//      ref so the list stays byte-identical through close.
+// An in-screen Reanimated overlay, NOT a native <Modal>. The sheet stays
+// mounted and opening translates it in via a shared value, because the Modal's
+// Android Dialog window produced a visible upward jump whenever the user
+// touched the sheet, and no amount of fixing inside the Modal made the slide
+// stable. Staying mounted also sidesteps the JNI crash that Reanimated-on-Modal
+// layering used to hit on unmount. The exclude-language is cached in a ref
+// during render so the list stays byte-identical while it closes — measured
+// height changing mid-animation used to shift the bottom-anchored content.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {

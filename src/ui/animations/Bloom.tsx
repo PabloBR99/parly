@@ -5,29 +5,21 @@
 // on paper. Warm palette (apricot / peach / terracotta) for the user's
 // side, cool palette (periwinkle / seafoam / iris) for the partner's.
 //
-// Why SVG radial gradients with a 10-stop gaussian-like falloff
-// (factors 1.00 → 0.95 → 0.78 → 0.55 → 0.32 → 0.16 → 0.07 → 0.02 →
-// 0.005 → 0): the HTML mockup gets its butter-soft halo from
-// `filter: blur(30px)`, which renders as a true gaussian — alpha
-// asymptotes to zero rather than crossing it at a defined radius.
-// RN can't blur, so we approximate by spending a long stretch of the
-// outer radius (78%→100%) below 7% peak. Earlier 6-stop curves
-// (0.08 at 82% → 0 at 100%) produced a visible circular halo because
-// the outer band held ~3% combined alpha against a near-black bg —
-// just enough to read as an edge. The new curve drops combined alpha
-// below 1% past 90% radius, so the bloom dissolves rather than ends.
+// The 10-stop gaussian-like falloff exists because RN cannot blur. The mockup's
+// butter-soft halo comes from `filter: blur(30px)`, a true gaussian whose alpha
+// asymptotes to zero instead of crossing it at a defined radius, so this
+// approximates it by spending 78%→100% of the radius below 7% peak. Earlier
+// 6-stop curves left ~3% combined alpha in the outer band against a near-black
+// background — just enough to read as a circular edge. This curve is under 1%
+// past 90% radius, so the bloom dissolves rather than ends.
 //
-// Why cool stains carry a +0.06 alpha bonus on every stop: cool tones
-// perceptually retreat against the cool-tinted top half of the dusk
-// gradient (color theory: warm advances, cool retreats). Without the
-// boost the cool bloom reads visibly fainter than the warm at equal
-// nominal alpha. Loóna does the same thing.
+// Cool stains carry +0.06 alpha on every stop: warm advances and cool retreats,
+// so against the cool-tinted top half of the dusk gradient an equal nominal
+// alpha reads visibly fainter.
 //
-// Why the breath drift is now ±1px and opacity drifts 0.92→1.00 (was
-// ±3px and 0.55→0.85): ≥0.05 opacity drift reads as pulsing or loading
-// state, not "alive". Premium atmospheric apps keep drift tiny.
-// Tempos lengthened to 7.4 / 8.0 / 8.6s (was 5.4 / 6.0 / 6.6) so the
-// motion feels meditative, not anxious.
+// Breath drift is ±1px with opacity 0.92→1.00, and tempos are 7.4 / 8.0 / 8.6s.
+// Anything past ~0.05 opacity drift reads as pulsing or loading rather than
+// alive, and faster tempos feel anxious instead of meditative.
 
 import React, { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
