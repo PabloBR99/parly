@@ -10,9 +10,8 @@ jest.mock('react-native', () => ({
   NativeModules: {},
 }));
 
-// ONNX Runtime and RNFS are native modules with no JS implementation to run
-// under Jest, and the service reaches them through require() — so they are
-// mocked at the module boundary rather than injected.
+// ONNX Runtime and RNFS have no JS implementation to run under Jest, and the
+// service reaches them through require() — so they are mocked, not injected.
 jest.mock('onnxruntime-react-native', () => ({
   InferenceSession: {
     create: jest.fn(),

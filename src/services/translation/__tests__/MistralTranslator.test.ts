@@ -148,12 +148,12 @@ interface ChatRequest {
 /** What the translator actually put on the wire, decoded once. */
 function sentRequest(fetcher: MockFetcher): ChatRequest {
   const [request] = fetcher.postStream.mock.calls[0];
-  // SAFETY: the body is JSON this same translator serialised from a ChatRequest
-  // one call ago, inside this test. Nothing external has touched it in between.
+  // SAFETY: this same translator serialised the body one call ago, in this
+  // test. Nothing external has touched it in between.
   return JSON.parse(request.body) as ChatRequest;
 }
 
-/** The system prompt of that request — what most of these tests are about. */
+/** The system prompt — what most of these tests are about. */
 function sentSystemPrompt(fetcher: MockFetcher): string {
   return sentRequest(fetcher).messages[0].content;
 }

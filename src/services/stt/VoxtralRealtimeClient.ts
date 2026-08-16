@@ -82,25 +82,19 @@ export type StreamingState = 'idle' | 'connecting' | 'streaming' | 'ending' | 'c
 
 // ── Wire boundary ───────────────────────────────────────────────────────────
 //
-// `decodeServerEvent` is the only code in this file that looks at the wire
-// representation. Everything below it branches on a `ServerEvent` — a frame
-// whose fields are already the types the protocol promises, or that never
-// reached the handler at all.
+// `decodeServerEvent` is the only code here that looks at the wire. Everything
+// below it branches on a `ServerEvent`, whose fields are already the types the
+// protocol promises — or the frame never reached the handler at all.
 
-/** A server frame the client acts on, after decoding. */
+/** A server frame the client acts on, after decoding. See the header for how
+ *  each maps to the protocol; `done.text` is absent when the server sent none
+ *  and the accumulated deltas stand instead. */
 type ServerEvent =
-  /** session.created / session.updated — the socket may now carry audio. */
   | { readonly kind: 'session-ready' }
-  /** transcription.text.delta — incremental partial text. */
   | { readonly kind: 'text-delta'; readonly text: string }
-  /** transcription.language — the language the server detected. */
   | { readonly kind: 'language'; readonly language: string }
-  /** transcription.segment — emitted in streaming mode, unused today. */
   | { readonly kind: 'segment' }
-  /** transcription.done — the segment's final transcript. `text` is absent
-   *  when the server sent no text and the accumulated deltas stand instead. */
   | { readonly kind: 'done'; readonly text: string | undefined }
-  /** error — fatal, already rendered into a human-readable message. */
   | { readonly kind: 'error'; readonly message: string };
 
 function isTextFrame(frame: SocketFrame): frame is string {
@@ -133,11 +127,8 @@ function decodeServerEvent(data: SocketFrame): ServerEvent | null {
   }
 }
 
-/**
- * The whole `session.update` payload Voxtral accepts. Its schema is closed:
- * any extra field comes back as a Pydantic `extra_forbidden` error, so this
- * type is the protocol, not a convenience.
- */
+/** The whole `session.update` payload Voxtral accepts — its schema is closed,
+ *  so this is the protocol, not a convenience. See the onopen handler. */
 interface SessionUpdate {
   readonly audio_format: {
     readonly encoding: 'pcm_s16le';
@@ -186,18 +177,12 @@ export interface StreamingStartOptions {
   readonly targetStreamingDelayMs?: number;
 }
 
-/**
- * What arrives on a WebSocket message. Voxtral speaks JSON text frames in both
- * directions; a binary frame is not part of the protocol and gets dropped.
- */
+/** Voxtral speaks JSON text frames; a binary frame is not part of the protocol
+ *  and gets dropped. */
 export type SocketFrame = string | ArrayBuffer;
 
-/**
- * What React Native hands a WebSocket handler. Not a DOM event: RN builds these
- * as plain objects on top of OkHttp and NSURLSession, and which fields are
- * present varies by platform and RN version — hence every field optional.
- * `describeEvent` and `describeClose` report whatever actually arrived.
- */
+/** What RN hands a WebSocket handler — plain objects, not DOM events, whose
+ *  fields vary by platform and RN version, hence all optional. */
 export interface SocketEvent {
   readonly message?: JsonValue;
   readonly code?: JsonValue;
@@ -227,9 +212,8 @@ export type WebSocketFactory = (
   headers: Record<string, string>,
 ) => WebSocketLike;
 
-/** RN's WebSocket constructor, which takes a third options argument that the
- *  DOM lib's does not. See the note at the top of this file on why headers work
- *  here and would not in a browser. */
+/** RN's constructor takes a third options argument the DOM lib's does not —
+ *  see the header note on why headers work here and not in a browser. */
 type ReactNativeWebSocketConstructor = new (
   url: string,
   protocols: string | string[] | undefined,
@@ -237,10 +221,8 @@ type ReactNativeWebSocketConstructor = new (
 ) => WebSocketLike;
 
 const defaultWsFactory: WebSocketFactory = (url, headers) => {
-  // SAFETY: RN's WebSocket is built on OkHttp/NSURLSession and accepts
-  // (url, protocols, options); TypeScript's lib.dom declaration predates that
-  // third argument and cannot express it. The runtime object is RN's, not the
-  // DOM's, so the extended signature is the one that actually applies.
+  // SAFETY: the runtime object is RN's, not the DOM's, so the extended
+  // signature above is the one that actually applies.
   const ReactNativeWebSocket = WebSocket as ReactNativeWebSocketConstructor;
   return new ReactNativeWebSocket(url, undefined, { headers });
 };

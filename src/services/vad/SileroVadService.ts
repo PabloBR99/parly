@@ -129,24 +129,22 @@ export interface OrtTensor {
 }
 export type OrtSessionFactory = (modelPath: string) => Promise<OrtSession>;
 
+/** The model's inputs are float samples and the int64 sample rate. */
+type OrtTensorData = Float32Array | BigInt64Array | Int32Array;
+
 // onnxruntime-react-native and the constant sample-rate buffer are resolved
 // once and cached at module scope. The inference path runs ≈31×/s; re-running
 // require() and re-allocating the sr tensor on every frame is pure waste in the
 // hottest loop in the app. Lazy so Jest can mock the module before first use.
-/** What a tensor can be built from — the model's inputs are float samples and
- *  the int64 sample rate, and nothing else. */
-type OrtTensorData = Float32Array | BigInt64Array | Int32Array;
-
 type OrtModule = {
   Tensor: new (type: string, data: OrtTensorData, dims: number[]) => OrtTensor;
 };
 let ortModule: OrtModule | null = null;
 function getOrt(): OrtModule {
   if (!ortModule) {
-    // SAFETY: OrtModule names the one constructor of onnxruntime-react-native
-    // this file uses, matching the package's published signature. It is
-    // required lazily rather than imported so Jest can install its mock first,
-    // and require() is untyped.
+    // SAFETY: OrtModule names the one constructor this file uses, matching the
+    // package's published signature. Required lazily (so Jest can mock first),
+    // and require() is untyped — hence the assertion.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     ortModule = require('onnxruntime-react-native') as OrtModule;
   }
@@ -369,12 +367,11 @@ export class SileroVadService {
 
         const results = await this.session.run(feeds);
 
-        // SAFETY: `output` is declared float32 in the Silero VAD model this
-        // service loads, so its buffer is a Float32Array.
+        // SAFETY: `output` is float32 in the Silero VAD model this loads.
         prob = (results['output'].data as Float32Array)[0];
-        // SAFETY: `stateN` is the model's recurrent state, likewise float32.
-        // Copy it into a JS-owned buffer so subsequent session.run() calls
-        // cannot corrupt the reference via native buffer reuse.
+        // SAFETY: `stateN` is the recurrent state, likewise float32. Copied
+        // into a JS-owned buffer so later session.run() calls cannot corrupt
+        // the reference through native buffer reuse.
         const stateNRaw = results['stateN'].data as Float32Array;
         this.state = new Float32Array(stateNRaw);
       }
@@ -493,9 +490,8 @@ interface OrtInferenceSessionFactory {
 }
 
 async function defaultOrtSessionFactory(modelPath: string): Promise<OrtSession> {
-  // SAFETY: matches the package's published `InferenceSession.create`. Required
-  // lazily, as in getOrt(), so Jest can install its mock first; require() is
-  // untyped, which is the only reason an assertion appears at all.
+  // SAFETY: matches the package's published `InferenceSession.create`; lazy
+  // for the same reason as getOrt().
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const ort = require('onnxruntime-react-native') as OrtInferenceSessionFactory;
   return ort.InferenceSession.create(modelPath);
@@ -514,10 +510,9 @@ interface Fs {
 }
 
 function fs(): Fs {
-  // SAFETY: `Fs` above lists only the members of @dr.pogodin/react-native-fs
-  // this file calls, each matching that package's own declarations, with the
-  // ones missing on some platforms marked optional. Required lazily so the
-  // module is not touched before Jest maps it to the fake in __mocks__.
+  // SAFETY: `Fs` above lists only the members this file calls, each matching
+  // the package's own declarations, with the platform-specific ones optional.
+  // Lazy so Jest can map the module to its fake first.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   return require('@dr.pogodin/react-native-fs') as Fs;
 }

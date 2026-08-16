@@ -30,9 +30,8 @@ const KEYCHAIN_SAVE_DEBOUNCE_MS = 500;
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 interface AppProps {
-  /** The reachability probe the network monitor runs. Defaults to the real one
-   *  against api.mistral.ai; a test that must not touch the network hands in
-   *  its own rather than replacing the module underneath. */
+  /** The probe the network monitor runs. Defaults to the real one; a test
+   *  hands in its own rather than replacing the module underneath. */
   readonly probe?: ProbeFn;
 }
 

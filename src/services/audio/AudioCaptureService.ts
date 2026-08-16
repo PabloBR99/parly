@@ -6,16 +6,14 @@ import { log } from '../log/logStore';
 // Docs: https://github.com/goodatlas/react-native-audio-record
 import AudioRecord from 'react-native-audio-record';
 
-/** What `AudioRecord.on` hands back: the library returns the
- *  NativeEventEmitter subscription it created, which is the only way to detach
- *  the listener again. Its bundled types say `void`. */
+/** What `AudioRecord.on` hands back — the NativeEventEmitter subscription,
+ *  which is the only way to detach the listener. Its types say `void`. */
 interface AudioDataSubscription {
   remove(): void;
 }
 
-// SAFETY: react-native-audio-record's own declaration types `on` as returning
-// void, while its implementation returns `EventEmitter.addListener(...)`. The
-// declaration is what is wrong here, not the runtime.
+// SAFETY: the package types `on` as void while returning
+// `EventEmitter.addListener(...)`. The declaration is wrong, not the runtime.
 const onAudioData = AudioRecord.on as (
   event: 'data',
   callback: (data: string) => void,

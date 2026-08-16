@@ -125,12 +125,9 @@ function isLogLevel(value: JsonValue | undefined): value is LogLevel {
   return isString(value) && LOG_LEVELS.has(value);
 }
 
-/**
- * Read back a log file written by a previous run. The interesting case is the
- * one this store exists for: the process died mid-write, so the tail of the
- * file is truncated. Entries that don't decode are dropped rather than
- * resurrected as half-objects that crash the Logs screen.
- */
+/** Read back a previous run's log file. The interesting case is the one this
+ *  store exists for — the process died mid-write, so the tail is truncated.
+ *  Entries that don't decode are dropped, not resurrected as half-objects. */
 function decodeLogEntries(raw: string): readonly LogEntry[] {
   const parsed = parseJson(raw);
   if (!isJsonArray(parsed)) return [];
@@ -175,20 +172,16 @@ function pushEntry(level: LogLevel, message: string, stack?: string): void {
   scheduleFlush(level === 'error');
 }
 
-/**
- * Render whatever a caller passed to a log function. Callers hand over the
- * values they had, which is the point of a diagnostic; naming them any more
- * precisely than "the arguments" would be a fiction.
- */
+/** Render whatever a caller passed to a log function. Naming those values more
+ *  precisely than "the arguments" would be a fiction. */
 function describeArgs(values: readonly unknown[]): string {
   return values
     .map(value => {
       if (value === undefined) return 'undefined';
       if (value === null) return 'null';
       if (value instanceof Error) return `${value.name}: ${value.message}`;
-      // Objects and arrays are worth rendering as JSON; primitives read
-      // better through String(). `Object(v) === v` is true for exactly the
-      // former, and unlike `typeof` it does not call null an object.
+      // Objects render as JSON, primitives through String(). `Object(v) === v`
+      // splits them, and unlike `typeof` it does not call null an object.
       if (Object(value) === value) {
         try {
           return JSON.stringify(value);
@@ -307,11 +300,10 @@ function hookErrorUtils(): void {
   // ErrorUtils is React Native's global JS error handler. Hijack it so any
   // unhandled JS exception (including those thrown inside event handlers)
   // ends up in the buffer.
-  // SAFETY: every property here is optional, so the assertion claims nothing
-  // about what the host actually provides — the check below is what establishes
-  // it. React Native declares ErrorUtils as a global *constant*, which TypeScript
-  // does not surface on `typeof globalThis`, and under Jest there is no RN
-  // runtime to install it at all; reading it as a bare identifier would throw.
+  // SAFETY: the property is optional, so this claims nothing — the check below
+  // establishes it. RN declares ErrorUtils as a global *constant*, which does
+  // not surface on `typeof globalThis`, and under Jest it is absent entirely,
+  // so reading it as a bare identifier would throw.
   const host = globalThis as { ErrorUtils?: ReactNativeErrorUtils };
   const eu = host.ErrorUtils;
   if (!eu?.setGlobalHandler) return;

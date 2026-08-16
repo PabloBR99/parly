@@ -47,19 +47,15 @@ interface CachedVoice {
   readonly language: string;
 }
 
-/** Every `tts-*` event names the utterance it belongs to — see the header note
- *  on why that id is the only way to tell whose finish event just fired. */
+/** Every `tts-*` event names its utterance — see the header on why that id is
+ *  the only way to tell whose finish event just fired. */
 interface TtsUtteranceEvent {
   readonly utteranceId: string | number;
 }
 
-/**
- * What `Tts.addEventListener` hands back. react-native-tts returns the
- * NativeEventEmitter subscription it created, and detaching through that
- * subscription is the only option left: RN dropped
- * `NativeEventEmitter.removeListener`, so the library's own
- * `removeEventListener` — which still calls it — throws.
- */
+/** What `Tts.addEventListener` hands back. Detaching through the subscription
+ *  is the only option left: RN dropped `NativeEventEmitter.removeListener`, so
+ *  the library's own `removeEventListener` — which calls it — throws. */
 interface TtsSubscription {
   remove?(): void;
 }
@@ -69,9 +65,8 @@ type AddTtsListener = <T extends TtsEvents>(
   handler: TtsEventHandler<T>,
 ) => TtsSubscription;
 
-// SAFETY: react-native-tts declares `addEventListener` as returning void while
-// its implementation returns `this.addListener(type, handler)`. The declaration
-// is what is wrong here, not the runtime; see TtsSubscription above.
+// SAFETY: the library declares this as returning void while returning
+// `this.addListener(...)`. The declaration is what is wrong, not the runtime.
 const addTtsListener = Tts.addEventListener as AddTtsListener;
 
 /**
@@ -262,9 +257,9 @@ class NativeTTSService {
     // engine. We then await its tts-finish/tts-cancel/tts-error event.
     let utteranceId: string | number;
     try {
-      // speak() resolves the id once the native engine accepts the chunk. The
-      // library's types describe it as returning the id directly; Promise.resolve
-      // adopts it under either reading and keeps a rejection a rejection.
+      // speak() resolves the id once the engine accepts the chunk, though its
+      // types say it returns the id directly. Promise.resolve adopts it under
+      // either reading, and keeps a rejection a rejection.
       utteranceId = await Promise.resolve(Tts.speak(text));
     } catch (e) {
       console.warn('[NativeTTSService] speak() rejected:', e);
@@ -344,8 +339,8 @@ function baseLanguage(lang: string): string {
   return lang.split(/[-_]/)[0].toLowerCase();
 }
 
-/** The locale each short language code stands in for, when the engine wants a
- *  full BCP-47 tag. Built once: it was being rebuilt on every chunk. */
+/** The locale each short code stands in for when the engine wants a full
+ *  BCP-47 tag. Built once — it was being rebuilt on every chunk. */
 const TTS_LOCALES = new Map<string, string>(Object.entries({
   en: 'en-US', es: 'es-ES', fr: 'fr-FR', de: 'de-DE', it: 'it-IT',
   pt: 'pt-BR', nl: 'nl-NL', pl: 'pl-PL', ru: 'ru-RU', ja: 'ja-JP',

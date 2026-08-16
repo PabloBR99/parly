@@ -280,8 +280,8 @@ export interface StreamPostResult {
   errorBody?: string;
 }
 
-/** The transport the translator runs on. Exported so a test can substitute a
- *  real implementation of it rather than a shape cast into place. */
+/** The transport the translator runs on. Exported so a test can implement it
+ *  rather than cast a shape into place. */
 export interface StreamingFetcher {
   postStream(request: StreamPostRequest): Promise<StreamPostResult>;
 }
@@ -295,8 +295,7 @@ let fetchStreams: boolean | null = null;
 function fetchCanStream(): boolean {
   if (fetchStreams === null) {
     try {
-      // Feature-detect rather than assume: some RN runtimes ship a fetch
-      // whose Response has no readable body.
+      // Feature-detect: some RN runtimes ship a Response with no body.
       const responseCtor = globalThis.Response;
       fetchStreams = responseCtor !== undefined && 'body' in responseCtor.prototype;
     } catch {

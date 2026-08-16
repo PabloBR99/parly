@@ -1,10 +1,7 @@
-// react-native-audio-record and react-native-sherpa-onnx both ship their own
-// TypeScript declarations — import directly from the packages.
-//
-// One of those declarations is wrong: react-native-audio-record types `on` as
-// returning void, while it returns the NativeEventEmitter subscription. That is
-// corrected where it is used, in services/audio/AudioCaptureService.ts, rather
-// than here — an ambient `declare module` block in this file cannot override a
-// declaration the package itself provides.
+// react-native-audio-record and react-native-sherpa-onnx ship their own
+// TypeScript declarations — import directly from the packages. One of them is
+// wrong (audio-record's `on` returns a subscription, not void); it is corrected
+// at the use site in services/audio/AudioCaptureService.ts, because an ambient
+// block here cannot override a declaration the package itself provides.
 
 export {};

@@ -33,9 +33,9 @@ interface VoxtralCallbacks {
 
 type FlushResolver = (result: { text: string; language?: string }) => void;
 
-/** The fake Voxtral client. `closeSegment` is optional on VoxtralLike because
- *  push-to-talk clients do not have one; this harness always supplies it, so
- *  the hands-free tests can read what it was called with. */
+/** `closeSegment` is optional on VoxtralLike because push-to-talk clients do
+ *  not have one; this harness always supplies it, so the hands-free tests can
+ *  read what it was called with. */
 type MockVoxtral = jest.Mocked<VoxtralLike> & {
   closeSegment: jest.MockedFunction<NonNullable<VoxtralLike['closeSegment']>>;
 };
