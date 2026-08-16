@@ -58,10 +58,6 @@ const styles = StyleSheet.create({
     borderRadius: 7,
     opacity: 0.45,
   },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
+  dot: { width: 6, height: 6, borderRadius: 3 },
   label: {},
 });

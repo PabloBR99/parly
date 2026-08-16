@@ -125,33 +125,17 @@ function formatTime(ts: number): string {
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: color.bg,
-  },
-  scroll: {
-    flex: 1,
-  },
+  root: { flex: 1, backgroundColor: color.bg },
+  scroll: { flex: 1 },
   scrollContent: {
     paddingHorizontal: space.lg,
     paddingTop: space.md,
     paddingBottom: space.lg,
   },
-  eyebrow: {
-    marginBottom: space.sm,
-  },
-  empty: {
-    paddingVertical: space.xxl,
-    textAlign: 'center',
-  },
-  list: {
-    padding: 0,
-    borderRadius: radius.md,
-  },
-  row: {
-    paddingVertical: space.sm,
-    paddingHorizontal: space.sm,
-  },
+  eyebrow: { marginBottom: space.sm },
+  empty: { paddingVertical: space.xxl, textAlign: 'center' },
+  list: { padding: 0, borderRadius: radius.md },
+  row: { paddingVertical: space.sm, paddingHorizontal: space.sm },
   rowDivider: {
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: color.hairline,
@@ -161,14 +145,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 4,
   },
-  rowMessage: {
-    fontFamily: 'monospace',
-    lineHeight: 17,
-  },
-  rowStack: {
-    marginTop: 4,
-    opacity: 0.75,
-  },
+  rowMessage: { fontFamily: 'monospace', lineHeight: 17 },
+  rowStack: { marginTop: 4, opacity: 0.75 },
   bar: {
     flexDirection: 'row',
     paddingHorizontal: space.lg,
@@ -178,7 +156,5 @@ const styles = StyleSheet.create({
     backgroundColor: color.bg,
     gap: space.sm,
   },
-  barCta: {
-    flex: 1,
-  },
+  barCta: { flex: 1 },
 });

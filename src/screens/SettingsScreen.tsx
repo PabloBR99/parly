@@ -43,6 +43,90 @@ const MISTRAL_CONSOLE_URL = 'https://console.mistral.ai/api-keys';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Settings'>;
 
+/** A radio group. Both model pickers below are one of these. */
+function ChoiceRows<T extends string>({ choices, selected, onSelect }: {
+  readonly choices: readonly { readonly id: T; readonly label: string }[];
+  readonly selected: T;
+  readonly onSelect: (id: T) => void;
+}): React.JSX.Element {
+  return (
+    <>
+      {choices.map(choice => {
+        const isSelected = choice.id === selected;
+        return (
+          <Pressable
+            key={choice.id}
+            onPress={() => {
+              haptics.tick();
+              onSelect(choice.id);
+            }}
+            accessibilityRole="radio"
+            accessibilityLabel={choice.label}
+            accessibilityState={{ selected: isSelected }}
+            style={({ pressed }) => [
+              styles.modelRow,
+              pressed && styles.modelRowPressed,
+              isSelected && styles.modelRowSelected,
+            ]}>
+            <View style={[styles.modelRadio, isSelected && styles.modelRadioSelected]} />
+            <Text variant="body" tone={isSelected ? 'fg' : 'fgMuted'}>
+              {choice.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </>
+  );
+}
+
+/** The bordered "check" / "verify & replace" button, spinning while the
+ *  request is out. */
+function VerifyButton({ label, accessibilityLabel, busy, disabled, onPress }: {
+  readonly label: string;
+  readonly accessibilityLabel: string;
+  readonly busy: boolean;
+  readonly disabled?: boolean;
+  readonly onPress: () => void;
+}): React.JSX.Element {
+  const off = busy || disabled === true;
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={off}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      style={({ pressed }) => [
+        styles.verifyBtn,
+        pressed && styles.verifyBtnPressed,
+        off && styles.verifyBtnDisabled,
+      ]}>
+      {busy ? (
+        <ActivityIndicator color={color.fgMuted} size="small" />
+      ) : (
+        <Text variant="serifSmall" tone="fgMuted">{label}</Text>
+      )}
+    </Pressable>
+  );
+}
+
+/** A quiet text link — "change key", "keep current key". */
+function TextLink({ label, accessibilityLabel, onPress }: {
+  readonly label: string;
+  readonly accessibilityLabel: string;
+  readonly onPress: () => void;
+}): React.JSX.Element {
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={10}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      style={({ pressed }) => [styles.replaceLink, pressed && styles.replaceLinkPressed]}>
+      <Text variant="serifSmall" tone="fgFaint">{label}</Text>
+    </Pressable>
+  );
+}
+
 export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const insets = useSafeAreaInsets();
   const apiKey = useSettingsStore(s => s.mistralApiKey);
@@ -283,33 +367,18 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
                 <>
                   <View style={styles.keyActionRow}>
                     <KeyValidationLine state={keyValidation} validating={validating} />
-                    <Pressable
-                      onPress={onValidateKey}
-                      disabled={validating}
-                      accessibilityRole="button"
+                    <VerifyButton
+                      label="check"
                       accessibilityLabel="Check connection"
-                      style={({ pressed }) => [
-                        styles.verifyBtn,
-                        pressed && styles.verifyBtnPressed,
-                        validating && styles.verifyBtnDisabled,
-                      ]}>
-                      {validating ? (
-                        <ActivityIndicator color={color.fgMuted} size="small" />
-                      ) : (
-                        <Text variant="serifSmall" tone="fgMuted">check</Text>
-                      )}
-                    </Pressable>
+                      busy={validating}
+                      onPress={onValidateKey}
+                    />
                   </View>
-                  <Pressable
-                    onPress={onStartEditingKey}
-                    hitSlop={10}
-                    accessibilityRole="button"
+                  <TextLink
+                    label="change key"
                     accessibilityLabel="Change key"
-                    style={({ pressed }) => [styles.replaceLink, pressed && styles.replaceLinkPressed]}>
-                    <Text variant="serifSmall" tone="fgFaint">
-                      change key
-                    </Text>
-                  </Pressable>
+                    onPress={onStartEditingKey}
+                  />
                 </>
               )}
 
@@ -332,30 +401,18 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
                     />
                   </Surface>
                   <View style={styles.editActions}>
-                    <Pressable
-                      onPress={onValidateDraft}
-                      disabled={validating || draftKey.trim() === ''}
-                      accessibilityRole="button"
+                    <VerifyButton
+                      label="verify &amp; replace"
                       accessibilityLabel="Verify the new key"
-                      style={({ pressed }) => [
-                        styles.verifyBtn,
-                        pressed && styles.verifyBtnPressed,
-                        (validating || draftKey.trim() === '') && styles.verifyBtnDisabled,
-                      ]}>
-                      {validating ? (
-                        <ActivityIndicator color={color.fgMuted} size="small" />
-                      ) : (
-                        <Text variant="serifSmall" tone="fgMuted">verify &amp; replace</Text>
-                      )}
-                    </Pressable>
-                    <Pressable
-                      onPress={onCancelEditingKey}
-                      hitSlop={10}
-                      accessibilityRole="button"
+                      busy={validating}
+                      disabled={draftKey.trim() === ''}
+                      onPress={onValidateDraft}
+                    />
+                    <TextLink
+                      label="keep current key"
                       accessibilityLabel="Keep the current key"
-                      style={({ pressed }) => [styles.replaceLink, pressed && styles.replaceLinkPressed]}>
-                      <Text variant="serifSmall" tone="fgFaint">keep current key</Text>
-                    </Pressable>
+                      onPress={onCancelEditingKey}
+                    />
                   </View>
                   <View style={styles.feedbackRow}>
                     <KeyValidationLine state={keyValidation} validating={validating} />
@@ -368,61 +425,19 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
           {!noKey && (
             <>
               <Section label="TRANSLATION">
-                {TRANSLATION_MODELS.map(m => {
-                  const selected = m.id === translationModel;
-                  return (
-                    <Pressable
-                      key={m.id}
-                      onPress={() => {
-                        haptics.tick();
-                        setTranslationModel(m.id);
-                      }}
-                      accessibilityRole="radio"
-                      accessibilityLabel={m.label}
-                      accessibilityState={{ selected }}
-                      style={({ pressed }) => [
-                        styles.modelRow,
-                        pressed && styles.modelRowPressed,
-                        selected && styles.modelRowSelected,
-                      ]}>
-                      <View
-                        style={[styles.modelRadio, selected && styles.modelRadioSelected]}
-                      />
-                      <Text variant="body" tone={selected ? 'fg' : 'fgMuted'}>
-                        {m.label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
+                <ChoiceRows
+                  choices={TRANSLATION_MODELS}
+                  selected={translationModel}
+                  onSelect={setTranslationModel}
+                />
               </Section>
 
               <Section label="TRANSCRIPTION">
-                {TRANSCRIPTION_MODES.map(m => {
-                  const selected = m.id === transcriptionMode;
-                  return (
-                    <Pressable
-                      key={m.id}
-                      onPress={() => {
-                        haptics.tick();
-                        setTranscriptionMode(m.id);
-                      }}
-                      accessibilityRole="radio"
-                      accessibilityLabel={m.label}
-                      accessibilityState={{ selected }}
-                      style={({ pressed }) => [
-                        styles.modelRow,
-                        pressed && styles.modelRowPressed,
-                        selected && styles.modelRowSelected,
-                      ]}>
-                      <View
-                        style={[styles.modelRadio, selected && styles.modelRadioSelected]}
-                      />
-                      <Text variant="body" tone={selected ? 'fg' : 'fgMuted'}>
-                        {m.label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
+                <ChoiceRows
+                  choices={TRANSCRIPTION_MODES}
+                  selected={transcriptionMode}
+                  onSelect={setTranscriptionMode}
+                />
                 <Text variant="serifSmall" tone="fgFaint" style={styles.hintLine}>
                   Accurate gives the recogniser more of the sentence before it
                   commits to a word. Fast answers sooner and slips more on quick
@@ -484,14 +499,8 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: color.bg },
   hintLine: { marginTop: space.sm, lineHeight: 18 },
   flex: { flex: 1 },
-  content: {
-    paddingHorizontal: space.xl,
-    paddingTop: space.lg,
-  },
-  header: {
-    paddingTop: space.md,
-    paddingBottom: space.xxl,
-  },
+  content: { paddingHorizontal: space.xl, paddingTop: space.lg },
+  header: { paddingTop: space.md, paddingBottom: space.xxl },
   eyebrowRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -504,31 +513,12 @@ const styles = StyleSheet.create({
     marginHorizontal: 8,
     opacity: 0.85,
   },
-  eyebrow: {
-    letterSpacing: 2.4,
-  },
-  subhead: {
-    marginTop: space.md,
-    paddingRight: space.xl,
-    lineHeight: 20,
-  },
-  section: {
-    marginBottom: space.xxl,
-  },
-  connectedCard: {
-    paddingHorizontal: space.md,
-    paddingVertical: space.md,
-  },
-  connectedRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  connectedDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: space.sm,
-  },
+  eyebrow: { letterSpacing: 2.4 },
+  subhead: { marginTop: space.md, paddingRight: space.xl, lineHeight: 20 },
+  section: { marginBottom: space.xxl },
+  connectedCard: { paddingHorizontal: space.md, paddingVertical: space.md },
+  connectedRow: { flexDirection: 'row', alignItems: 'center' },
+  connectedDot: { width: 8, height: 8, borderRadius: 4, marginRight: space.sm },
   keyActionRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -547,31 +537,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  verifyBtnPressed: {
-    backgroundColor: color.surface2,
-  },
-  verifyBtnDisabled: {
-    opacity: 0.4,
-  },
+  verifyBtnPressed: { backgroundColor: color.surface2 },
+  verifyBtnDisabled: { opacity: 0.4 },
   replaceLink: {
     alignSelf: 'flex-start',
     marginTop: space.sm,
     paddingHorizontal: 4,
     paddingVertical: 6,
   },
-  replaceLinkPressed: {
-    opacity: 0.5,
-  },
-  editZone: {
-    marginTop: space.md,
-  },
-  editHint: {
-    marginBottom: space.sm,
-    paddingHorizontal: 4,
-  },
-  editInputCard: {
-    paddingVertical: 4,
-  },
+  replaceLinkPressed: { opacity: 0.5 },
+  editZone: { marginTop: space.md },
+  editHint: { marginBottom: space.sm, paddingHorizontal: 4 },
+  editInputCard: { paddingVertical: 4 },
   editInput: {
     color: color.fg,
     fontSize: 15,
@@ -585,11 +562,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginTop: space.sm,
   },
-  feedbackRow: {
-    minHeight: 22,
-    marginTop: space.xs,
-    paddingHorizontal: 4,
-  },
+  feedbackRow: { minHeight: 22, marginTop: space.xs, paddingHorizontal: 4 },
   modelRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -598,12 +571,8 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     marginBottom: 2,
   },
-  modelRowPressed: {
-    backgroundColor: color.surface2,
-  },
-  modelRowSelected: {
-    backgroundColor: color.surface1,
-  },
+  modelRowPressed: { backgroundColor: color.surface2 },
+  modelRowSelected: { backgroundColor: color.surface1 },
   modelRadio: {
     width: 14,
     height: 14,
@@ -612,13 +581,6 @@ const styles = StyleSheet.create({
     borderColor: color.hairlineStrong,
     marginRight: space.sm,
   },
-  modelRadioSelected: {
-    borderColor: color.ok,
-    backgroundColor: color.ok,
-  },
-  versionTag: {
-    textAlign: 'center',
-    marginTop: space.lg,
-    opacity: 0.45,
-  },
+  modelRadioSelected: { borderColor: color.ok, backgroundColor: color.ok },
+  versionTag: { textAlign: 'center', marginTop: space.lg, opacity: 0.45 },
 });

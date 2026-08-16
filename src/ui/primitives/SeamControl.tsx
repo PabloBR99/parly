@@ -478,15 +478,8 @@ export function SeamControl({
 }
 
 const styles = StyleSheet.create({
-  anchor: {
-    position: 'absolute',
-    left: '50%',
-    top: '50%',
-  },
-  press: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  anchor: { position: 'absolute', left: '50%', top: '50%' },
+  press: { alignItems: 'center', justifyContent: 'center' },
   invite: {
     position: 'absolute',
     top: -4,
@@ -523,10 +516,7 @@ const styles = StyleSheet.create({
       { inset: true, offsetX: 0, offsetY: 1, blurRadius: 2, spreadDistance: 0, color: 'rgba(0,0,0,0.45)' },
     ],
   },
-  glow: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  glow: { alignItems: 'center', justifyContent: 'center' },
   // Hint labels sit just outside the pill on both sides of the seam. The
   // wide left/right box keeps the (nowrap) label centred on the pill without
   // the label's width affecting the anchor's layout.
@@ -547,9 +537,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
     alignItems: 'center',
   },
-  hintText: {
-    color: 'rgba(255,255,255,0.72)',
-  },
+  hintText: { color: 'rgba(255,255,255,0.72)' },
   barRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -558,8 +546,5 @@ const styles = StyleSheet.create({
     // the row width matches the prototype exactly.
     gap: 3,
   },
-  bar: {
-    width: 2,
-    borderRadius: 2,
-  },
+  bar: { width: 2, borderRadius: 2 },
 });

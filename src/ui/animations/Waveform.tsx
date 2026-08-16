@@ -99,14 +99,6 @@ function Bar({ index, total, active, color, maxHeight }: BarProps): React.JSX.El
 }
 
 const styles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bar: {
-    width: 3,
-    marginHorizontal: 2,
-    borderRadius: 2,
-  },
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  bar: { width: 3, marginHorizontal: 2, borderRadius: 2 },
 });

@@ -437,20 +437,11 @@ export function SpeakerHalf({
 // ── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    paddingHorizontal: space.xl,
-  },
+  root: { flex: 1, paddingHorizontal: space.xl },
   flex: { flex: 1 },
 
-  sourceSlot: {
-    minHeight: 36,
-    paddingTop: space.lg,
-    paddingBottom: space.xs,
-  },
-  sourceLabel: {
-    marginBottom: 4,
-  },
+  sourceSlot: { minHeight: 36, paddingTop: space.lg, paddingBottom: space.xs },
+  sourceLabel: { marginBottom: 4 },
 
   big: {
     justifyContent: 'flex-start',
@@ -459,12 +450,8 @@ const styles = StyleSheet.create({
     paddingTop: space.xs,
     paddingBottom: space.sm,
   },
-  bigWithText: {
-    minHeight: 142,
-  },
-  bigScroll: {
-    flexGrow: 0,
-  },
+  bigWithText: { minHeight: 142 },
+  bigScroll: { flexGrow: 0 },
   bigScrollContent: {
     flexGrow: 1,
     justifyContent: 'flex-start',
@@ -473,12 +460,8 @@ const styles = StyleSheet.create({
     paddingTop: FADE_EDGE_PX,
     paddingBottom: FADE_EDGE_PX,
   },
-  spacer: {
-    flex: 1,
-  },
-  bigText: {
-    color: color.fg,
-  },
+  spacer: { flex: 1 },
+  bigText: { color: color.fg },
   historyPartner: {
     fontFamily: font.sansFamily,
     fontSize: 17,
@@ -488,12 +471,8 @@ const styles = StyleSheet.create({
     color: color.fgMuted,
     marginBottom: space.md,
   },
-  historyOwn: {
-    marginBottom: space.md,
-  },
-  noticeText: {
-    marginTop: space.sm,
-  },
+  historyOwn: { marginBottom: space.md },
+  noticeText: { marginTop: space.sm },
   jumpChip: {
     position: 'absolute',
     right: 0,
@@ -507,11 +486,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  jumpArrow: {
-    color: color.fgMuted,
-    fontSize: 15,
-    lineHeight: 18,
-  },
+  jumpArrow: { color: color.fgMuted, fontSize: 15, lineHeight: 18 },
 
   identityRow: {
     flexDirection: 'row',
@@ -532,50 +507,23 @@ const styles = StyleSheet.create({
     backgroundColor: color.surface2,
     borderColor: color.hairlineStrong,
   },
-  identityDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    marginRight: 8,
-  },
-  identityCode: {
-    marginLeft: 8,
-  },
-  changeChevron: {
-    marginLeft: 8,
-    opacity: 0.7,
-  },
+  identityDot: { width: 6, height: 6, borderRadius: 3, marginRight: 8 },
+  identityCode: { marginLeft: 8 },
+  changeChevron: { marginLeft: 8, opacity: 0.7 },
   morphSlot: {
     width: 22,
     height: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  microcopy: {
-    marginRight: 10,
-  },
+  statusRow: { flexDirection: 'row', alignItems: 'center' },
+  microcopy: { marginRight: 10 },
 
-  welcome: {
-    paddingTop: space.xs,
-  },
-  welcomeHeadline: {
-    marginBottom: space.md,
-  },
-  welcomeFlow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  welcomeFlowArrow: {
-    marginHorizontal: space.sm,
-    letterSpacing: 1,
-  },
-  welcomeHfHint: {
-    marginTop: space.sm,
-  },
+  welcome: { paddingTop: space.xs },
+  welcomeHeadline: { marginBottom: space.md },
+  welcomeFlow: { flexDirection: 'row', alignItems: 'center' },
+  welcomeFlowArrow: { marginHorizontal: space.sm, letterSpacing: 1 },
+  welcomeHfHint: { marginTop: space.sm },
 
   buttonSlot: {
     alignItems: 'center',

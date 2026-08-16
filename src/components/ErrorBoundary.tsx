@@ -53,15 +53,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: space.xxl,
   },
-  title: {
-    marginBottom: space.md,
-    textAlign: 'center',
-  },
-  message: {
-    marginBottom: space.lg,
-    textAlign: 'center',
-  },
-  hint: {
-    textAlign: 'center',
-  },
+  title: { marginBottom: space.md, textAlign: 'center' },
+  message: { marginBottom: space.lg, textAlign: 'center' },
+  hint: { textAlign: 'center' },
 });

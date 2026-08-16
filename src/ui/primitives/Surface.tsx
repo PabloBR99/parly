@@ -38,7 +38,5 @@ const styles = StyleSheet.create({
     borderColor: color.hairline,
     padding: space.md,
   },
-  inset: {
-    backgroundColor: color.surface2,
-  },
+  inset: { backgroundColor: color.surface2 },
 });

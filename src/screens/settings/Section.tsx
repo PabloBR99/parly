@@ -19,11 +19,6 @@ export function Section({ label, children }: SectionProps): React.JSX.Element {
 }
 
 const styles = StyleSheet.create({
-  section: {
-    marginBottom: space.xxl,
-  },
-  sectionLabel: {
-    marginBottom: space.sm,
-    letterSpacing: 1.8,
-  },
+  section: { marginBottom: space.xxl },
+  sectionLabel: { marginBottom: space.sm, letterSpacing: 1.8 },
 });

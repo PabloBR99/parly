@@ -312,22 +312,14 @@ export function PTTButton({
 }
 
 const styles = StyleSheet.create({
-  wrap: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  inverted: {
-    transform: [{ rotate: '180deg' }],
-  },
+  wrap: { alignItems: 'center', justifyContent: 'center' },
+  inverted: { transform: [{ rotate: '180deg' }] },
   bloomLayer: {
     position: 'absolute',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  ring: {
-    position: 'absolute',
-    borderWidth: 1.5,
-  },
+  ring: { position: 'absolute', borderWidth: 1.5 },
   shadowLayer: {
     position: 'absolute',
     width: SHADOW_CANVAS,
@@ -362,9 +354,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     letterSpacing: 1.2,
   },
-  disabled: {
-    opacity: 0.32,
-  },
+  disabled: { opacity: 0.32 },
 });
 
 PTTButton.SIZE = SIZE;

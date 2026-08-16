@@ -81,12 +81,8 @@ const styles = StyleSheet.create({
 });
 
 const variantStyles = StyleSheet.create({
-  primary: {
-    backgroundColor: color.fg,
-  },
-  primaryDisabled: {
-    backgroundColor: color.surface1,
-  },
+  primary: { backgroundColor: color.fg },
+  primaryDisabled: { backgroundColor: color.surface1 },
   secondary: {
     backgroundColor: color.surface2,
     borderWidth: 1,
@@ -102,17 +98,13 @@ const variantStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.errorBorder,
   },
-  dangerDisabled: {
-    opacity: 0.4,
-  },
+  dangerDisabled: { opacity: 0.4 },
   ghost: {
     backgroundColor: 'transparent',
     borderWidth: 1,
     borderColor: color.hairline,
   },
-  ghostDisabled: {
-    opacity: 0.4,
-  },
+  ghostDisabled: { opacity: 0.4 },
 });
 
 // Tiny visual divider used inside Settings cards.
@@ -121,8 +113,5 @@ export function Divider({ inset = 0 }: { readonly inset?: number }): React.JSX.E
 }
 
 const dividerStyles = StyleSheet.create({
-  line: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: color.hairline,
-  },
+  line: { height: StyleSheet.hairlineWidth, backgroundColor: color.hairline },
 });

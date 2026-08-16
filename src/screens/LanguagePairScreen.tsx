@@ -156,10 +156,7 @@ export function LanguagePairScreen({ navigation }: Props): React.JSX.Element {
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: color.bg,
-  },
+  root: { flex: 1, backgroundColor: color.bg },
   header: {
     paddingHorizontal: space.xl,
     paddingTop: space.xxl,
@@ -178,17 +175,9 @@ const styles = StyleSheet.create({
     marginHorizontal: 8,
     opacity: 0.85,
   },
-  eyebrow: {
-    letterSpacing: 2.4,
-  },
-  headline: {
-    marginRight: space.sm,
-  },
-  subhead: {
-    marginTop: space.md,
-    paddingRight: space.xl,
-    lineHeight: 20,
-  },
+  eyebrow: { letterSpacing: 2.4 },
+  headline: { marginRight: space.sm },
+  subhead: { marginTop: space.md, paddingRight: space.xl, lineHeight: 20 },
   cards: {
     flex: 1,
     paddingHorizontal: space.xl,
@@ -206,7 +195,5 @@ const styles = StyleSheet.create({
     marginBottom: space.md,
     borderRadius: 16,
   },
-  settingsLink: {
-    paddingVertical: space.xs,
-  },
+  settingsLink: { paddingVertical: space.xs },
 });

@@ -60,11 +60,7 @@ export function SwapButton({ disabled, onPress }: SwapButtonProps): React.JSX.El
 }
 
 const styles = StyleSheet.create({
-  row: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-  },
+  row: { alignItems: 'center', justifyContent: 'center', paddingVertical: 8 },
   btn: {
     width: 36,
     height: 36,
@@ -75,10 +71,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.hairline,
   },
-  btnDisabled: {
-    opacity: 0.4,
-  },
-  glyph: {
-    fontSize: 16,
-  },
+  btnDisabled: { opacity: 0.4 },
+  glyph: { fontSize: 16 },
 });

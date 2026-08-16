@@ -186,13 +186,8 @@ export function OnboardingSteps({
 // ── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  onboardingIntro: {
-    lineHeight: 22,
-    marginBottom: space.xxl,
-  },
-  step: {
-    marginBottom: space.xl,
-  },
+  onboardingIntro: { lineHeight: 22, marginBottom: space.xxl },
+  step: { marginBottom: space.xl },
   stepHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -208,32 +203,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: space.sm,
   },
-  stepNumberLabel: {
-    fontSize: 13,
-    letterSpacing: 0,
-  },
-  stepTitle: {
-    flex: 1,
-    fontWeight: '500',
-  },
-  stepContent: {
-    paddingLeft: 28 + space.sm,
-  },
-  stepBody: {
-    lineHeight: 22,
-    marginBottom: space.md,
-  },
-  inlineEmph: {
-    fontFamily: 'monospace',
-    color: color.fg,
-  },
-  tip: {
-    marginTop: space.xs,
-    paddingHorizontal: 4,
-  },
-  inputCard: {
-    paddingVertical: 4,
-  },
+  stepNumberLabel: { fontSize: 13, letterSpacing: 0 },
+  stepTitle: { flex: 1, fontWeight: '500' },
+  stepContent: { paddingLeft: 28 + space.sm },
+  stepBody: { lineHeight: 22, marginBottom: space.md },
+  inlineEmph: { fontFamily: 'monospace', color: color.fg },
+  tip: { marginTop: space.xs, paddingHorizontal: 4 },
+  inputCard: { paddingVertical: 4 },
   input: {
     color: color.fg,
     fontSize: 15,
@@ -253,24 +229,11 @@ const styles = StyleSheet.create({
     borderColor: color.hairlineStrong,
     backgroundColor: color.surface1,
   },
-  linkBtnPressed: {
-    backgroundColor: color.surface2,
-  },
-  linkBtnLabel: {
-    fontWeight: '500',
-  },
-  linkBtnArrow: {
-    marginLeft: space.sm,
-    fontSize: 16,
-  },
-  verifyZone: {
-    marginTop: space.md,
-  },
-  feedbackRow: {
-    minHeight: 22,
-    marginTop: space.sm,
-    paddingHorizontal: 4,
-  },
+  linkBtnPressed: { backgroundColor: color.surface2 },
+  linkBtnLabel: { fontWeight: '500' },
+  linkBtnArrow: { marginLeft: space.sm, fontSize: 16 },
+  verifyZone: { marginTop: space.md },
+  feedbackRow: { minHeight: 22, marginTop: space.sm, paddingHorizontal: 4 },
   primaryBtn: {
     backgroundColor: color.fg,
     paddingVertical: 14,
@@ -278,15 +241,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  primaryBtnPressed: {
-    opacity: 0.85,
-  },
-  primaryBtnDisabled: {
-    opacity: 0.4,
-  },
-  primaryBtnLabel: {
-    fontWeight: '600',
-  },
+  primaryBtnPressed: { opacity: 0.85 },
+  primaryBtnDisabled: { opacity: 0.4 },
+  primaryBtnLabel: { fontWeight: '600' },
   successZone: {
     marginTop: space.lg,
     padding: space.md,
@@ -295,10 +252,7 @@ const styles = StyleSheet.create({
     borderColor: color.okBorder,
     backgroundColor: color.okSoft,
   },
-  successLine: {
-    fontWeight: '500',
-    marginBottom: space.sm,
-  },
+  successLine: { fontWeight: '500', marginBottom: space.sm },
   startBtn: {
     paddingVertical: 12,
     borderRadius: radius.md,
@@ -308,10 +262,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: color.surface1,
   },
-  startBtnPressed: {
-    backgroundColor: color.surface2,
-  },
-  startBtnLabel: {
-    fontWeight: '500',
-  },
+  startBtnPressed: { backgroundColor: color.surface2 },
+  startBtnLabel: { fontWeight: '500' },
 });

@@ -446,16 +446,9 @@ const styles = StyleSheet.create({
   half: { flex: 1 },
   flipped: { flex: 1, transform: [{ rotate: '180deg' }] },
 
-  settingsLink: {
-    paddingVertical: space.xs,
-  },
-  bottomEdge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  edgeGap: {
-    width: space.lg,
-  },
+  settingsLink: { paddingVertical: space.xs },
+  bottomEdge: { flexDirection: 'row', alignItems: 'center' },
+  edgeGap: { width: space.lg },
 
   bannerWrap: {
     position: 'absolute',
@@ -474,11 +467,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     minWidth: 240,
   },
-  bannerEyebrow: {
-    marginBottom: 6,
-  },
-  bannerBody: {
-    marginBottom: 4,
-  },
+  bannerEyebrow: { marginBottom: 6 },
+  bannerBody: { marginBottom: 4 },
   bannerHint: {},
 });

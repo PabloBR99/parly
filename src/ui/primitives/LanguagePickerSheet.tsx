@@ -304,13 +304,8 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: radius.xl,
     borderBottomWidth: 1,
   },
-  contentUpright: {
-    flex: 1,
-  },
-  contentRotated: {
-    flex: 1,
-    transform: [{ rotate: '180deg' }],
-  },
+  contentUpright: { flex: 1 },
+  contentRotated: { flex: 1, transform: [{ rotate: '180deg' }] },
   handle: {
     alignSelf: 'center',
     width: 40,
@@ -320,13 +315,8 @@ const styles = StyleSheet.create({
     marginTop: space.sm,
     marginBottom: space.md,
   },
-  searchWrap: {
-    paddingHorizontal: space.xl,
-    paddingBottom: space.md,
-  },
-  searchLabel: {
-    marginBottom: space.xs,
-  },
+  searchWrap: { paddingHorizontal: space.xl, paddingBottom: space.md },
+  searchLabel: { marginBottom: space.xs },
   search: {
     backgroundColor: color.surface1,
     borderRadius: radius.md,
@@ -337,13 +327,8 @@ const styles = StyleSheet.create({
     color: color.fg,
     fontSize: 15,
   },
-  list: {
-    paddingHorizontal: space.md,
-    paddingBottom: space.xl,
-  },
-  group: {
-    marginBottom: space.md,
-  },
+  list: { paddingHorizontal: space.md, paddingBottom: space.xl },
+  group: { marginBottom: space.md },
   groupTitle: {
     paddingHorizontal: space.md,
     paddingVertical: space.xs,
@@ -356,18 +341,8 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: radius.md,
   },
-  rowPressed: {
-    backgroundColor: color.surface2,
-  },
-  rowEmoji: {
-    fontSize: 22,
-    marginRight: space.md,
-  },
-  rowText: {
-    flex: 1,
-  },
-  empty: {
-    textAlign: 'center',
-    paddingVertical: space.xl,
-  },
+  rowPressed: { backgroundColor: color.surface2 },
+  rowEmoji: { fontSize: 22, marginRight: space.md },
+  rowText: { flex: 1 },
+  empty: { textAlign: 'center', paddingVertical: space.xl },
 });

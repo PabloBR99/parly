@@ -79,12 +79,6 @@ export function FadeEdges({ height, style, children }: FadeEdgesProps): React.JS
 }
 
 const styles = StyleSheet.create({
-  mask: {
-    flex: 1,
-    backgroundColor: GONE,
-  },
-  keep: {
-    flex: 1,
-    backgroundColor: KEEP,
-  },
+  mask: { flex: 1, backgroundColor: GONE },
+  keep: { flex: 1, backgroundColor: KEEP },
 });

@@ -59,7 +59,5 @@ export function KeyValidationLine({ state, validating }: Props): React.JSX.Eleme
 }
 
 const styles = StyleSheet.create({
-  keyStatus: {
-    flex: 1,
-  },
+  keyStatus: { flex: 1 },
 });

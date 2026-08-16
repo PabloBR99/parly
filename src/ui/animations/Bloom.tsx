@@ -271,10 +271,7 @@ function StainCircle({ size, fill, peak, idSuffix }: StainCircleProps): React.JS
 }
 
 const styles = StyleSheet.create({
-  container: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  container: { alignItems: 'center', justifyContent: 'center' },
   stain: {
     position: 'absolute',
     // Pinned 0,0 — actual placement comes from the animated transform.

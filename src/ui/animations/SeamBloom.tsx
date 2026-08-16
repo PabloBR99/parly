@@ -194,9 +194,5 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     overflow: 'visible',
   },
-  bloom: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-  },
+  bloom: { position: 'absolute', top: '50%', left: '50%' },
 });

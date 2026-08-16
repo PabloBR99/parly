@@ -105,44 +105,18 @@ const styles = StyleSheet.create({
     minHeight: 132,
     justifyContent: 'space-between',
   },
-  cardEmpty: {
-    backgroundColor: 'transparent',
-    borderColor: color.hairline,
-  },
-  cardFilled: {
-    backgroundColor: color.surface1,
-  },
+  cardEmpty: { backgroundColor: 'transparent', borderColor: color.hairline },
+  cardFilled: { backgroundColor: color.surface1 },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: space.xs,
   },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    marginRight: 8,
-  },
-  metaLabel: {
-    letterSpacing: 1.4,
-  },
-  endonym: {
-    marginTop: 4,
-  },
-  placeholder: {
-    marginTop: space.xs,
-    fontWeight: '300',
-  },
-  subRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: space.sm,
-  },
-  emoji: {
-    fontSize: 16,
-    marginRight: space.xs,
-  },
-  code: {
-    marginLeft: 'auto',
-  },
+  dot: { width: 6, height: 6, borderRadius: 3, marginRight: 8 },
+  metaLabel: { letterSpacing: 1.4 },
+  endonym: { marginTop: 4 },
+  placeholder: { marginTop: space.xs, fontWeight: '300' },
+  subRow: { flexDirection: 'row', alignItems: 'center', marginTop: space.sm },
+  emoji: { fontSize: 16, marginRight: space.xs },
+  code: { marginLeft: 'auto' },
 });
