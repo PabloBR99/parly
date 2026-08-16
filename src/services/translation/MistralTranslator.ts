@@ -7,34 +7,18 @@
 //   { choices: [{ delta: { content: "..." }, finish_reason: null|"stop" }] }
 // Stream terminates with `data: [DONE]\n\n`.
 //
-// Why streaming + sentence-boundary chunking?
-//   In a real-time conversation the user shouldn't wait for the FULL
-//   translation before TTS starts. As soon as we have a complete sentence we
-//   hand it to the TTS queue. By the time the model finishes the second
-//   sentence, the first one is already audible. This saves roughly the length
-//   of the second sentence in latency.
+// Sentences go to TTS as they complete, so the first one is audible while the
+// model is still writing the second. MIN_CHUNK_LEN guards the split, since
+// naïve `.!?` splitting emits abbreviations ("Mr.") as their own choppy chunk;
+// short answers still work because the tail flush emits whatever is left.
 //
-// Why a min-length guard on sentence emits?
-//   Naïve splitting on `.!?` would emit "Mr." or "Sr." (abbreviations) as
-//   independent chunks, causing audible choppiness. We require MIN_CHUNK_LEN
-//   (15) chars of accumulated text before emitting. Short single-sentence
-//   responses still work because the stream's tail flush always emits
-//   whatever's left.
-//
-// Why XHR at all, and why the capability is checked before asking?
-//   React Native's `fetch` is the whatwg-fetch polyfill. It has no
-//   ReadableStream: `response.body` is undefined, and worse, the promise does
-//   not resolve until the WHOLE response has arrived. So "try fetch, fall back
-//   to XHR on failure" is a trap on device — the fetch succeeds, delivers a
-//   response that cannot be streamed, and the fallback then re-POSTs from byte
-//   zero. Every translation ran twice, in series: one full request finished and
-//   thrown away before the real streaming one could start. On a metered,
-//   user-owned API key, at ~400 ms of dead time in front of every reply.
-//   The question is now answered from the prototype, before any request.
-//   The XHR path streams via `responseText` slicing — every readyState=3 or
-//   progress event yields the new bytes since last invocation. React Native
-//   only delivers those incrementally when `onreadystatechange` or `onprogress`
-//   is set before `send()` (XMLHttpRequest.js), which is why it is wired first.
+// Why XHR, and why the capability is checked BEFORE asking: RN's `fetch` is the
+// whatwg-fetch polyfill, which has no ReadableStream and does not resolve until
+// the whole response arrives. "Try fetch, fall back on failure" is therefore a
+// trap — the fetch succeeds with a body that cannot stream, and the fallback
+// re-POSTs from byte zero, running every translation twice in series on a
+// user-owned API key. The XHR path streams by slicing `responseText`, which RN
+// only delivers incrementally when `onreadystatechange` is set before `send()`.
 
 import { isAbortError } from '../../app/errors';
 import { isJsonObject, isString, parseJson } from '../../app/json';
@@ -59,15 +43,10 @@ function languageName(code: string): string {
   return getLanguage(code.toLowerCase()).name;
 }
 
-/**
- * What the interpreter knows besides the sentence in front of it.
- *
- * Both fields are evidence a human interpreter would have and this one did not:
- * who is in the room, and what has already been said. They exist because the
- * transcript arrives from an ASR that is right about the sounds and sometimes
- * wrong about the words, and context is the only thing that can tell the
- * difference.
- */
+/** What the interpreter knows besides the sentence in front of it: who is in
+ *  the room, and what has already been said. Both are evidence a human
+ *  interpreter would have, and the only thing that can tell a recognition
+ *  error from what the speaker meant. */
 export interface TranslationContext {
   /** Names that come up in this conversation, spelled the way they should be. */
   readonly names?: readonly string[];
@@ -124,15 +103,12 @@ function buildSystemPrompt(
     `formal register. Do not omit, refuse or summarize, and never add`,
     `content of your own.`,
 
-    // Interpret, don't proofread. The transcript comes off a streaming ASR
-    // working under a few hundred milliseconds of lookahead, and its errors are
-    // systematic: run-together word boundaries, near-homophones, a name spelled
-    // the way it sounded. A human interpreter hears the same mangled sounds and
-    // renders what the speaker plainly meant; a translator that renders the
-    // literal nonsense is technically faithful to the wrong thing. The limit is
-    // in the second half — repair what is obvious FROM CONTEXT, and when the
-    // meaning genuinely is not recoverable, translate it as it stands rather
-    // than inventing a sentence that was never said.
+    // Interpret, don't proofread. A streaming ASR's errors are systematic —
+    // run-together boundaries, near-homophones, names spelled as they sounded —
+    // and rendering the literal nonsense is being faithful to the wrong thing.
+    // The limit is in the second half: repair what is obvious FROM CONTEXT, and
+    // when the meaning is genuinely lost, translate it as it stands rather than
+    // inventing a sentence nobody said.
     `The transcript is produced by automatic speech recognition and can`,
     `contain recognition errors: wrong word boundaries, near-homophones,`,
     `missing punctuation, and misspelled names. You are an interpreter, not`,
@@ -404,15 +380,10 @@ const defaultFetcher: StreamingFetcher = {
 /**
  * Cancellation, without `DOMException`.
  *
- * Hermes has no `DOMException`, so constructing one threw a ReferenceError —
- * and it was constructed inside the signal's abort listener, which meant the
- * ReferenceError came back out of `controller.abort()` at the call site.
- * Every cancelled translation blew up there. It stayed invisible while the
- * fetch path was in use and nothing ever cancelled; the moment translations
- * started being sent speculatively, aborting one became routine.
- *
- * Nothing downstream ever needed a DOMException: cancellation is recognised by
- * `name`, and a plain Error carries that just as well.
+ * Hermes has none, so constructing one threw a ReferenceError from inside the
+ * abort listener — which surfaced out of `controller.abort()` at the call site
+ * and blew up every cancelled translation. Nothing downstream needed the type:
+ * cancellation is recognised by `name`, which a plain Error carries too.
  */
 function abortError(): Error {
   const err = new Error('aborted');
@@ -425,16 +396,12 @@ function abortError(): Error {
 export class MistralTranslator {
   constructor(private readonly fetcher: StreamingFetcher = defaultFetcher) {}
 
-  /**
-   * Open an HTTP/2 connection to api.mistral.ai and validate the API key.
-   * Subsequent translateStream() calls reuse this TLS session, saving
-   * ~150-300 ms on the first real turn. Best-effort — failures are silent.
-   */
+  /** Open the TLS session to api.mistral.ai so the first real turn doesn't pay
+   *  for it — worth ~150-300 ms. Best-effort; failures are silent. */
   async prewarm(args: { apiKey: string; model?: string }): Promise<void> {
     const model = args.model ?? DEFAULT_MODEL;
-    // This one fires unattended — hands-free enable calls it and does not wait
-    // for it — so a key the platform raises on would take the app down in the
-    // middle of an unrelated action, which is exactly how it presented.
+    // Fires unattended (hands-free enable does not await it), so a key the
+    // platform raises on would take the app down mid-unrelated-action.
     if (!isSendableKey(args.apiKey)) return;
     try {
       await fetch(ENDPOINT, {

@@ -1,37 +1,25 @@
 // SileroVadService — on-device Voice Activity Detection via Silero VAD v5.
 //
-// Runs the silero_vad.onnx model (≈2 MB) via onnxruntime-react-native.
-// The model takes 512-sample (32 ms) frames at 16 kHz and outputs a speech
-// probability [0, 1] with an internal RNN state that must be carried across
-// frames. This service handles the state and fires onSpeechStart / onSpeechEnd
-// with a configurable silence hangover so short gaps (breathing, pauses) don't
-// fragment an utterance.
+// Runs silero_vad.onnx (≈2 MB) through onnxruntime-react-native: 512-sample
+// (32 ms) frames at 16 kHz in, a speech probability out, with an RNN state
+// carried across frames. This service owns that state and the silence hangover
+// that keeps a breath from fragmenting an utterance.
 //
-// Read the energy path as the primary one, not the fallback the naming
-// suggests. On the hardware this ships against the model returns 0.001–0.002
-// for speech loud enough to clip — every turn in every device log so far has
-// been decided by RMS alone, and until that is understood the two energy
-// thresholds are the detector.
+// Read the energy path as the primary one, not the fallback its naming
+// suggests: on the hardware this ships against the model returns 0.001–0.002
+// for speech loud enough to clip, so every turn in every device log so far was
+// decided by RMS alone.
 //
 // Endpointing is two-stage. `onSpeechPause` fires early (pauseHintMs) and
-// `onSpeechEnd` late (silenceHangoverMs). Silence alone is weak evidence that
-// someone finished talking — strong enough only after a long wait, which is
-// why the hangover is the largest fixed latency in hands-free. The pause hint
-// exists so a subscriber holding better evidence (a transcript that just
-// closed a sentence) can end the turn without paying for the hangover, while
-// anything ambiguous still waits it out.
+// `onSpeechEnd` late (silenceHangoverMs), because silence alone is weak
+// evidence that someone finished — strong only after a long wait, which makes
+// the hangover the largest fixed latency in hands-free. The hint lets a
+// subscriber holding better evidence (a transcript that just closed a
+// sentence) end the turn early while anything ambiguous waits it out.
 //
-// Setup:
-//   1. `npm install onnxruntime-react-native`
-//   2. Download silero_vad.onnx into:
-//        android/app/src/main/assets/silero_vad.onnx   (Android)
-//        ios/silero_vad.onnx  (add to Xcode target)
-//   3. On Android, the model is copied to DocumentDirectoryPath on first
-//      initialize() so ONNX Runtime can open it from the file system.
-//
-// Plan B (if ONNX is too heavy for CMF Phone 1):
-//   Replace this class with a react-native-webrtc-vad wrapper — same interface,
-//   smaller binary (~500 KB), lower accuracy. Caller code is unchanged.
+// The model lives at android/app/src/main/assets/ and in the iOS bundle; on
+// Android initialize() copies it to DocumentDirectoryPath, since ONNX Runtime
+// cannot open an APK asset directly.
 
 import { log } from '../log/logStore';
 import { Platform } from 'react-native';
@@ -49,60 +37,39 @@ export interface VadConfig {
   readonly speechProbThreshold?: number;
   /** How long silence must persist after speech before onSpeechEnd fires (ms). */
   readonly silenceHangoverMs?: number;
-  /**
-   * How long silence must persist before `onSpeechPause` fires (ms) — an
-   * early, non-committal "they might have finished" hint, emitted well before
-   * the full hangover. The hangover is a blunt instrument: it has to be long
-   * enough to survive a mid-sentence breath, which makes it dead air on the
-   * front of every single response. The pause hint lets a listener that has
-   * BETTER evidence than silence — a transcript that just closed a sentence —
-   * end the turn early, while everyone else still waits out the hangover.
-   * Must be shorter than the hangover; ignored otherwise.
-   */
+  /** Silence before the early, non-committal `onSpeechPause` hint (ms). Must be
+   *  shorter than the hangover; ignored otherwise. */
   readonly pauseHintMs?: number;
   /**
-   * RMS energy at which a SILENT room is considered to have started speaking
-   * (0-1). A frame is speech if EITHER the model prob exceeds
-   * speechProbThreshold OR the RMS exceeds this value. Nominally a fallback for
-   * when the ONNX model returns near-zero for real speech; on the hardware this
-   * runs on that is not the exception, it is every turn.
-   *
-   * Default 0.05. Deliberately high: this is the bar for deciding somebody
-   * started talking, and a room with a television in it clears anything lower.
-   * Set to 0 to disable the energy path and rely solely on model probability.
+   * RMS at which a SILENT room is considered to have started speaking (0-1). A
+   * frame is speech if either the model probability or the RMS clears its bar.
+   * Default 0.05, deliberately high — a room with a television in it clears
+   * anything lower. Set to 0 to rely on model probability alone.
    */
   readonly energySpeechThreshold?: number;
   /**
-   * RMS energy at which an ALREADY-SPEAKING room is considered to still be
-   * speaking (0-1). Lower than energySpeechThreshold, and the gap between them
-   * is the whole point.
+   * RMS at which an ALREADY-SPEAKING room is considered to still be speaking.
+   * Lower than energySpeechThreshold, and the gap between them is the point.
    *
-   * One threshold cannot do both jobs. Speech is not a plateau — inside a
-   * single sentence the vowels are ten to twenty dB above the consonants, so a
-   * bar set high enough to ignore a quiet room sits *inside* the dynamic range
-   * of the sentence it is supposed to be tracking. With one threshold the
-   * detector sees a sentence as a handful of loud syllables separated by
-   * "silence", and the hangover expires somewhere in the middle of it. Measured
-   * on device: 96 ms, 180 ms and 410 ms of "speech" for three utterances that
-   * were each a whole sentence, two of which reached the transcriber as
+   * One threshold cannot do both jobs. Speech is not a plateau — vowels run ten
+   * to twenty dB above consonants — so a bar set high enough to ignore a quiet
+   * room sits *inside* the dynamic range of the sentence it is tracking. The
+   * detector then sees a handful of loud syllables separated by "silence" and
+   * the hangover expires mid-sentence: measured on device, 96 / 180 / 410 ms of
+   * "speech" for three whole sentences, two of which reached the transcriber as
    * nothing at all.
    *
-   * So entering costs more evidence than staying costs. Standard squelch
-   * design, and it separates the two failures cleanly: raising the entry bar
-   * fights false starts, lowering the sustain bar fights chopped sentences,
-   * and neither move drags the other with it.
+   * So entering costs more evidence than staying. Standard squelch design, and
+   * it separates the failures: the entry bar fights false starts, the sustain
+   * bar fights chopped sentences, neither drags the other.
    *
    * Defaults to 40% of energySpeechThreshold (≈8 dB below it).
    */
   readonly energySustainThreshold?: number;
-  /**
-   * Hard limit on a single utterance (ms). Nothing about a conversation turn
-   * needs this — it exists because the sustain threshold above is, by design,
-   * close to the noise in a bad room, and a detector that can hold a turn open
-   * needs something that cannot fail to close one. Reaching it is a bug
-   * report, not a feature; the alternative is an app that silently never
-   * answers. Default 15 s.
-   */
+  /** Hard ceiling on one utterance (ms), default 15 s. The sustain bar is by
+   *  design close to the noise in a bad room, so a detector that can hold a
+   *  turn open needs something that cannot fail to close one. Reaching it is a
+   *  bug report; the alternative is an app that silently never answers. */
   readonly maxUtteranceMs?: number;
 }
 
@@ -204,13 +171,7 @@ export class SileroVadService {
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
-    // Claimed before the FIRST native call, not just before the model load.
-    // The first version of this guard staked the claim after the asset had
-    // been copied out of the APK — and a device then died inside that copy,
-    // upstream of the claim, so every launch walked into it again. Everything
-    // from here to "Silero model loaded" is native work that can end the
-    // process with nothing to catch and nothing to log; the whole stretch is
-    // what the claim has to cover.
+    // Claimed before the FIRST native call — see the crash-loop guard below.
     if (!(await claimModelLoad())) {
       log.warn(
         '[vad] skipping the model — the previous attempt never came back, ' +
@@ -293,9 +254,8 @@ export class SileroVadService {
     this.speaking = false;
   }
 
-  /** Reset the RNN state and speaking flag without destroying the ONNX session.
-   *  Call between HF sessions to prevent stale state from a previous run
-   *  affecting speech detection in the new session. */
+  /** Reset the RNN state and speaking flag, keeping the ONNX session. Called
+   *  between HF sessions so stale state can't suppress the next one. */
   resetState(): void {
     this.clearSilenceTimers();
     this.pauseHintEmitted = false;
@@ -309,19 +269,11 @@ export class SileroVadService {
   }
 
   destroy(): void {
-    this.clearSilenceTimers();
-    this.pauseHintEmitted = false;
+    this.resetState();
     this.subscribers = [];
     this.session = null;
     this.initialized = false;
-    this.speaking = false;
-    this.inferenceQueue = [];
     this.inferenceRunning = false;
-    this.state = new Float32Array(STATE_SIZE);
-    this.frameCount = 0;
-    this.maxProbWindow = 0;
-    this.maxAmpWindow = 0;
-    this.maxRmsWindow = 0;
   }
 
   // ── Internal ──────────────────────────────────────────────────────────────
@@ -551,13 +503,10 @@ async function resolveModelPath(assetName: string): Promise<string> {
     return `${RNFS.MainBundlePath}/${assetName}`;
   }
 
-  // Every line below announces the native call it is about to make, not the
-  // one it just finished. A process killed inside one of these leaves no
-  // exception and no completion line, so the last entry in the log IS the
-  // finding — "checking the copy on disk" as a final word means `exists` or
-  // `stat` never came back, and "copying the model out of the APK" means the
-  // asset copy did not. Chatty for one-time work, and the only instrument that
-  // survives the failure it is describing.
+  // Every line below announces the native call it is ABOUT to make. A process
+  // killed inside one leaves no exception and no completion line, so the last
+  // entry in the log is the finding. Chatty for one-time work, and the only
+  // instrument that survives the failure it describes.
   const destPath = `${RNFS.DocumentDirectoryPath}/${assetName}`;
   log.info('[vad] checking the copy on disk');
   if (await modelLooksUsable(RNFS, destPath)) {
@@ -571,14 +520,13 @@ async function resolveModelPath(assetName: string): Promise<string> {
   // on a scratch path and rename, which is atomic on the same filesystem.
   const tmpPath = `${destPath}.part`;
   try { await RNFS.unlink?.(tmpPath); } catch { /* nothing to clean up */ }
+  log.info('[vad] copying the model out of the APK');
   if (RNFS.moveFile) {
-    log.info('[vad] copying the model out of the APK');
     await RNFS.copyFileAssets(assetName, tmpPath);
     try { await RNFS.unlink?.(destPath); } catch { /* first run */ }
     log.info('[vad] renaming the copy into place');
     await RNFS.moveFile(tmpPath, destPath);
   } else {
-    log.info('[vad] copying the model out of the APK');
     await RNFS.copyFileAssets(assetName, destPath);
   }
   log.info(`[vad] model copied to ${destPath}`);
@@ -604,34 +552,22 @@ async function modelLooksUsable(RNFS: Fs, path: string): Promise<boolean> {
 
 // ── Crash-loop guard ─────────────────────────────────────────────────────────
 //
-// Getting the model ready is native work from end to end: copying 2 MB out of
-// the APK, renaming it into place, handing the path to a model loader. When
-// any of it takes the process down there is no exception to catch and no log
-// line to find — the app simply restarts, and since turning hands-free on is
-// what triggers it, the next attempt does exactly the same thing.
+// Getting the model ready is native work end to end — copying 2 MB out of the
+// APK, renaming it into place, handing the path to a loader — and when any of
+// it takes the process down there is no exception to catch and no line to find.
+// The app just restarts, and since turning hands-free on is what triggers it,
+// the next attempt does exactly the same thing.
 //
-// So the attempt is claimed on disk before the first native call and released
-// when the last one returns, failure included. A claim still standing at the
-// next launch can only mean the work never returned at all, and this run skips
-// the model — hands-free then runs on the energy detector, which needs no
-// model. A crash costs the model, not the app.
+// So the attempt is claimed on disk before the FIRST native call (a guard that
+// starts after the asset copy misses the step a device was actually dying in)
+// and released when the last one returns, failure included. A claim still
+// standing at the next launch means the work never returned, so that run skips
+// the model and hands-free listens on energy alone: a crash costs the model,
+// not the app.
 //
-// The scope of the claim is the whole of that work, and learning that cost a
-// build: the first version staked it after the asset copy, which is precisely
-// where a device was dying, so every launch walked into the same hole with the
-// guard sitting uselessly downstream. A guard that does not cover the first
-// native call does not cover anything.
-//
-// Skip once, then try again — the claim is cleared as it is honoured. An
-// earlier version made it sticky, on the theory that retrying something which
-// had already killed the process once was how a crash loop starts. That was
-// written while this guard was chasing the wrong fault: the crash it was built
-// for turned out to be a pasted diagnostics log going out as an Authorization
-// header, nothing to do with the model at all. Which makes the realistic
-// failure here a false positive, and a sticky claim answers a false positive
-// by disabling on-device speech detection permanently and silently. Skipping
-// one launch is enough to break a loop and cheap enough to be wrong about;
-// the per-step deadline above already covers a load that merely hangs.
+// Skip once, then try again — the claim is retired as it is honoured. Sticky
+// would answer a false positive by disabling speech detection permanently and
+// silently, and the per-step deadline above already covers a load that hangs.
 
 const LOAD_CLAIM = 'silero_vad.loading';
 

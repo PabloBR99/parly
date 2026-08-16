@@ -21,28 +21,15 @@
 //   input_audio.flush          — force transcription of buffered audio
 //   input_audio.end            — signal end-of-utterance
 //
-// Session mode (hands-free):
-//   When sessionMode=true, a single WS survives multiple utterances.
-//   After each transcription.done the connection stays open; callers use
-//   closeSegment() to end the current speech segment and endSession() to close
-//   the connection gracefully.
+// Session mode (hands-free): one WS survives many utterances. closeSegment()
+// is the only way to end a segment, and it answers twice — `textSoFar` now,
+// `final` a round trip later — because choosing between them is a
+// latency/punctuation trade-off that belongs to the caller. Deltas arriving
+// between the flush and its answer belong to the segment being closed: the
+// server closes it on receipt, so anything still arriving is it catching up.
 //
-//   closeSegment() is the ONLY way to end a segment, and it answers twice:
-//   `textSoFar` is what the server has already streamed, available now, and
-//   `final` is the server's own transcript for the same segment, available
-//   after a round trip. The caller decides which it needs — that decision is
-//   a latency/punctuation trade-off and belongs to the caller, not here.
-//   There were once two methods for this (flushUtterance / commitUtterance),
-//   which forced every caller to pick before it knew, and disagreed about who
-//   owned the deltas arriving between the flush and its answer. They belong to
-//   the segment being closed: the server closes it on receiving the flush, so
-//   anything still arriving is it catching up on audio it already had.
-//
-// Notes on React Native WebSocket:
-//   - Third argument to `new WebSocket(url, protocols, options)` supports
-//     { headers } on iOS and Android. Browser fetches would reject custom
-//     headers, but RN's WebSocket is built on native libraries (OkHttp on
-//     Android, NSURLSession on iOS) that honor them.
+// RN's WebSocket takes { headers } as its third constructor argument, unlike
+// the browser's: it is built on OkHttp / NSURLSession, which honour them.
 
 import { asText, isJsonObject, isNumber, isString, parseJson } from '../../app/json';
 import { toError } from '../../app/errors';
@@ -57,23 +44,15 @@ const SAMPLE_RATE = 16_000;
 // 4 s, not 8: on a degraded network nobody is still holding the disc at
 // 8 seconds — fail fast into the speaker-side retry notice instead.
 const HANDSHAKE_TIMEOUT_MS = 4_000;
-// Server-side audio buffering before the model commits words — the parameter
-// the whole accuracy/latency trade-off runs through.
+// Right context: how much of the FOLLOWING audio Voxtral has in hand when it
+// commits each word, and the parameter the whole accuracy/latency trade-off
+// runs through. Mistral's figure is that 480 ms matches their offline batch
+// model (within 1-2 WER points on English); below it the curve turns down, and
+// not evenly — fast conversational speech is *reduced* speech, thinner in
+// acoustic evidence per word, so it leans hardest on this context.
 //
-// It is right context. Voxtral decides each word with this much of the
-// following audio in hand, and Mistral's own figure is that at 480 ms the
-// realtime model matches their offline batch model (within 1-2 WER points on
-// long- and short-form English); below it the curve turns down. It does not
-// degrade evenly across speakers either: fast conversational speech is
-// *reduced* speech — coarticulated, elided, consonants swallowed — so its
-// acoustic evidence per word is thinner and it leans hardest on exactly the
-// context this parameter buys.
-//
-// This app ran at 320 for one release, bought with a comment calling the
-// accuracy cost "marginal" on no measurement at all, while the latency it
-// bought was measured to the millisecond. 480 is now the default and the
-// 320 is behind a Settings choice for anyone who wants the 160 ms back.
-// `scripts/voxtral-wer-bench.mjs` is how to decide between them with numbers.
+// 480 is the default; 320 sits behind a Settings choice for anyone who wants
+// the 160 ms back. `scripts/voxtral-wer-bench.mjs` decides with numbers.
 export const STREAMING_DELAY_ACCURATE_MS = 480;
 export const STREAMING_DELAY_FAST_MS = 320;
 export const TARGET_STREAMING_DELAY_MS = STREAMING_DELAY_ACCURATE_MS;
@@ -273,6 +252,18 @@ export class VoxtralRealtimeClient {
         fn();
       };
 
+      // Before session.created a failure has nobody to report to but the
+      // pending start(); after it, the caller is mid-turn and hears about it
+      // through onError. Every path below fails the same way.
+      const fail = (err: Error): void => {
+        if (this.sessionReady) {
+          this.callbacks?.onError(err);
+          this.cleanup();
+        } else {
+          settle(() => { this.cleanup(); reject(err); });
+        }
+      };
+
       this.handshakeTimer = setTimeout(() => {
         if (gen !== this.generation) return;
         settle(() => {
@@ -284,17 +275,13 @@ export class VoxtralRealtimeClient {
       ws.onopen = () => {
         if (gen !== this.generation) return;
         log.info('[voxtral] onopen — sending session.update');
-        // Voxtral's session schema accepts audio_format and
-        // target_streaming_delay_ms, and nothing else — extra fields come back
-        // as a Pydantic extra_forbidden error. In particular there is no
-        // language hint and no vocabulary biasing on this socket; those exist
-        // only on the HTTP transcription endpoint, which wants a finished file.
-        // That is the reason names are repaired downstream (see nameRepair)
-        // rather than asked for here.
-        //
-        // The delay is sent in BOTH modes now. Push-to-talk used to leave it to
-        // the server default, which meant the two modes transcribed under
-        // different conditions and neither was written down anywhere.
+        // The schema accepts these two fields and nothing else — anything extra
+        // comes back as a Pydantic extra_forbidden error. There is no language
+        // hint and no vocabulary biasing on this socket (they exist only on the
+        // HTTP endpoint, which wants a finished file), which is why names are
+        // repaired downstream instead — see nameRepair. The delay is sent in
+        // both modes, so PTT and hands-free transcribe under the same
+        // conditions rather than PTT silently taking a server default.
         const session = {
           audio_format: { encoding: 'pcm_s16le', sample_rate: SAMPLE_RATE },
           target_streaming_delay_ms: this.targetStreamingDelayMs,
@@ -330,13 +317,7 @@ export class VoxtralRealtimeClient {
             if (this.flushOnReady) {
               this.flushOnReady = false;
               this.state = 'ending';
-              try {
-                ws.send(JSON.stringify({ type: 'input_audio.flush' }));
-                ws.send(JSON.stringify({ type: 'input_audio.end' }));
-              } catch (e) {
-                this.callbacks?.onError(new Error(`Failed to signal end: ${String(e)}`));
-                this.cleanup();
-              }
+              this.signalEnd();
             }
           }
           return;
@@ -354,11 +335,6 @@ export class VoxtralRealtimeClient {
         if (frame.type === 'transcription.language') {
           const language = asText(frame.language);
           if (language) this.detectedLanguage = language;
-          return;
-        }
-
-        if (frame.type === 'transcription.segment') {
-          // Emitted by Voxtral in streaming mode. Not used today.
           return;
         }
 
@@ -386,42 +362,25 @@ export class VoxtralRealtimeClient {
           return;
         }
 
-        if (frame.type === 'error') {
-          const err = new Error(errorFrameMessage(frame.error));
-          if (!this.sessionReady) {
-            settle(() => { this.cleanup(); reject(err); });
-          } else {
-            this.callbacks?.onError(err);
-            this.cleanup();
-          }
-        }
+        if (frame.type === 'error') fail(new Error(errorFrameMessage(frame.error)));
       };
 
       ws.onerror = (ev) => {
         if (gen !== this.generation) return;
         const detail = describeEvent(ev);
         log.error(`[voxtral] onerror ${detail}`);
-        const err = new Error(`WebSocket error: ${detail}`);
-        if (!this.sessionReady) {
-          settle(() => { this.cleanup(); reject(err); });
-        } else {
-          this.callbacks?.onError(err);
-          this.cleanup();
-        }
+        fail(new Error(`WebSocket error: ${detail}`));
       };
 
       ws.onclose = (ev) => {
         if (gen !== this.generation) return;
         const closeInfo = describeClose(ev);
         log.info(`[voxtral] onclose ${closeInfo}`);
+        // A close we asked for is not a failure — only an unexpected one is.
         if (!this.sessionReady) {
-          settle(() => {
-            this.cleanup();
-            reject(new Error(`WebSocket closed before session.created (${closeInfo})`));
-          });
+          fail(new Error(`WebSocket closed before session.created (${closeInfo})`));
         } else if (this.state !== 'ending' && this.state !== 'closed') {
-          this.callbacks?.onError(new Error(`WebSocket closed unexpectedly (${closeInfo})`));
-          this.cleanup();
+          fail(new Error(`WebSocket closed unexpectedly (${closeInfo})`));
         }
       };
     });
@@ -460,17 +419,22 @@ export class VoxtralRealtimeClient {
       return;
     }
     this.state = 'ending';
+    if (!this.signalEnd()) return;
+    return this.waitForFinal(finalTimeoutMs);
+  }
 
+  /** Flush the buffered audio and declare the utterance over. False means the
+   *  socket refused it, which is terminal — the caller is already cleaned up. */
+  private signalEnd(): boolean {
     try {
       this.ws?.send(JSON.stringify({ type: 'input_audio.flush' }));
       this.ws?.send(JSON.stringify({ type: 'input_audio.end' }));
+      return true;
     } catch (e) {
       this.callbacks?.onError(new Error(`Failed to signal end: ${String(e)}`));
       this.cleanup();
-      return;
+      return false;
     }
-
-    return this.waitForFinal(finalTimeoutMs);
   }
 
   /** Resolve when this connection reaches a terminal event (transcription.done
@@ -503,30 +467,23 @@ export class VoxtralRealtimeClient {
   /**
    * Session-mode only: end the current speech segment.
    *
-   * Answers twice, because there are two useful answers and the caller is the
-   * one who knows which it needs:
+   * Answers twice, because the caller is the one who knows which it needs:
    *
-   *   textSoFar — every word the server has already streamed for this segment,
-   *     available synchronously. By the time a caller decides an utterance is
-   *     over this is normally the whole thing: the server buffers
-   *     TARGET_STREAMING_DELAY_MS of audio, and the silence the caller waited
-   *     through is longer than that.
-   *   final — the server's own transcript for the same segment, one round trip
-   *     later. Same words, tidier punctuation, several hundred milliseconds of
-   *     dead air. Worth it when textSoFar is empty or still growing; a bad
-   *     trade in a conversation when it isn't.
+   *   textSoFar — what the server already streamed, available synchronously.
+   *     Normally the whole utterance, since the silence the caller waited
+   *     through is longer than the audio the server buffers.
+   *   final — the server's own transcript, one round trip later. Same words,
+   *     tidier punctuation, several hundred ms of dead air. Worth it when
+   *     textSoFar is empty or still growing, a bad trade when it isn't.
    *
    * The flush goes out either way — the server has to close the segment so the
-   * next speaker starts clean. Closing while a close is already outstanding
-   * JOINS it rather than opening a second: the segment is already closed and
-   * one transcription.done is the answer to everybody. That is what lets a
-   * caller close early on a guess and then ask again for real without tracking
-   * which is which.
+   * next speaker starts clean. Closing while one is outstanding JOINS it rather
+   * than opening a second, since one transcription.done answers everybody, and
+   * that is what lets a caller close early on a guess and ask again for real.
    *
-   * `final` salvages the accumulated partial if the answer never comes — long
-   * utterances have long transcription tails, and losing a minute of speech
-   * over a slow final frame is worse than losing its last comma. It rejects
-   * only when nothing at all accumulated, or when the connection dies.
+   * `final` salvages the accumulated partial if the answer never comes: losing
+   * a minute of speech to a slow final frame is worse than losing its last
+   * comma. It rejects only if nothing accumulated, or the connection died.
    */
   closeSegment(timeoutMs = 3_000): SegmentClose {
     if (!this.sessionMode) {
