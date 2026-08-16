@@ -12,6 +12,7 @@ import {
   TARGET_STREAMING_DELAY_MS,
   STREAMING_DELAY_ACCURATE_MS,
   STREAMING_DELAY_FAST_MS,
+  type SocketFrame,
   type WebSocketLike,
   type WebSocketFactory,
 } from '../VoxtralRealtimeClient';
@@ -20,10 +21,19 @@ import {
 
 interface FakeWs extends WebSocketLike {
   sent: string[];
-  fire(event: 'open' | 'message' | 'error' | 'close', payload?: unknown): void;
+  /** `payload` is the frame body, and only 'message' carries one. */
+  fire(event: 'open' | 'message' | 'error' | 'close', payload?: SocketFrame): void;
 }
 
-function createFakeWs(): { ws: FakeWs; factory: WebSocketFactory; capturedHeaders: Record<string, string> | null; capturedUrl: string | null } {
+/** A fake socket plus the factory that hands it out, and what that factory saw. */
+interface FakeSocketHarness {
+  readonly ws: FakeWs;
+  readonly factory: WebSocketFactory;
+  readonly capturedHeaders: Record<string, string> | null;
+  readonly capturedUrl: string | null;
+}
+
+function createFakeWs(): FakeSocketHarness {
   let capturedHeaders: Record<string, string> | null = null;
   let capturedUrl: string | null = null;
 
@@ -38,8 +48,8 @@ function createFakeWs(): { ws: FakeWs; factory: WebSocketFactory; capturedHeader
     close() { /* noop — tests drive close via .fire('close') */ },
     fire(event, payload) {
       if (event === 'open') this.onopen?.({});
-      else if (event === 'message') this.onmessage?.({ data: payload });
-      else if (event === 'error') this.onerror?.(payload ?? {});
+      else if (event === 'message') this.onmessage?.({ data: payload ?? '' });
+      else if (event === 'error') this.onerror?.({});
       else if (event === 'close') this.onclose?.({});
     },
   };

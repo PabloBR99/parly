@@ -58,6 +58,7 @@ import type { HfActivity } from '../../store/conversationStore';
 import type { PersonId } from '../../app/types';
 import { frameRms, publishAudioFrame, resetAudioLevel } from '../audio/audioLevelBus';
 import { decodePcm16, encodePcm16 } from '../audio/pcm';
+import { errorMessage, toError } from '../../app/errors';
 import { SpeechAgc } from '../audio/SpeechAgc';
 import { log } from '../log/logStore';
 import type { SegmentClose } from '../stt/VoxtralRealtimeClient';
@@ -273,6 +274,13 @@ type HfEndpoint = 'silence' | 'punctuation';
 /** Why a turn could not skip the server's final. Logged, because a shortcut
  *  that silently never fires looks exactly like a shortcut that does. */
 type FastPathBlock = 'none' | 'no-transcript' | 'still-arriving' | 'routing-unclear';
+
+/** The answer to "can this turn skip the server's final?" — the transcript to
+ *  run with, or `null` plus the reason it has to wait. */
+interface FastPathVerdict {
+  readonly text: string | null;
+  readonly blocked: FastPathBlock;
+}
 
 /**
  * Cap on translation requests started speculatively per utterance. Each one
@@ -916,7 +924,7 @@ export class ConversationOrchestrator {
         this.deps.voxtral.feedAudio(this.level(base64Pcm));
       });
     } catch (e) {
-      this.failTurn(id, `Audio capture failed: ${stringifyError(e)}`);
+      this.failTurn(id, `Audio capture failed: ${errorMessage(e)}`);
       return;
     }
 
@@ -937,9 +945,9 @@ export class ConversationOrchestrator {
       // A quick release no longer aborts the handshake (the client flushes
       // the queued audio when the session opens), so a rejection here is a
       // real connection failure regardless of PTT state — surface it.
-      log.error('[orch] Voxtral handshake rejected', e instanceof Error ? e : new Error(String(e)));
+      log.error('[orch] Voxtral handshake rejected', toError(e));
       void this.deps.audioCapture.stopStreaming().catch(() => {});
-      this.failTurn(id, `Voxtral handshake failed: ${stringifyError(e)}`);
+      this.failTurn(id, `Voxtral handshake failed: ${errorMessage(e)}`);
       return;
     }
 
@@ -972,7 +980,7 @@ export class ConversationOrchestrator {
       // speaker cared enough to keep talking for.
       await this.deps.voxtral.end(finalTimeoutFor(heldMs) + 2_000);
     } catch (e) {
-      if (id) this.failTurn(id, `Voxtral end failed: ${stringifyError(e)}`);
+      if (id) this.failTurn(id, `Voxtral end failed: ${errorMessage(e)}`);
     }
   }
 
@@ -1160,7 +1168,7 @@ export class ConversationOrchestrator {
         this.deps.voxtral.cancel();
       }
     } catch (e) {
-      log.error('[orch/hf] endSession failed', e instanceof Error ? e : new Error(String(e)));
+      log.error('[orch/hf] endSession failed', toError(e));
     }
 
     // 5. Stop any TTS in flight.
@@ -1204,7 +1212,7 @@ export class ConversationOrchestrator {
       this.agc.reset();
       this.deps.audioCapture.startStreaming(this.hfOnAudio);
     } catch (e) {
-      log.error('[orch/hf] resume audio capture failed', e instanceof Error ? e : new Error(String(e)));
+      log.error('[orch/hf] resume audio capture failed', toError(e));
       // Leave paused so UI can offer a manual disable.
       return;
     }
@@ -1329,7 +1337,7 @@ export class ConversationOrchestrator {
         onDone: (fullText) => run.noteDone(fullText),
         onError: (err) => run.noteError(err),
       })
-      .catch((e) => run.noteError(e instanceof Error ? e : new Error(String(e))));
+      .catch((e) => run.noteError(toError(e)));
 
     return run;
   }
@@ -1363,7 +1371,7 @@ export class ConversationOrchestrator {
    * the text alone decides the routing outright. Anything the classifier is
    * merely leaning towards goes the slow way and keeps its second opinion.
    */
-  private inspect(u: Utterance, now: number): { text: string | null; blocked: FastPathBlock } {
+  private inspect(u: Utterance, now: number): FastPathVerdict {
     const text = u.text();
     if (text.length < FAST_PATH_MIN_CHARS) return { text: null, blocked: 'no-transcript' };
     if (!u.settled(now)) return { text: null, blocked: 'still-arriving' };
@@ -1480,15 +1488,15 @@ export class ConversationOrchestrator {
           this.writeHfLive(u);
           this.evaluateEndpoint(u);
         } catch (e) {
-          log.error('[orch/hf] segment handler threw', e instanceof Error ? e : new Error(String(e)));
+          log.error('[orch/hf] segment handler threw', toError(e));
         }
       },
-      (e: unknown) => {
+      (cause: unknown) => {
         u.closingMs = Date.now() - startedAt;
         u.closing = null;
         // Not an error the speaker should ever see: the hangover behind this
         // is the fallback, and it is about to run anyway.
-        log.warn(`[orch/hf] segment close did not answer: ${String(e)}`);
+        log.warn(`[orch/hf] segment close did not answer: ${errorMessage(cause)}`);
       },
     );
     return closed;
@@ -1577,7 +1585,7 @@ export class ConversationOrchestrator {
         const final = await closed.final;
         u.absorbSegment(final.text, final.language);
       } catch (e) {
-        log.error('[orch/hf] segment close failed', e instanceof Error ? e : new Error(String(e)));
+        log.error('[orch/hf] segment close failed', toError(e));
         store.setHfLive(null);
         if (this.hfEnabled) {
           this.setHfState('hf-idle');
@@ -2143,7 +2151,7 @@ export class ConversationOrchestrator {
       this.deps.vad?.setActive(true);
       log.info('[orch/hf] reconnected');
     } catch (e) {
-      log.error('[orch/hf] reconnect attempt failed', e instanceof Error ? e : new Error(String(e)));
+      log.error('[orch/hf] reconnect attempt failed', toError(e));
       void this.disableHandsFree();
     }
   }
@@ -2188,7 +2196,7 @@ export class ConversationOrchestrator {
       try {
         this.deps.vad.feedFrame(frame);
       } catch (e) {
-        log.error('[orch/hf] VAD feedFrame threw', e instanceof Error ? e : new Error(String(e)));
+        log.error('[orch/hf] VAD feedFrame threw', toError(e));
         // Drain rest of buffer rather than spamming the same broken inferencer.
         this.vadBuffer = new Int16Array(0);
         return;
@@ -2210,7 +2218,7 @@ export class ConversationOrchestrator {
   private handleFinal(turnId: string, finalText: string): void {
     if (turnId !== this.activeTurnId) return;
     void this.dispatchTranslation(turnId, this.repairTranscript(finalText)).catch((e) => {
-      this.failTurn(turnId, `Pipeline error: ${stringifyError(e)}`);
+      this.failTurn(turnId, `Pipeline error: ${errorMessage(e)}`);
     });
   }
 
@@ -2367,10 +2375,6 @@ export class ConversationOrchestrator {
     this.turnCompletionPromise = null;
     resolve?.();
   }
-}
-
-function stringifyError(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 /** BCP-47 primary subtag — "es-MX" → "es", "EN" → "en". */

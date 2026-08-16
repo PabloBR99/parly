@@ -30,7 +30,7 @@ interface TextProps extends RNTextProps {
   readonly style?: StyleProp<TextStyle>;
 }
 
-const toneToColor: Record<Tone, string> = {
+const toneToColor = {
   fg:      color.fg,
   fgMuted: color.fgMuted,
   fgFaint: color.fgFaint,
@@ -39,7 +39,7 @@ const toneToColor: Record<Tone, string> = {
   error:   color.error,
   warn:    color.warn,
   ok:      color.ok,
-};
+} satisfies Record<Tone, string>;
 
 // Non-breaking space — appended to italic / letter-spaced text on Android.
 // See `trailingTailFor` for the rationale.
@@ -77,10 +77,9 @@ export function Text({
   );
 }
 
-function trailingTailFor(variantStyle: Record<string, unknown>): string | null {
+function trailingTailFor(variantStyle: TextStyle): string | null {
   if (Platform.OS !== 'android') return null;
-  const ls = variantStyle.letterSpacing;
+  const letterSpacing = variantStyle.letterSpacing ?? 0;
   const isItalic = variantStyle.fontStyle === 'italic';
-  const hasPositiveLs = typeof ls === 'number' && ls > 0;
-  return isItalic || hasPositiveLs ? NBSP : null;
+  return isItalic || letterSpacing > 0 ? NBSP : null;
 }

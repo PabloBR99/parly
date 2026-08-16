@@ -6,6 +6,21 @@ import { log } from '../log/logStore';
 // Docs: https://github.com/goodatlas/react-native-audio-record
 import AudioRecord from 'react-native-audio-record';
 
+/** What `AudioRecord.on` hands back: the library returns the
+ *  NativeEventEmitter subscription it created, which is the only way to detach
+ *  the listener again. Its bundled types say `void`. */
+interface AudioDataSubscription {
+  remove(): void;
+}
+
+// SAFETY: react-native-audio-record's own declaration types `on` as returning
+// void, while its implementation returns `EventEmitter.addListener(...)`. The
+// declaration is what is wrong here, not the runtime.
+const onAudioData = AudioRecord.on as (
+  event: 'data',
+  callback: (data: string) => void,
+) => AudioDataSubscription;
+
 const SAMPLE_RATE = 16000; // Required by Whisper
 const CHANNELS = 1;        // Mono
 const BITS_PER_SAMPLE = 16;
@@ -54,7 +69,7 @@ export class AudioCaptureService {
   private recording = false;
   private initialized = false;
   private streaming = false;
-  private dataSubscription: { remove(): void } | null = null;
+  private dataSubscription: AudioDataSubscription | null = null;
 
   private init(): void {
     if (this.initialized) return;
@@ -131,7 +146,7 @@ export class AudioCaptureService {
       return;
     }
     this.init();
-    this.dataSubscription = AudioRecord.on('data', onData) as unknown as { remove(): void };
+    this.dataSubscription = onAudioData('data', onData);
     this.streaming = true;
     this.recording = true;
     AudioRecord.start();

@@ -1,20 +1,10 @@
-// react-native-audio-record — PCM recording to WAV
-declare module 'react-native-audio-record' {
-  interface AudioRecordOptions {
-    sampleRate: number;
-    channels: number;
-    bitsPerSample: number;
-    audioSource?: number;
-    wavFile: string;
-  }
-  const AudioRecord: {
-    init(options: AudioRecordOptions): void;
-    start(): void;
-    stop(): Promise<string>;
-    on(event: 'data', callback: (data: string) => void): void;
-  };
-  export default AudioRecord;
-}
+// react-native-audio-record and react-native-sherpa-onnx both ship their own
+// TypeScript declarations — import directly from the packages.
+//
+// One of those declarations is wrong: react-native-audio-record types `on` as
+// returning void, while it returns the NativeEventEmitter subscription. That is
+// corrected where it is used, in services/audio/AudioCaptureService.ts, rather
+// than here — an ambient `declare module` block in this file cannot override a
+// declaration the package itself provides.
 
-// react-native-sherpa-onnx ships its own TypeScript declarations.
-// No additional shims needed — import directly from the package.
+export {};

@@ -55,7 +55,7 @@ const en: SurfaceStrings = {
   },
 };
 
-const TABLE: Record<string, SurfaceStrings> = {
+const TABLE = new Map<string, SurfaceStrings>(Object.entries({
   en,
   es: {
     listening: 'escuchando', thinking: 'pensando', speaking: 'hablando', error: 'error',
@@ -646,14 +646,14 @@ const TABLE: Record<string, SurfaceStrings> = {
       offline: 'Hakuna muunganisho. Unganisha intaneti kisha ujaribu tena.',
     },
   },
-};
+}));
 
 /** Strings for a half whose reader speaks `langCode`. Falls back to English
  *  for languages outside the picker set ('' during first-run included). */
 export function stringsFor(langCode: string): SurfaceStrings {
   if (!langCode) return en;
   const primary = langCode.split(/[-_]/)[0].toLowerCase();
-  return TABLE[primary] ?? en;
+  return TABLE.get(primary) ?? en;
 }
 
 /** Resolve a store notice into display text in the reader's language.

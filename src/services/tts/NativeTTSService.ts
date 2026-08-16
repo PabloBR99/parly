@@ -19,6 +19,8 @@
 //   (engine stalled before producing any audio for this chunk).
 
 import Tts from 'react-native-tts';
+import { errorMessage } from '../../app/errors';
+import type { TtsEventHandler, TtsEvents } from 'react-native-tts';
 
 // react-native-tts (Android) transforms this: rate≥0.5 → androidRate = rate*4-1.
 // 0.55 → 1.2 (≈20% faster than normal), so the spoken translation finishes
@@ -44,6 +46,33 @@ interface CachedVoice {
   readonly id: string;
   readonly language: string;
 }
+
+/** Every `tts-*` event names the utterance it belongs to — see the header note
+ *  on why that id is the only way to tell whose finish event just fired. */
+interface TtsUtteranceEvent {
+  readonly utteranceId: string | number;
+}
+
+/**
+ * What `Tts.addEventListener` hands back. react-native-tts returns the
+ * NativeEventEmitter subscription it created, and detaching through that
+ * subscription is the only option left: RN dropped
+ * `NativeEventEmitter.removeListener`, so the library's own
+ * `removeEventListener` — which still calls it — throws.
+ */
+interface TtsSubscription {
+  remove?(): void;
+}
+
+type AddTtsListener = <T extends TtsEvents>(
+  type: T,
+  handler: TtsEventHandler<T>,
+) => TtsSubscription;
+
+// SAFETY: react-native-tts declares `addEventListener` as returning void while
+// its implementation returns `this.addListener(type, handler)`. The declaration
+// is what is wrong here, not the runtime; see TtsSubscription above.
+const addTtsListener = Tts.addEventListener as AddTtsListener;
 
 /**
  * Result of a speakChunk call.
@@ -96,7 +125,7 @@ class NativeTTSService {
       await this.cacheVoices();
       Tts.setDefaultRate(SPEECH_RATE);
     } catch (e: unknown) {
-      console.warn('[NativeTTSService] TTS init failed:', e instanceof Error ? e.message : String(e));
+      console.warn('[NativeTTSService] TTS init failed:', errorMessage(e));
     }
   }
 
@@ -233,8 +262,10 @@ class NativeTTSService {
     // engine. We then await its tts-finish/tts-cancel/tts-error event.
     let utteranceId: string | number;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      utteranceId = (await (Tts as any).speak(text)) as string | number;
+      // speak() resolves the id once the native engine accepts the chunk. The
+      // library's types describe it as returning the id directly; Promise.resolve
+      // adopts it under either reading and keeps a rejection a rejection.
+      utteranceId = await Promise.resolve(Tts.speak(text));
     } catch (e) {
       console.warn('[NativeTTSService] speak() rejected:', e);
       return 'skipped';
@@ -243,10 +274,10 @@ class NativeTTSService {
     return new Promise<SpeakOutcome>((resolve) => {
       let done = false;
       let playbackTimer: ReturnType<typeof setTimeout> | null = null;
-      let startSub: { remove?(): void } | null = null;
-      let finishSub: { remove?(): void } | null = null;
-      let cancelSub: { remove?(): void } | null = null;
-      let errorSub: { remove?(): void } | null = null;
+      let startSub: TtsSubscription | null = null;
+      let finishSub: TtsSubscription | null = null;
+      let cancelSub: TtsSubscription | null = null;
+      let errorSub: TtsSubscription | null = null;
 
       const finish = (outcome: SpeakOutcome) => {
         if (done) return;
@@ -269,12 +300,10 @@ class NativeTTSService {
       // preceding chunks playing first.
       const enqueueTimer = setTimeout(() => finish('skipped'), ENQUEUE_TIMEOUT_MS);
 
-      const matches = (ev: unknown): boolean => {
-        const id = (ev as { utteranceId?: unknown })?.utteranceId;
-        return id === utteranceId || id === String(utteranceId);
-      };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      startSub = Tts.addEventListener('tts-start', (ev: any) => {
+      const matches = (ev: TtsUtteranceEvent): boolean =>
+        ev.utteranceId === utteranceId || ev.utteranceId === String(utteranceId);
+
+      startSub = addTtsListener('tts-start', (ev) => {
         if (!matches(ev)) return;
         // Playback for THIS chunk just began. Arm the playback cap from
         // here so the timer measures actual audio time, not queue wait.
@@ -285,21 +314,18 @@ class NativeTTSService {
         } catch {
           /* a broken observer must never break playback */
         }
-      }) as unknown as { remove?(): void };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      finishSub = Tts.addEventListener('tts-finish', (ev: any) => {
+      });
+      finishSub = addTtsListener('tts-finish', (ev) => {
         if (matches(ev)) finish('spoken');
-      }) as unknown as { remove?(): void };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      cancelSub = Tts.addEventListener('tts-cancel', (ev: any) => {
+      });
+      cancelSub = addTtsListener('tts-cancel', (ev) => {
         if (matches(ev)) finish('spoken');
-      }) as unknown as { remove?(): void };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      errorSub = Tts.addEventListener('tts-error', (ev: any) => {
+      });
+      errorSub = addTtsListener('tts-error', (ev) => {
         // Report distinctly — resolving an engine failure as success was how
         // "no audio, no explanation" shipped.
         if (matches(ev)) finish('error');
-      }) as unknown as { remove?(): void };
+      });
     });
   }
 
@@ -318,18 +344,21 @@ function baseLanguage(lang: string): string {
   return lang.split(/[-_]/)[0].toLowerCase();
 }
 
+/** The locale each short language code stands in for, when the engine wants a
+ *  full BCP-47 tag. Built once: it was being rebuilt on every chunk. */
+const TTS_LOCALES = new Map<string, string>(Object.entries({
+  en: 'en-US', es: 'es-ES', fr: 'fr-FR', de: 'de-DE', it: 'it-IT',
+  pt: 'pt-BR', nl: 'nl-NL', pl: 'pl-PL', ru: 'ru-RU', ja: 'ja-JP',
+  ko: 'ko-KR', zh: 'zh-CN', ar: 'ar-SA', hi: 'hi-IN', tr: 'tr-TR',
+  sv: 'sv-SE', da: 'da-DK', fi: 'fi-FI', no: 'nb-NO', el: 'el-GR',
+  cs: 'cs-CZ', ro: 'ro-RO', hu: 'hu-HU', uk: 'uk-UA', th: 'th-TH',
+  vi: 'vi-VN', id: 'id-ID', ms: 'ms-MY', ca: 'ca-ES', he: 'he-IL',
+  bg: 'bg-BG', hr: 'hr-HR', sk: 'sk-SK', sl: 'sl-SI', bn: 'bn-IN',
+  ur: 'ur-PK', fa: 'fa-IR', sw: 'sw-TZ',
+}));
+
 /** BCP-47 locale fallback for short language codes. */
 function toTtsLocale(lang: string): string {
   if (lang.includes('-') || lang.includes('_')) return lang;
-  const map: Record<string, string> = {
-    en: 'en-US', es: 'es-ES', fr: 'fr-FR', de: 'de-DE', it: 'it-IT',
-    pt: 'pt-BR', nl: 'nl-NL', pl: 'pl-PL', ru: 'ru-RU', ja: 'ja-JP',
-    ko: 'ko-KR', zh: 'zh-CN', ar: 'ar-SA', hi: 'hi-IN', tr: 'tr-TR',
-    sv: 'sv-SE', da: 'da-DK', fi: 'fi-FI', no: 'nb-NO', el: 'el-GR',
-    cs: 'cs-CZ', ro: 'ro-RO', hu: 'hu-HU', uk: 'uk-UA', th: 'th-TH',
-    vi: 'vi-VN', id: 'id-ID', ms: 'ms-MY', ca: 'ca-ES', he: 'he-IL',
-    bg: 'bg-BG', hr: 'hr-HR', sk: 'sk-SK', sl: 'sl-SI', bn: 'bn-IN',
-    ur: 'ur-PK', fa: 'fa-IR', sw: 'sw-TZ',
-  };
-  return map[lang] ?? lang;
+  return TTS_LOCALES.get(lang) ?? lang;
 }

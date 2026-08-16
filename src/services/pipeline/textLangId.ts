@@ -67,7 +67,7 @@ function scriptOf(cp: number): Script | null {
 }
 
 /** Writing system(s) per language. Anything not listed writes in Latin. */
-const LANG_SCRIPTS: Record<string, readonly Script[]> = {
+const LANG_SCRIPTS = new Map<string, readonly Script[]>(Object.entries({
   ru: ['cyrillic'],
   uk: ['cyrillic'],
   el: ['greek'],
@@ -81,10 +81,10 @@ const LANG_SCRIPTS: Record<string, readonly Script[]> = {
   ja: ['han', 'kana'],
   ko: ['hangul'],
   th: ['thai'],
-};
+}));
 
 function scriptsFor(lang: string): readonly Script[] {
-  return LANG_SCRIPTS[lang] ?? ['latin'];
+  return LANG_SCRIPTS.get(lang) ?? ['latin'];
 }
 
 /**
@@ -155,7 +155,7 @@ export function writtenInScriptOf(text: string, lang: string): boolean {
 //   - Only same-script pairs ever compare lexically, so collisions across
 //     scripts (Hungarian "az" vs Persian "az") are irrelevant.
 
-const STOPWORDS: Record<string, readonly string[]> = {
+const STOPWORDS = new Map<string, readonly string[]>(Object.entries({
   en: [
     'i', 'you', 'he', 'she', 'it', 'we', 'they', 'the', 'an', 'is', 'are',
     'was', 'were', 'be', 'been', 'am', 'do', 'does', 'did', "don't", 'not',
@@ -348,12 +348,12 @@ const STOPWORDS: Record<string, readonly string[]> = {
     'جی', 'شکریہ', 'سلام', 'ہے', 'ہیں', 'تھا', 'تھی', 'اچھا', 'بہت',
     'اب', 'آج', 'اور',
   ],
-};
+}));
 
 /** Characters strongly associated with a language. Shared characters (é in
  *  es/fr/pt) appear in every set that uses them, so they cancel pairwise.
  *  Cyrillic entries are escaped — Latin i and Cyrillic і are homoglyphs. */
-const CHARS: Record<string, string> = {
+const CHARS = new Map<string, string>(Object.entries({
   es: 'ñ¿¡áéíóú',
   fr: 'àâçéèêëîïôùûüœ',
   de: 'äöüß',
@@ -378,7 +378,7 @@ const CHARS: Record<string, string> = {
   ar: 'كيةء',           // ك ي ة ء
   fa: 'پچژگکی', // پ چ ژ گ ک ی
   ur: 'ٹڈڑںےہھکی', // ٹ ڈ ڑ ں ے ہ ھ ک ی
-};
+}));
 
 // Decision thresholds. A stopword hit scores 2, a distinctive char 1.
 // 'strong' (may override the audio tag) needs a clear multi-signal win;
@@ -390,7 +390,7 @@ const WEAK_MARGIN = 2;
 
 function lexScore(lowerText: string, tokens: readonly string[], lang: string): number {
   let score = 0;
-  const stopwords = STOPWORDS[lang];
+  const stopwords = STOPWORDS.get(lang);
   if (stopwords && stopwords.length > 0) {
     const set = new Set(stopwords);
     for (const t of tokens) {
@@ -407,7 +407,7 @@ function lexScore(lowerText: string, tokens: readonly string[], lang: string): n
       if (apos > 0 && set.has(t.slice(0, apos))) score += 2;
     }
   }
-  const chars = CHARS[lang];
+  const chars = CHARS.get(lang);
   if (chars) {
     const charSet = new Set(chars);
     for (const ch of lowerText) {
@@ -445,7 +445,7 @@ const functionWordCache = new Map<string, ReadonlySet<string> | null>();
 function functionWordSet(lang: string): ReadonlySet<string> | null {
   const cached = functionWordCache.get(lang);
   if (cached !== undefined) return cached;
-  const words = STOPWORDS[lang];
+  const words = STOPWORDS.get(lang);
   const set = words ? new Set(words) : null;
   functionWordCache.set(lang, set);
   return set;

@@ -30,6 +30,10 @@
 // The global handler now waits for that write before handing off.
 
 import * as RNFS from '@dr.pogodin/react-native-fs';
+import type { ErrorUtils as ReactNativeErrorUtils } from 'react-native';
+
+import { asText, isJsonArray, isJsonObject, isNumber, isString, parseJson } from '../../app/json';
+import type { JsonValue } from '../../app/json';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -113,6 +117,46 @@ function scheduleFlush(immediate = false): void {
   }, FLUSH_THROTTLE_MS);
 }
 
+const LOG_LEVELS = new Set<string>(
+  ['debug', 'info', 'warn', 'error'] satisfies readonly LogLevel[],
+);
+
+function isLogLevel(value: JsonValue | undefined): value is LogLevel {
+  return isString(value) && LOG_LEVELS.has(value);
+}
+
+/**
+ * Read back a log file written by a previous run. The interesting case is the
+ * one this store exists for: the process died mid-write, so the tail of the
+ * file is truncated. Entries that don't decode are dropped rather than
+ * resurrected as half-objects that crash the Logs screen.
+ */
+function decodeLogEntries(raw: string): readonly LogEntry[] {
+  const parsed = parseJson(raw);
+  if (!isJsonArray(parsed)) return [];
+  const entries: LogEntry[] = [];
+  for (const value of parsed) {
+    const entry = decodeLogEntry(value);
+    if (entry !== null) entries.push(entry);
+  }
+  return entries;
+}
+
+function decodeLogEntry(value: JsonValue): LogEntry | null {
+  if (!isJsonObject(value)) return null;
+  const { id, timestamp, relativeMs, level, message } = value;
+  if (
+    !isString(id) ||
+    !isNumber(timestamp) ||
+    !isNumber(relativeMs) ||
+    !isLogLevel(level) ||
+    !isString(message)
+  ) {
+    return null;
+  }
+  return { id, timestamp, relativeMs, level, message, stack: asText(value.stack) };
+}
+
 function pushEntry(level: LogLevel, message: string, stack?: string): void {
   const now = Date.now();
   const entry: LogEntry = {
@@ -131,22 +175,40 @@ function pushEntry(level: LogLevel, message: string, stack?: string): void {
   scheduleFlush(level === 'error');
 }
 
-function formatRest(rest: readonly unknown[]): string {
-  if (rest.length === 0) return '';
-  const parts = rest.map(r => {
-    if (r === undefined) return 'undefined';
-    if (r === null) return 'null';
-    if (r instanceof Error) return `${r.name}: ${r.message}`;
-    if (typeof r === 'object') {
-      try {
-        return JSON.stringify(r);
-      } catch {
-        return Object.prototype.toString.call(r);
+/**
+ * Render whatever a caller passed to a log function. Callers hand over the
+ * values they had, which is the point of a diagnostic; naming them any more
+ * precisely than "the arguments" would be a fiction.
+ */
+function describeArgs(values: readonly unknown[]): string {
+  return values
+    .map(value => {
+      if (value === undefined) return 'undefined';
+      if (value === null) return 'null';
+      if (value instanceof Error) return `${value.name}: ${value.message}`;
+      // Objects and arrays are worth rendering as JSON; primitives read
+      // better through String(). `Object(v) === v` is true for exactly the
+      // former, and unlike `typeof` it does not call null an object.
+      if (Object(value) === value) {
+        try {
+          return JSON.stringify(value);
+        } catch {
+          return Object.prototype.toString.call(value);
+        }
       }
-    }
-    return String(r);
-  });
-  return ' ' + parts.join(' ');
+      return String(value);
+    })
+    .join(' ');
+}
+
+/** The same rendering, prefixed with a space so it can be glued to a message. */
+function formatRest(rest: readonly unknown[]): string {
+  return rest.length === 0 ? '' : ' ' + describeArgs(rest);
+}
+
+/** The first Error among the log arguments, whose stack is worth keeping. */
+function firstError(values: readonly unknown[]): Error | undefined {
+  return values.find((value): value is Error => value instanceof Error);
 }
 
 export const log = {
@@ -154,8 +216,7 @@ export const log = {
   info:  (msg: string, ...rest: unknown[]) => pushEntry('info',  msg + formatRest(rest)),
   warn:  (msg: string, ...rest: unknown[]) => pushEntry('warn',  msg + formatRest(rest)),
   error: (msg: string, ...rest: unknown[]) => {
-    const err = rest.find(r => r instanceof Error) as Error | undefined;
-    pushEntry('error', msg + formatRest(rest), err?.stack);
+    pushEntry('error', msg + formatRest(rest), firstError(rest)?.stack);
   },
 };
 
@@ -201,9 +262,9 @@ export async function initLogStore(): Promise<void> {
     const exists = await RNFS.exists(LOG_PATH);
     if (exists) {
       const raw = await RNFS.readFile(LOG_PATH, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        buffer = (parsed as LogEntry[]).slice(-MAX_ENTRIES);
+      const restored = decodeLogEntries(raw);
+      if (restored.length > 0) {
+        buffer = restored.slice(-MAX_ENTRIES);
         notify();
       }
     }
@@ -226,55 +287,37 @@ function patchConsole(): void {
   };
   console.log = (...args: unknown[]) => {
     orig.log(...args);
-    pushEntry('info', stringifyArgs(args));
+    pushEntry('info', describeArgs(args));
   };
   console.info = (...args: unknown[]) => {
     orig.info(...args);
-    pushEntry('info', stringifyArgs(args));
+    pushEntry('info', describeArgs(args));
   };
   console.warn = (...args: unknown[]) => {
     orig.warn(...args);
-    pushEntry('warn', stringifyArgs(args));
+    pushEntry('warn', describeArgs(args));
   };
   console.error = (...args: unknown[]) => {
     orig.error(...args);
-    const err = args.find(a => a instanceof Error) as Error | undefined;
-    pushEntry('error', stringifyArgs(args), err?.stack);
+    pushEntry('error', describeArgs(args), firstError(args)?.stack);
   };
-}
-
-function stringifyArgs(args: readonly unknown[]): string {
-  return args
-    .map(a => {
-      if (a === undefined) return 'undefined';
-      if (a === null) return 'null';
-      if (a instanceof Error) return `${a.name}: ${a.message}`;
-      if (typeof a === 'object') {
-        try {
-          return JSON.stringify(a);
-        } catch {
-          return Object.prototype.toString.call(a);
-        }
-      }
-      return String(a);
-    })
-    .join(' ');
 }
 
 function hookErrorUtils(): void {
   // ErrorUtils is React Native's global JS error handler. Hijack it so any
   // unhandled JS exception (including those thrown inside event handlers)
   // ends up in the buffer.
-  const g = globalThis as unknown as {
-    ErrorUtils?: {
-      setGlobalHandler?: (h: (e: Error, isFatal: boolean) => void) => void;
-      getGlobalHandler?: () => (e: Error, isFatal: boolean) => void;
-    };
-  };
-  const eu = g.ErrorUtils;
+  // SAFETY: every property here is optional, so the assertion claims nothing
+  // about what the host actually provides — the check below is what establishes
+  // it. React Native declares ErrorUtils as a global *constant*, which TypeScript
+  // does not surface on `typeof globalThis`, and under Jest there is no RN
+  // runtime to install it at all; reading it as a bare identifier would throw.
+  const host = globalThis as { ErrorUtils?: ReactNativeErrorUtils };
+  const eu = host.ErrorUtils;
   if (!eu?.setGlobalHandler) return;
   const prev = eu.getGlobalHandler?.();
-  eu.setGlobalHandler((err: Error, isFatal: boolean) => {
+  // `isFatal` is optional on RN's handler contract; absent means non-fatal.
+  eu.setGlobalHandler((err: Error, isFatal = false) => {
     pushEntry('error', `[GLOBAL fatal=${isFatal}] ${err.name}: ${err.message}`, err.stack);
     const handOff = () => {
       try {

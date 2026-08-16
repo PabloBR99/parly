@@ -61,7 +61,7 @@ export const DEFAULT_PEOPLE: readonly string[] = [
  * Given names by language, for the phonetic repair only. Roughly the forty
  * most common of each, minus every homograph (see the curation rule above).
  */
-export const COMMON_NAMES: Readonly<Record<string, readonly string[]>> = {
+export const COMMON_NAMES = {
   es: [
     'Antonio', 'Manuel', 'Francisco', 'Juan', 'David', 'Javier', 'Sergio',
     'Carlos', 'Miguel', 'Daniel', 'Adrián', 'Álvaro', 'Diego', 'Rubén',
@@ -123,14 +123,17 @@ export const COMMON_NAMES: Readonly<Record<string, readonly string[]>> = {
     'Sofia', 'Carolina', 'Matilde', 'Leonor', 'Marta', 'Teresa', 'Cláudia',
     'Filipa', 'Raquel',
   ],
-};
+} satisfies Readonly<Record<string, readonly string[]>>;
+
+/** The same table, keyed for lookup by a language code that may not be in it. */
+const COMMON_NAMES_BY_LANG = new Map<string, readonly string[]>(Object.entries(COMMON_NAMES));
 
 /** The generic names in play for a pair. Kept separate from the people in the
  *  conversation, whose spelling outranks these — see buildNameIndex. */
 export function commonNamesFor(langs: readonly string[]): readonly string[] {
   const out: string[] = [];
   for (const lang of langs) {
-    const common = COMMON_NAMES[lang];
+    const common = COMMON_NAMES_BY_LANG.get(lang);
     if (common) out.push(...common);
   }
   return out;

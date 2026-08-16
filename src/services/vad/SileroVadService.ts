@@ -35,6 +35,7 @@
 
 import { log } from '../log/logStore';
 import { Platform } from 'react-native';
+import { toError } from '../../app/errors';
 
 /** Number of PCM samples per frame. 512 @ 16 kHz = 32 ms. */
 export const VAD_FRAME_SAMPLES = 512;
@@ -132,12 +133,20 @@ export type OrtSessionFactory = (modelPath: string) => Promise<OrtSession>;
 // once and cached at module scope. The inference path runs ≈31×/s; re-running
 // require() and re-allocating the sr tensor on every frame is pure waste in the
 // hottest loop in the app. Lazy so Jest can mock the module before first use.
+/** What a tensor can be built from — the model's inputs are float samples and
+ *  the int64 sample rate, and nothing else. */
+type OrtTensorData = Float32Array | BigInt64Array | Int32Array;
+
 type OrtModule = {
-  Tensor: new (type: string, data: unknown, dims: number[]) => OrtTensor;
+  Tensor: new (type: string, data: OrtTensorData, dims: number[]) => OrtTensor;
 };
 let ortModule: OrtModule | null = null;
 function getOrt(): OrtModule {
   if (!ortModule) {
+    // SAFETY: OrtModule names the one constructor of onnxruntime-react-native
+    // this file uses, matching the package's published signature. It is
+    // required lazily rather than imported so Jest can install its mock first,
+    // and require() is untyped.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     ortModule = require('onnxruntime-react-native') as OrtModule;
   }
@@ -224,7 +233,7 @@ export class SileroVadService {
       await clearModelLoadClaim();
       log.info('[vad] Silero model loaded');
     } catch (e) {
-      const err = e instanceof Error ? e : new Error(String(e));
+      const err = toError(e);
       // A deadline means something native stopped answering — the same shape
       // as whatever has been taking the process down here, so the claim stays
       // standing and the next launch walks around it. A plain failure came
@@ -352,16 +361,19 @@ export class SileroVadService {
       let prob = 0;
       if (this.session) {
         const ort = getOrt();
-        const feeds: Record<string, OrtTensor> = {
+        const feeds = {
           input: new ort.Tensor('float32', input, [1, VAD_FRAME_SAMPLES]),
           state: new ort.Tensor('float32', new Float32Array(this.state), STATE_DIMS),
           sr: new ort.Tensor('int64', SR_DATA, [1]),
-        };
+        } satisfies Record<string, OrtTensor>;
 
         const results = await this.session.run(feeds);
 
+        // SAFETY: `output` is declared float32 in the Silero VAD model this
+        // service loads, so its buffer is a Float32Array.
         prob = (results['output'].data as Float32Array)[0];
-        // Copy stateN into a JS-owned buffer so subsequent session.run() calls
+        // SAFETY: `stateN` is the model's recurrent state, likewise float32.
+        // Copy it into a JS-owned buffer so subsequent session.run() calls
         // cannot corrupt the reference via native buffer reuse.
         const stateNRaw = results['stateN'].data as Float32Array;
         this.state = new Float32Array(stateNRaw);
@@ -369,7 +381,7 @@ export class SileroVadService {
 
       this.processProbability(prob, frameRms);
     } catch (e) {
-      log.error('[vad] frame inference error', e instanceof Error ? e : new Error(String(e)));
+      log.error('[vad] frame inference error', toError(e));
     }
   }
 
@@ -467,7 +479,7 @@ export class SileroVadService {
         else if (event === 'resume') sub.onSpeechResume?.();
         else sub.onSpeechEnd(lastSpeechAt);
       } catch (e) {
-        log.error('[vad] subscriber error', e instanceof Error ? e : new Error(String(e)));
+        log.error('[vad] subscriber error', toError(e));
       }
     }
   }
@@ -475,11 +487,17 @@ export class SileroVadService {
 
 // ── Default ONNX session factory ─────────────────────────────────────────────
 
+/** The one entry point of onnxruntime-react-native that loads a model. */
+interface OrtInferenceSessionFactory {
+  readonly InferenceSession: { create: (path: string) => Promise<OrtSession> };
+}
+
 async function defaultOrtSessionFactory(modelPath: string): Promise<OrtSession> {
+  // SAFETY: matches the package's published `InferenceSession.create`. Required
+  // lazily, as in getOrt(), so Jest can install its mock first; require() is
+  // untyped, which is the only reason an assertion appears at all.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const ort = require('onnxruntime-react-native') as {
-    InferenceSession: { create: (path: string) => Promise<OrtSession> };
-  };
+  const ort = require('onnxruntime-react-native') as OrtInferenceSessionFactory;
   return ort.InferenceSession.create(modelPath);
 }
 
@@ -496,6 +514,10 @@ interface Fs {
 }
 
 function fs(): Fs {
+  // SAFETY: `Fs` above lists only the members of @dr.pogodin/react-native-fs
+  // this file calls, each matching that package's own declarations, with the
+  // ones missing on some platforms marked optional. Required lazily so the
+  // module is not touched before Jest maps it to the fake in __mocks__.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   return require('@dr.pogodin/react-native-fs') as Fs;
 }
@@ -518,7 +540,7 @@ function withDeadline<T>(work: Promise<T>): Promise<T> {
     }, STEP_DEADLINE_MS);
     work.then(
       v => { clearTimeout(timer); resolve(v); },
-      (e: unknown) => { clearTimeout(timer); reject(e instanceof Error ? e : new Error(String(e))); },
+      (cause: unknown) => { clearTimeout(timer); reject(toError(cause)); },
     );
   });
 }

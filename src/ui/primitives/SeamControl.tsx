@@ -99,15 +99,15 @@ export const BAR_COUNT = 7;
 const TAU = Math.PI * 2;
 const CENTRE = (BAR_COUNT - 1) / 2;
 /** ms for the ripple to travel one full cycle, per state. */
-const RIPPLE_PERIOD: Record<'escuchando' | 'traduciendo', number> = {
+const RIPPLE_PERIOD = {
   escuchando: 1150,
   traduciendo: 1500,
-};
+} satisfies Record<'escuchando' | 'traduciendo', number>;
 /** Tiny per-bar phase offsets so the two sides aren't a perfect mirror —
  *  symmetry reads as machinery, a hair of drift reads as breath. */
 const DETUNE = [0, 0.16, -0.11, 0, 0.13, -0.15, 0.07];
 
-export interface WaveShape {
+export interface WaveMotion {
   /** Height held with no signal at all, as a fraction of the bar. */
   readonly floor: number;
   /** How much of the ripple shows through at rest. */
@@ -118,7 +118,7 @@ export interface WaveShape {
   readonly spread: number;
 }
 
-export const WAVE_SHAPE: Record<'escuchando' | 'traduciendo', WaveShape> = {
+export const WAVE_MOTION = {
   // Listening: a silent room still gets a slow, visible roll — clearly taller
   // and brighter than the flat 4 px of `reposo`, so "armed" reads from across
   // the table. The mic owns everything above that, which is roughly two thirds
@@ -126,16 +126,16 @@ export const WAVE_SHAPE: Record<'escuchando' | 'traduciendo', WaveShape> = {
   escuchando: { floor: 0.28, swing: 0.16, reactivity: 1, spread: 1.05 },
   // Speaking: a slow, near-synchronised swell with no mic input at all.
   traduciendo: { floor: 0.5, swing: 0.5, reactivity: 0, spread: 0.62 },
-};
+} satisfies Record<'escuchando' | 'traduciendo', WaveMotion>;
 
 // Bar geometry per resolved state.
-const BAR_HEIGHT: Record<Resolved, number> = {
+const BAR_HEIGHT = {
   reposo: 5,
   escuchando: 16,
   traduciendo: 13,
   paused: 5,
-};
-const BAR_COLOR: Record<Resolved, string> = {
+} satisfies Record<Resolved, number>;
+const BAR_COLOR = {
   // Off is quiet, but it must still be *there* — an empty pill reads as a bug,
   // not as a resting control. These two are the only thing drawn when nothing
   // is happening, so they carry the whole "this is a thing you can press".
@@ -143,7 +143,7 @@ const BAR_COLOR: Record<Resolved, string> = {
   escuchando: 'rgba(255,255,255,0.95)',
   traduciendo: 'rgba(255,255,255,0.92)',
   paused: 'rgba(255,255,255,0.34)',
-};
+} satisfies Record<Resolved, string>;
 
 // ── Bars ─────────────────────────────────────────────────────────────────────
 
@@ -392,7 +392,7 @@ export function SeamControl({
   const hintStyle = useAnimatedStyle(() => ({ opacity: 0.4 + 0.6 * invite.value }));
   const showHints = isOff && (hintTop !== null || hintBottom !== null);
 
-  const shape = wave === null ? null : WAVE_SHAPE[wave];
+  const waveMotion = wave === null ? null : WAVE_MOTION[wave];
 
   return (
     <Animated.View style={[styles.anchor, wrapStyle]} pointerEvents="box-none">
@@ -453,7 +453,7 @@ export function SeamControl({
               reposo/paused are flat and still. */}
           <View style={styles.barRow}>
             {Array.from({ length: BAR_COUNT }, (_, i) =>
-              shape === null ? (
+              waveMotion === null ? (
                 <StillBar key={i} height={BAR_HEIGHT[resolved]} color={BAR_COLOR[resolved]} />
               ) : (
                 <WaveBar
@@ -463,10 +463,10 @@ export function SeamControl({
                   color={BAR_COLOR[resolved]}
                   phase={phase}
                   level={level}
-                  floor={shape.floor}
-                  swing={shape.swing}
-                  reactivity={shape.reactivity}
-                  spread={shape.spread}
+                  floor={waveMotion.floor}
+                  swing={waveMotion.swing}
+                  reactivity={waveMotion.reactivity}
+                  spread={waveMotion.spread}
                 />
               ),
             )}

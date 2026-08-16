@@ -12,13 +12,14 @@
 
 import { Vibration } from 'react-native';
 import { log } from '../services/log/logStore';
+import { errorMessage } from '../app/errors';
 
 function safe(label: string, fn: () => void): void {
   try {
     fn();
   } catch (e) {
     // Vibration unavailable — ignore but log.
-    log.warn(`[haptics] ${label} threw`, e instanceof Error ? e.message : String(e));
+    log.warn(`[haptics] ${label} threw`, errorMessage(e));
   }
 }
 

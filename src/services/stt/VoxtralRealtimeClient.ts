@@ -44,6 +44,9 @@
 //     headers, but RN's WebSocket is built on native libraries (OkHttp on
 //     Android, NSURLSession on iOS) that honor them.
 
+import { asText, isJsonObject, isNumber, isString, parseJson } from '../../app/json';
+import { toError } from '../../app/errors';
+import type { JsonValue } from '../../app/json';
 import type { PersonId } from '../../app/types';
 import { isSendableKey } from '../auth/validateApiKey';
 import { log } from '../log/logStore';
@@ -77,6 +80,82 @@ export const TARGET_STREAMING_DELAY_MS = STREAMING_DELAY_ACCURATE_MS;
 
 export type StreamingState = 'idle' | 'connecting' | 'streaming' | 'ending' | 'closed';
 
+// ── Wire boundary ───────────────────────────────────────────────────────────
+//
+// `decodeServerEvent` is the only code in this file that looks at the wire
+// representation. Everything below it branches on a `ServerEvent` — a frame
+// whose fields are already the types the protocol promises, or that never
+// reached the handler at all.
+
+/** A server frame the client acts on, after decoding. */
+type ServerEvent =
+  /** session.created / session.updated — the socket may now carry audio. */
+  | { readonly kind: 'session-ready' }
+  /** transcription.text.delta — incremental partial text. */
+  | { readonly kind: 'text-delta'; readonly text: string }
+  /** transcription.language — the language the server detected. */
+  | { readonly kind: 'language'; readonly language: string }
+  /** transcription.segment — emitted in streaming mode, unused today. */
+  | { readonly kind: 'segment' }
+  /** transcription.done — the segment's final transcript. `text` is absent
+   *  when the server sent no text and the accumulated deltas stand instead. */
+  | { readonly kind: 'done'; readonly text: string | undefined }
+  /** error — fatal, already rendered into a human-readable message. */
+  | { readonly kind: 'error'; readonly message: string };
+
+function isTextFrame(frame: SocketFrame): frame is string {
+  return typeof frame === 'string';
+}
+
+function decodeServerEvent(data: SocketFrame): ServerEvent | null {
+  if (!isTextFrame(data)) return null;
+  const frame = parseJson(data);
+  if (!isJsonObject(frame)) return null;
+
+  switch (frame.type) {
+    case 'session.created':
+    case 'session.updated':
+      return { kind: 'session-ready' };
+    case 'transcription.text.delta':
+      return { kind: 'text-delta', text: asText(frame.text) ?? '' };
+    case 'transcription.language': {
+      const language = asText(frame.language);
+      return language === undefined ? null : { kind: 'language', language };
+    }
+    case 'transcription.segment':
+      return { kind: 'segment' };
+    case 'transcription.done':
+      return { kind: 'done', text: asText(frame.text) };
+    case 'error':
+      return { kind: 'error', message: decodeErrorMessage(frame.error) };
+    default:
+      return null;
+  }
+}
+
+/**
+ * The whole `session.update` payload Voxtral accepts. Its schema is closed:
+ * any extra field comes back as a Pydantic `extra_forbidden` error, so this
+ * type is the protocol, not a convenience.
+ */
+interface SessionUpdate {
+  readonly audio_format: {
+    readonly encoding: 'pcm_s16le';
+    readonly sample_rate: number;
+  };
+  readonly target_streaming_delay_ms: number;
+}
+
+function decodeErrorMessage(error: JsonValue | undefined): string {
+  if (isJsonObject(error)) {
+    const message = asText(error.message);
+    if (message !== undefined) return message;
+    const code = error.code;
+    if (isString(code) || isNumber(code)) return `Voxtral error (code=${code})`;
+  }
+  return 'Voxtral error (code=unknown)';
+}
+
 /** Both answers to "end this segment" — see closeSegment(). */
 export interface SegmentClose {
   /** What the server has already streamed for this segment, available now. */
@@ -108,6 +187,26 @@ export interface StreamingStartOptions {
 }
 
 /**
+ * What arrives on a WebSocket message. Voxtral speaks JSON text frames in both
+ * directions; a binary frame is not part of the protocol and gets dropped.
+ */
+export type SocketFrame = string | ArrayBuffer;
+
+/**
+ * What React Native hands a WebSocket handler. Not a DOM event: RN builds these
+ * as plain objects on top of OkHttp and NSURLSession, and which fields are
+ * present varies by platform and RN version — hence every field optional.
+ * `describeEvent` and `describeClose` report whatever actually arrived.
+ */
+export interface SocketEvent {
+  readonly message?: JsonValue;
+  readonly code?: JsonValue;
+  readonly reason?: JsonValue;
+  readonly wasClean?: JsonValue;
+  readonly error?: JsonValue;
+}
+
+/**
  * WebSocket-like surface we depend on. RN's global WebSocket and ws's WebSocket
  * are compatible with this shape — the third-arg options object (with headers)
  * is a constructor concern, not a runtime one, so it's not in this interface.
@@ -116,10 +215,10 @@ export interface WebSocketLike {
   readonly readyState: number;
   send(data: string): void;
   close(code?: number, reason?: string): void;
-  onopen: ((ev: unknown) => void) | null;
-  onmessage: ((ev: { data: unknown }) => void) | null;
-  onerror: ((ev: unknown) => void) | null;
-  onclose: ((ev: unknown) => void) | null;
+  onopen: ((ev: SocketEvent) => void) | null;
+  onmessage: ((ev: { data: SocketFrame }) => void) | null;
+  onerror: ((ev: SocketEvent) => void) | null;
+  onclose: ((ev: SocketEvent) => void) | null;
 }
 
 /** Factory so tests can inject a fake WebSocket. Defaults to RN global WebSocket. */
@@ -128,12 +227,22 @@ export type WebSocketFactory = (
   headers: Record<string, string>,
 ) => WebSocketLike;
 
+/** RN's WebSocket constructor, which takes a third options argument that the
+ *  DOM lib's does not. See the note at the top of this file on why headers work
+ *  here and would not in a browser. */
+type ReactNativeWebSocketConstructor = new (
+  url: string,
+  protocols: string | string[] | undefined,
+  options: { readonly headers: Record<string, string> },
+) => WebSocketLike;
+
 const defaultWsFactory: WebSocketFactory = (url, headers) => {
-  // RN's WebSocket accepts (url, protocols, options). Pass headers via options.
-  // The `any` cast is necessary because TypeScript's lib.dom WebSocket doesn't
-  // reflect RN's extended signature.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return new (WebSocket as any)(url, undefined, { headers });
+  // SAFETY: RN's WebSocket is built on OkHttp/NSURLSession and accepts
+  // (url, protocols, options); TypeScript's lib.dom declaration predates that
+  // third argument and cannot express it. The runtime object is RN's, not the
+  // DOM's, so the extended signature is the one that actually applies.
+  const ReactNativeWebSocket = WebSocket as ReactNativeWebSocketConstructor;
+  return new ReactNativeWebSocket(url, undefined, { headers });
 };
 
 export class VoxtralRealtimeClient {
@@ -221,7 +330,7 @@ export class VoxtralRealtimeClient {
     try {
       ws = this.wsFactory(url, headers);
     } catch (e) {
-      log.error('[voxtral] WebSocket constructor threw', e instanceof Error ? e : new Error(String(e)));
+      log.error('[voxtral] WebSocket constructor threw', toError(e));
       this.state = 'closed';
       throw new Error(`Failed to construct WebSocket: ${String(e)}`);
     }
@@ -260,14 +369,14 @@ export class VoxtralRealtimeClient {
         // The delay is sent in BOTH modes now. Push-to-talk used to leave it to
         // the server default, which meant the two modes transcribed under
         // different conditions and neither was written down anywhere.
-        const session: Record<string, unknown> = {
+        const session = {
           audio_format: { encoding: 'pcm_s16le', sample_rate: SAMPLE_RATE },
           target_streaming_delay_ms: this.targetStreamingDelayMs,
-        };
+        } satisfies SessionUpdate;
         try {
           ws.send(JSON.stringify({ type: 'session.update', session }));
         } catch (e) {
-          log.error('[voxtral] session.update send failed', e instanceof Error ? e : new Error(String(e)));
+          log.error('[voxtral] session.update send failed', toError(e));
           settle(() => {
             this.cleanup();
             reject(new Error(`Failed to send session.update: ${String(e)}`));
@@ -277,10 +386,10 @@ export class VoxtralRealtimeClient {
 
       ws.onmessage = (ev) => {
         if (gen !== this.generation) return;
-        const parsed = this.parseEvent(ev.data);
-        if (!parsed) return;
+        const event = decodeServerEvent(ev.data);
+        if (!event) return;
 
-        if (parsed.type === 'session.created' || parsed.type === 'session.updated') {
+        if (event.kind === 'session-ready') {
           if (!this.sessionReady) {
             this.sessionReady = true;
             this.state = 'streaming';
@@ -307,30 +416,26 @@ export class VoxtralRealtimeClient {
           return;
         }
 
-        if (parsed.type === 'transcription.text.delta') {
-          const delta = typeof parsed.text === 'string' ? parsed.text : '';
-          if (delta) {
-            this.accumulatedText += delta;
+        if (event.kind === 'text-delta') {
+          if (event.text) {
+            this.accumulatedText += event.text;
             this.callbacks?.onPartial(this.accumulatedText);
           }
           return;
         }
 
-        if (parsed.type === 'transcription.language') {
-          const lang = typeof parsed.language === 'string' ? parsed.language : undefined;
-          if (lang) this.detectedLanguage = lang;
+        if (event.kind === 'language') {
+          this.detectedLanguage = event.language;
           return;
         }
 
-        if (parsed.type === 'transcription.segment') {
+        if (event.kind === 'segment') {
           // Emitted by Voxtral in streaming mode. Not used today.
           return;
         }
 
-        if (parsed.type === 'transcription.done') {
-          const finalText = typeof parsed.text === 'string'
-            ? parsed.text
-            : this.accumulatedText;
+        if (event.kind === 'done') {
+          const finalText = event.text ?? this.accumulatedText;
           this.callbacks?.onFinal(finalText, this.detectedLanguage);
 
           if (this.sessionMode) {
@@ -353,12 +458,8 @@ export class VoxtralRealtimeClient {
           return;
         }
 
-        if (parsed.type === 'error') {
-          const errObj = parsed.error as { message?: unknown; code?: unknown } | undefined;
-          const msg = typeof errObj?.message === 'string'
-            ? errObj.message
-            : `Voxtral error (code=${String(errObj?.code ?? 'unknown')})`;
-          const err = new Error(msg);
+        if (event.kind === 'error') {
+          const err = new Error(event.message);
           if (!this.sessionReady) {
             settle(() => { this.cleanup(); reject(err); });
           } else {
@@ -601,17 +702,6 @@ export class VoxtralRealtimeClient {
     }
   }
 
-  private parseEvent(data: unknown): Record<string, unknown> | null {
-    if (typeof data !== 'string') return null;
-    try {
-      const parsed = JSON.parse(data);
-      if (typeof parsed === 'object' && parsed !== null && typeof (parsed as { type?: unknown }).type === 'string') {
-        return parsed as Record<string, unknown>;
-      }
-    } catch { /* ignore — unparseable frames are dropped */ }
-    return null;
-  }
-
   private clearClosePending(): void {
     if (this.closeTimer) {
       clearTimeout(this.closeTimer);
@@ -661,20 +751,19 @@ export class VoxtralRealtimeClient {
 // extract whatever useful fields exist and fall back to JSON.stringify so the
 // log buffer always shows something meaningful.
 
-function describeEvent(ev: unknown): string {
-  if (ev == null) return '(null event)';
-  if (typeof ev !== 'object') return String(ev);
-  const o = ev as Record<string, unknown>;
+function describeEvent(ev: SocketEvent): string {
   const parts: string[] = [];
-  if (typeof o.message === 'string')                            parts.push(`message="${o.message}"`);
-  if (typeof o.code === 'number' || typeof o.code === 'string') parts.push(`code=${o.code}`);
-  if (typeof o.reason === 'string')                             parts.push(`reason="${o.reason}"`);
-  const errInner = o.error;
-  if (errInner && typeof errInner === 'object') {
-    const ei = errInner as Record<string, unknown>;
-    if (typeof ei.message === 'string') parts.push(`error.message="${ei.message}"`);
-  } else if (typeof errInner === 'string') {
-    parts.push(`error="${errInner}"`);
+  const message = asText(ev.message);
+  if (message !== undefined) parts.push(`message="${message}"`);
+  if (isString(ev.code) || isNumber(ev.code)) parts.push(`code=${ev.code}`);
+  const reason = asText(ev.reason);
+  if (reason !== undefined) parts.push(`reason="${reason}"`);
+  if (isJsonObject(ev.error)) {
+    const inner = asText(ev.error.message);
+    if (inner !== undefined) parts.push(`error.message="${inner}"`);
+  } else {
+    const error = asText(ev.error);
+    if (error !== undefined) parts.push(`error="${error}"`);
   }
   if (parts.length === 0) {
     try {
@@ -686,12 +775,9 @@ function describeEvent(ev: unknown): string {
   return parts.join(' ');
 }
 
-function describeClose(ev: unknown): string {
-  if (ev == null) return '(null close)';
-  if (typeof ev !== 'object') return `value=${String(ev)}`;
-  const o = ev as { code?: unknown; reason?: unknown; wasClean?: unknown };
-  const code   = o.code   ?? 'unknown';
-  const reason = typeof o.reason === 'string' ? o.reason : '';
-  const clean  = o.wasClean === undefined ? '' : ` wasClean=${o.wasClean}`;
+function describeClose(ev: SocketEvent): string {
+  const code = isString(ev.code) || isNumber(ev.code) ? ev.code : 'unknown';
+  const reason = asText(ev.reason) ?? '';
+  const clean = ev.wasClean === undefined ? '' : ` wasClean=${String(ev.wasClean)}`;
   return `code=${code} reason="${reason}"${clean}`;
 }

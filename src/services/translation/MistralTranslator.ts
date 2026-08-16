@@ -36,6 +36,8 @@
 //   only delivers those incrementally when `onreadystatechange` or `onprogress`
 //   is set before `send()` (XMLHttpRequest.js), which is why it is wired first.
 
+import { isAbortError } from '../../app/errors';
+import { isJsonArray, isJsonObject, isString, parseJson } from '../../app/json';
 import { getLanguage } from '../../app/languages';
 import { isSendableKey } from '../auth/validateApiKey';
 import { log } from '../log/logStore';
@@ -224,14 +226,15 @@ export function parseSseEvent(event: string): string | null {
     payload += trimmed.slice(5).trimStart();
   }
   if (payload === '' || payload === '[DONE]') return null;
-  try {
-    const parsed = JSON.parse(payload) as {
-      choices?: ReadonlyArray<{ delta?: { content?: string } }>;
-    };
-    return parsed.choices?.[0]?.delta?.content ?? '';
-  } catch {
-    return null;
-  }
+  const frame = parseJson(payload);
+  if (!isJsonObject(frame)) return null;
+  const choices = frame.choices;
+  if (!isJsonArray(choices)) return '';
+  const first = choices[0];
+  if (!isJsonObject(first)) return '';
+  const delta = first.delta;
+  if (!isJsonObject(delta)) return '';
+  return isString(delta.content) ? delta.content : '';
 }
 
 /** Emit completed sentences from `buffer`, return the unflushed remainder. */
@@ -280,7 +283,10 @@ let fetchStreams: boolean | null = null;
 function fetchCanStream(): boolean {
   if (fetchStreams === null) {
     try {
-      fetchStreams = typeof Response === 'function' && 'body' in Response.prototype;
+      // Feature-detect rather than assume: some RN runtimes ship a fetch
+      // whose Response has no readable body.
+      const responseCtor = globalThis.Response;
+      fetchStreams = responseCtor !== undefined && 'body' in responseCtor.prototype;
     } catch {
       fetchStreams = false;
     }
@@ -334,7 +340,7 @@ const defaultFetcher: StreamingFetcher = {
         log.warn('[translate] fetch returned a non-streaming body — switching to XHR');
         response.body?.cancel?.().catch(() => {});
       } catch (e) {
-        if ((e as { name?: string })?.name === 'AbortError') throw e;
+        if (isAbortError(e)) throw e;
         if (receivedAny) throw e;
         // Zero bytes delivered — the request failed before the response
         // started. The XHR attempt below is duplicate-free.
@@ -502,7 +508,7 @@ export class MistralTranslator {
         onOpen: args.onRequestOpen,
       });
     } catch (e) {
-      if ((e as { name?: string })?.name === 'AbortError') {
+      if (isAbortError(e)) {
         args.onError(new Error('Translation cancelled'));
         return;
       }
