@@ -1,57 +1,25 @@
-// ConversationOrchestrator — owns the per-turn state machine for Parly v4.
+// ConversationOrchestrator — the per-turn state machine.
 //
-// One turn ≡ one half-duplex push-to-talk:
+// Push-to-talk: hold → capture → Voxtral streams partials → release → final →
+// Mistral SSE → TTS per sentence → turn done.
 //
-//   user holds mic ─┬─► capture starts ──► Voxtral WS streams audio ──► partials update UI
-//                   │
-//   user releases ──┴─► capture stops ──► Voxtral final ──► Mistral translation SSE
-//                                                                  │
-//                                                                  ▼ (per sentence)
-//                                                     react-native-tts speakChunk (queues)
-//                                                                  │
-//                                                                  ▼ (Promise.all)
-//                                                              turn marked done
+// Hands-free: one Voxtral session stays open across utterances, Silero VAD
+// marks their edges, and each transcript is routed by its own language.
+//   hf-idle → hf-capturing → hf-flushing → hf-routing → hf-speaking
+//           ↑                                        └──► hf-cooldown ──┘
+//   (lang ∉ pair → discarded, straight back to hf-idle)
 //
-// Hands-free (HF) mode:
-//   A single Voxtral WS (sessionMode) stays open across multiple utterances.
-//   Silero VAD fires speech_start / speech_end; the transcript is routed by its
-//   own language (audio tag as fallback — see routeUtterance) and dispatched
-//   through the existing Mistral → TTS pipeline.
+// Three questions, each asked in exactly one place: is the speaker finished
+// (`evaluateEndpoint`), what did they say (`takeTurn`), which way does it
+// travel (`routeUtterance`). The shortcut past the server's final refuses
+// unless the transcript alone routes the turn — skipping the final also skips
+// its audio language tag, and a turn sent to the wrong half beats a slow one.
 //
-//   Everything about the person currently speaking lives on ONE object — see
-//   `Utterance`. That is deliberate, and it is the answer to how this file got
-//   to 2000 lines: turn-taking is a race between a local detector, a remote
-//   transcriber and a remote translator, and when the state of that race is
-//   spread across a dozen fields on a long-lived object, every new mechanism
-//   has to remember which of them to reset, cancel or ignore. One of them
-//   always gets forgotten. Async work here closes over the utterance it belongs
-//   to and checks whether that utterance is still the one being spoken; a late
-//   answer finds an object nothing points at and stops. There is no sequence
-//   number, and no reset list.
-//
-//   There are three questions, each asked in exactly one place:
-//     · Is the speaker finished?      `evaluateEndpoint` — armed by the VAD's
-//       pause hint, re-armed by every delta, and answered when the transcript
-//       stops growing, which is the earliest moment we know what was said.
-//     · What did they say?            `takeTurn` — the transcript in hand if it
-//       has settled and routes unambiguously, otherwise the server's own, which
-//       is worth waiting for precisely when there is nothing else to use.
-//     · Which way does it travel?     `routeUtterance`.
-//
-//   The shortcut refuses unless the transcript alone routes the turn: skipping
-//   the server's answer also skips its audio language tag, and a turn sent to
-//   the wrong half is far worse than a slow one.
-//
-//   HF state machine:
-//     hf-idle → hf-capturing → hf-flushing → hf-routing → hf-speaking
-//             ↑                                          |           |
-//             └──────────────── hf-cooldown (250 ms) ───┘           │
-//                               ← lang ∉ pair (discard) ────────────┘
-//
-// Why dependency-injection?
-//   The orchestrator owns the half-duplex lock and is the most error-prone
-//   component, so it MUST be unit-testable without WebSockets, fetch, or
-//   Android TTS. Every collaborator is an interface.
+// Everything about the current speaker lives on one `Utterance`, so async work
+// closes over the utterance it belongs to: a late answer finds an object
+// nothing points at and stops. No sequence numbers, no fields to remember to
+// reset. Every collaborator is an interface — this is the most error-prone
+// component and must be testable without WebSockets, fetch or Android TTS.
 
 import { useConversationStore } from '../../store/conversationStore';
 import type { HfActivity } from '../../store/conversationStore';
@@ -195,6 +163,18 @@ export type HfState =
  *  'fallback' — no evidence at all, speaker alternation. */
 export type HfRoutingKind = 'matched' | 'text' | 'text-override' | 'fallback';
 
+/** Which half is speaking, and the direction their words travel. */
+interface Direction {
+  speakerId: PersonId;
+  sourceLang: string;
+  targetLang: string;
+}
+
+/** A direction, plus what decided it. */
+interface Routing extends Direction {
+  kind: HfRoutingKind;
+}
+
 export interface BeginTurnArgs {
   readonly speakerId: PersonId;
   readonly sourceLang: string;
@@ -245,18 +225,10 @@ const HF_PARTIAL_WRITE_THROTTLE_MS = 150;
  *  new sentence refers to; not so many that prefill grows for nothing. */
 const HISTORY_TURNS_AS_CONTEXT = 3;
 
-/**
- * How long the streaming transcript must go without growing before we treat
- * it as the whole utterance and stop waiting for the server's final.
- *
- * Voxtral buffers TARGET_STREAMING_DELAY_MS of audio before emitting; once
- * the room is silent, the deltas drain and stop. Silence in the transcript
- * for longer than one delivery gap therefore means the server has caught up
- * with the audio and there is nothing left to say — the final would repeat
- * the same sentence with tidier punctuation, several hundred milliseconds
- * later. This is the fast path's whole justification, so keep it comfortably
- * above the jitter between two consecutive deltas.
- */
+/** How long the transcript must go without growing before we treat it as the
+ *  whole utterance. Longer than one delta gap means the server has caught up
+ *  with the audio, so its final would only re-punctuate the same sentence a
+ *  few hundred ms later. Keep comfortably above inter-delta jitter. */
 const PARTIAL_SETTLED_MS = 140;
 /** Below this, a "settled" transcript is more plausibly a cough or a stray
  *  syllable than a finished sentence. Let the server decide those. */
@@ -275,35 +247,24 @@ type HfEndpoint = 'silence' | 'punctuation';
  *  that silently never fires looks exactly like a shortcut that does. */
 type FastPathBlock = 'none' | 'no-transcript' | 'still-arriving' | 'routing-unclear';
 
-/**
- * Cap on translation requests started speculatively per utterance. Each one
- * that misses is a wasted call against the user's own API key and rate limit,
- * so the budget is deliberately tiny: re-speculate once if the speaker adds
- * more after a long pause, then stop guessing and wait for the real ending.
- */
+/** Speculative translations per utterance. Each miss is a wasted call against
+ *  the user's own key, so: guess again once if the speaker resumes, then wait
+ *  for the real ending. */
 const MAX_SPECULATIONS_PER_UTTERANCE = 2;
 
-/**
- * Whether the turn was taken on a transcript a pause-hint close had already
- * delivered ('used'), one that was sent but had not answered in time
- * ('empty'), or no early close at all ('none' — no pause hint, or the
- * utterance ended on the first one).
- */
+/** Whether the turn used a transcript an early close had already delivered
+ *  ('used'), one sent but unanswered in time ('empty'), or no early close. */
 type EarlyCloseOutcome = 'used' | 'empty' | 'none';
 
 /**
- * How many consecutive utterances must arrive with NO audio language tag
- * before the shortcuts stop insisting on strong text evidence.
+ * Untagged utterances before the shortcuts stop demanding strong text evidence.
  *
- * The strict gate exists to protect a second opinion: skipping the server's
- * final also skips its `transcription.language`, so a weak text vote might be
- * acting on evidence the tag would have overruled. Measured on device, Voxtral
- * returns no tag at all (`routedLanguage: null`, every turn) — at which point
- * the gate is guarding a fallback that never arrives, and refusing every
- * shortcut for nothing. Once the server has been silent about the language
- * this many times, a weak vote is accepted: it is exactly what routing falls
- * back to anyway when the tag is absent. A tag arriving resets the count and
- * strictness returns immediately.
+ * Strictness exists to protect a second opinion: skipping the final also skips
+ * its `transcription.language`, which might have overruled a weak text vote.
+ * But measured on device Voxtral often sends no tag at all, and then the gate
+ * guards a fallback that never arrives and refuses every shortcut for nothing.
+ * After this many silent turns a weak vote is accepted — it is what routing
+ * falls back to anyway. One tag arriving restores strictness immediately.
  */
 const UNTAGGED_UTTERANCES_TO_TRUST_TEXT = 2;
 
@@ -317,22 +278,16 @@ interface TranslationSink {
 }
 
 /**
- * One translation request, from the moment it is sent to the moment its last
- * sentence is spoken.
+ * One translation request, from sent to last sentence spoken.
  *
- * There is exactly one of these per turn, whether it was started early on a
- * guess or started by the turn itself. That is the point: the request to
- * Mistral is by far the longest link in the chain — longer than the silence
- * the endpointer is still waiting out when a guess starts — so it is worth
- * sending before the turn is certain, but a codebase with a speculative path
- * AND a normal path has two of everything and tests only the one that is easy
- * to reach. Here the "normal" path is a run whose buffer happens to be empty
- * when the turn attaches to it.
+ * Exactly one per turn, whether it was started early on a guess or by the turn
+ * itself — a speculative path beside a normal one would be two of everything
+ * with only the easy one tested. Here "normal" is just a run whose buffer is
+ * empty when the turn attaches.
  *
- * Nothing reaches the screen or the speaker until a turn attaches, and a turn
- * only attaches to a run whose source text and direction match what the
- * utterance actually turned out to be. A miss costs one request; a hit costs
- * nothing and started several hundred milliseconds early.
+ * Nothing reaches screen or speaker until a turn attaches, and only to a run
+ * whose text and direction match what the utterance turned out to be. A miss
+ * costs one request; a hit starts several hundred ms early.
  */
 class TranslationRun {
   readonly abort = new AbortController();
@@ -407,17 +362,11 @@ class TranslationRun {
   }
 
   /**
-   * The model handed back its own input.
-   *
-   * A translation that equals its source is not a translation: it is what
-   * comes out when a language is translated into itself, which is what asking
-   * in the wrong direction looks like from the outside — the speaker hears the
-   * app parrot them. Compared with punctuation, case and accents folded away,
-   * because a parrot that capitalises is still a parrot.
-   *
-   * Some words genuinely survive translation ("Madrid", "hotel", "OK"), so
-   * this is evidence that the direction was wrong, not proof — the caller
-   * checks the other direction before believing it.
+   * The model handed back its own input — what asking in the wrong direction
+   * looks like from outside: the app parrots the speaker. Folded comparison,
+   * because a parrot that capitalises is still a parrot. Some words genuinely
+   * survive translation ("Madrid", "OK"), so this is evidence and not proof —
+   * the caller tries the other direction before believing it.
    */
   returnedItsInput(sourceText: string): boolean {
     return this.fullText.trim().length > 0 && sameUtterance(this.fullText, sourceText);
@@ -459,16 +408,11 @@ class TranslationRun {
 /**
  * One person speaking, from the VAD's speech_start until the turn is taken.
  *
- * Everything that used to be an `hf*` field on the orchestrator lives here, and
- * that is the whole design. Async work — a segment close, a settle timer, a
- * translation sent on a guess — closes over the utterance it belongs to, so an
- * answer arriving late finds an object that has `ended` and stops. There is no
- * sequence number to compare it against, and no list of fields to remember to
- * reset: the next utterance is a new object and this one is inert.
- *
- * It also makes "the speaker was not finished" expressible. That used to be
- * three unrelated fields cleared by hand in one method, which is how the
- * pause-hint close came to be armed once per utterance and never again.
+ * Async work — a segment close, a settle timer, a speculative translation —
+ * closes over the utterance it belongs to, so a late answer finds an object
+ * that has `ended` and stops. The next utterance is a new object and this one
+ * is inert: no sequence numbers, no list of fields to reset. It also makes
+ * "the speaker was not finished" expressible in one place (`resumeSpeaking`).
  */
 class Utterance {
   readonly startedAt = Date.now();
@@ -508,17 +452,11 @@ class Utterance {
   pauseHintAt: number | null = null;
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
 
-  /**
-   * Names are put right on the way IN, not on the way out.
-   *
-   * The transcript is read by four different things — the live caption, the
-   * router, the speculative translation and the turn itself — and a repair
-   * applied at only some of them would make them disagree about what was said.
-   * The speculation is the sharp edge: a translation sent on "Sisi" cannot be
-   * adopted by a turn that decided the words were "Cycy", so the head start it
-   * bought would be thrown away on exactly the utterances the glossary exists
-   * for.
-   */
+  /** Names are put right on the way IN. Four things read this transcript — the
+   *  caption, the router, the speculation and the turn — and repairing at only
+   *  some of them would make them disagree about what was said, so a
+   *  speculation sent on "Sisi" could never be adopted by a turn that settled
+   *  on "Cycy". */
   constructor(private readonly repair: (text: string) => string = (t) => t) {}
 
   /** Everything said so far: closed segments plus whatever has streamed since. */
@@ -597,14 +535,9 @@ class Utterance {
     }
   }
 
-  /**
-   * The speaker was not finished — undo what the pause hint set in motion.
-   *
-   * A segment already closed stays closed: its words are in `head` and the rest
-   * of the sentence streams into the next one. The close still in flight also
-   * stays, because it will answer for those words; once it does, `closing`
-   * clears and the next pause opens a fresh one.
-   */
+  /** The speaker was not finished — undo what the pause hint set in motion. A
+   *  segment already closed stays closed (its words are in `head`), and a close
+   *  still in flight stays too, because it will answer for those words. */
   resumeSpeaking(): void {
     this.forgetPauseHint();
     this.cancelRun();
@@ -617,13 +550,10 @@ class Utterance {
   }
 }
 
-/**
- * Two transcripts are the same utterance if they carry the same words in the
- * same order. Punctuation, capitalisation and accents are exactly what the
- * server's final tends to tidy up, and none of them change the translation —
- * refusing to adopt over a comma would throw away the whole point. An added
- * or dropped word is a different sentence, and does not match.
- */
+/** Same words in the same order. Punctuation, case and accents are what the
+ *  server's final tidies up and none of them change the translation, so
+ *  refusing to adopt over a comma would throw away the point. An added or
+ *  dropped word is a different sentence. */
 function sameUtterance(a: string, b: string): boolean {
   return foldForCompare(a) === foldForCompare(b);
 }
@@ -769,6 +699,17 @@ export class ConversationOrchestrator {
     this.config = config;
   }
 
+  /** Voxtral session options. `sessionMode` is what separates one persistent
+   *  hands-free session from a single push-to-talk turn. */
+  private sttOptions(cfg: OrchestratorConfig, sessionMode?: boolean) {
+    return {
+      apiKey: cfg.apiKey,
+      model: cfg.sttModel ?? DEFAULT_STT_MODEL,
+      sessionMode,
+      targetStreamingDelayMs: cfg.sttStreamingDelayMs,
+    };
+  }
+
   // ── Transcript repair and interpreter context ─────────────────────────────
 
   /** The languages in play, as primary subtags. Hands-free knows its pair;
@@ -862,23 +803,20 @@ export class ConversationOrchestrator {
     // A fresh press is the reader acting on the last notice — clear it.
     store.setNotice(args.speakerId, null);
 
-    // Mic permission, lazily and in context (not fire-and-forget at launch).
-    // If the system dialog appears, this press has physically ended under it,
-    // so we never start recording on the same press — grant means the NEXT
-    // press works; denial gets a speaker-side notice with the fix.
+    // If the system dialog appears, this press has physically ended underneath
+    // it, so we never start recording on the same press: a grant means the NEXT
+    // press works, a denial gets a speaker-side notice with the fix.
     this.beginning = true;
     try {
       let granted: boolean;
       try {
         granted = await this.deps.audioCapture.hasPermission();
       } catch {
-        granted = true; // permission APIs unavailable — let the platform decide
+        granted = true; // permission API unavailable — let the platform decide
       }
       if (!granted) {
-        const nowGranted = await this.deps.audioCapture.requestPermission().catch(() => false);
-        if (!nowGranted) {
-          store.setNotice(args.speakerId, { key: 'micPermission', kind: 'info' });
-        }
+        const now = await this.deps.audioCapture.requestPermission().catch(() => false);
+        if (!now) store.setNotice(args.speakerId, { key: 'micPermission', kind: 'info' });
         return;
       }
     } finally {
@@ -922,18 +860,11 @@ export class ConversationOrchestrator {
     }
 
     try {
-      await this.deps.voxtral.start(
-        {
-          apiKey: cfg.apiKey,
-          model: cfg.sttModel ?? DEFAULT_STT_MODEL,
-          targetStreamingDelayMs: cfg.sttStreamingDelayMs,
-        },
-        {
-          onPartial: (text) => this.handlePartial(id, text),
-          onFinal: (text) => this.handleFinal(id, text),
-          onError: (err) => this.failTurn(id, err.message),
-        },
-      );
+      await this.deps.voxtral.start(this.sttOptions(cfg), {
+        onPartial: (text) => this.handlePartial(id, text),
+        onFinal: (text) => this.handleFinal(id, text),
+        onError: (err) => this.failTurn(id, err.message),
+      });
     } catch (e) {
       // A quick release no longer aborts the handshake (the client flushes
       // the queued audio when the session opens), so a rejection here is a
@@ -998,33 +929,25 @@ export class ConversationOrchestrator {
 
   // ── Hands-Free API ────────────────────────────────────────────────────────
 
-  /**
-   * Activate hands-free mode:
-   *   1. Initialize VAD (loads the ONNX model on first call).
-   *   2. Start audio capture with dual-path routing (→ Voxtral, → VAD).
-   *   3. Open a persistent Voxtral session (sessionMode=true).
-   *   4. Subscribe to VAD events to drive the HF state machine.
-   */
+  /** Activate hands-free: load the VAD, start dual-path capture (→ Voxtral,
+   *  → VAD), open a persistent Voxtral session, subscribe to VAD events. */
   async enableHandsFree(pairA: string, pairB: string): Promise<void> {
     if (this.hfEnabled) return;
     if (this.state !== 'idle') throw new Error('Cannot enable hands-free during an active PTT turn');
     if (!this.config?.apiKey) throw new Error('Orchestrator not configured (missing API key)');
     if (!this.deps.vad) throw new Error('No VAD service configured');
 
-    // Mic permission, checked BEFORE anything flips to hands-free.
-    // AudioRecord.start() without RECORD_AUDIO dies in native code — no JS
-    // try/catch sees it, the process just ends. Unlike a PTT press (which
-    // physically ends under the system dialog), the toggle tap survives the
-    // dialog, so a grant can continue straight into hands-free.
+    // Checked BEFORE anything flips to hands-free: AudioRecord.start() without
+    // RECORD_AUDIO dies in native code, where no JS try/catch sees it — the
+    // process just ends. Unlike a PTT press, the toggle tap survives the system
+    // dialog, so a grant continues straight into hands-free.
     let granted: boolean;
     try {
       granted = await this.deps.audioCapture.hasPermission();
     } catch {
-      granted = true; // permission APIs unavailable — let the platform decide
+      granted = true; // permission API unavailable — let the platform decide
     }
-    if (!granted) {
-      granted = await this.deps.audioCapture.requestPermission().catch(() => false);
-    }
+    if (!granted) granted = await this.deps.audioCapture.requestPermission().catch(() => false);
     if (!granted) {
       // The toggle isn't owned by either speaker — both readers see why
       // hands-free didn't start, each in their own language.
@@ -1062,39 +985,24 @@ export class ConversationOrchestrator {
     const store = this.store.getState();
     store.setMode('hf');
 
-    // 1. Init VAD (no-op on subsequent calls).
-    //
-    // Everything from here to "enabled — listening" is 60 ms of JS on a good
-    // day, and each step below hands off to native code that can end the
-    // process without raising anything catchable. A device once died in this
-    // stretch leaving `enabling` as the last line in the log, which said only
-    // that we got past the permission gate. The breadcrumbs are here so the
-    // next one names the step.
+    // Each step from here to "enabled — listening" hands off to native code
+    // that can end the process without raising anything catchable, and a device
+    // once died in this stretch. The log lines exist so the next one names the
+    // step it died on.
     await this.deps.vad.initialize();
     log.info('[orch/hf] vad ready — starting capture');
 
-    // 2. Start audio capture with dual routing. Stop first to guarantee a clean
-    //    state — a failed PTT turn may have left streaming=true (failTurn path).
+    // Stop first: a failed PTT turn may have left streaming=true (failTurn).
     try { await this.deps.audioCapture.stopStreaming(); } catch { /* noop */ }
     this.agc.reset();
     this.deps.audioCapture.startStreaming(this.hfOnAudio);
 
-    // 3. Open persistent Voxtral session.
-    await this.deps.voxtral.start(
-      {
-        apiKey: cfg.apiKey,
-        model: cfg.sttModel ?? DEFAULT_STT_MODEL,
-        sessionMode: true,
-        targetStreamingDelayMs: cfg.sttStreamingDelayMs,
-      },
-      {
-        onPartial: (text) => this.handleHfPartial(text),
-        onFinal: () => { /* resolved via closeSegment — this is informational only */ },
-        onError: (err) => this.handleHfError(err),
-      },
-    );
+    await this.deps.voxtral.start(this.sttOptions(cfg, true), {
+      onPartial: (text) => this.handleHfPartial(text),
+      onFinal: () => { /* resolved via closeSegment — informational only */ },
+      onError: (err) => this.handleHfError(err),
+    });
 
-    // 4. Subscribe to VAD events.
     this.hfVadUnsub = this.deps.vad.subscribe(
       () => this.handleHfSpeechStart(),
       (lastSpeechAt) => {
@@ -1115,13 +1023,11 @@ export class ConversationOrchestrator {
   }
 
   /**
-   * Deactivate hands-free mode. Safe to call from any HF sub-state.
-   * Cleans up VAD subscription, Voxtral session, and audio capture.
+   * Deactivate hands-free. Safe from any HF sub-state.
    *
-   * Ordering: clear UI flags FIRST so the toggle and discs snap back
-   * instantly, then tear down resources. If audioCapture.stopStreaming
-   * stalls on Android (it has happened in production), the UI is still
-   * coherent.
+   * UI flags are cleared FIRST so the toggle and discs snap back instantly,
+   * and resources torn down after: if stopStreaming stalls on Android (it has,
+   * in production), the UI is still coherent.
    */
   async disableHandsFree(): Promise<void> {
     if (!this.hfEnabled) return;
@@ -1131,29 +1037,25 @@ export class ConversationOrchestrator {
     this.hfEnabled = false;
     this.setHfState('hf-idle');
 
-    // 1. Clear UI state synchronously — UI is coherent before any await.
+    // Everything the UI reads, synchronously — coherent before any await.
     const store = this.store.getState();
     store.setMode('ptt');
     store.setHfActiveSpeaker(null);
     store.setHfUnroutedSpeaker(null);
     store.setHfLive(null);
 
-    // Abort any translation still streaming for an HF turn — its onSentence
-    // gate would abort eventually, but doing it here is immediate.
+    // Abort any translation still streaming — its onSentence gate would abort
+    // eventually, but doing it here is immediate.
     this.hfSkipRequested = true;
     try { this.hfTurnAbort?.abort(); } catch { /* noop */ }
     this.hfTurnAbort = null;
     this.endHfUtterance();
 
-    // 2. Stop VAD subscription.
     this.hfVadUnsub?.();
     this.hfVadUnsub = null;
     this.deps.vad?.setActive(false);
-
-    // 3. Stop audio capture.
     try { await this.deps.audioCapture.stopStreaming(); } catch { /* noop */ }
 
-    // 4. Close Voxtral session.
     try {
       if (this.deps.voxtral.endSession) {
         await this.deps.voxtral.endSession();
@@ -1163,8 +1065,6 @@ export class ConversationOrchestrator {
     } catch (e) {
       log.error('[orch/hf] endSession failed', toError(e));
     }
-
-    // 5. Stop any TTS in flight.
     try { this.deps.tts.stop(); } catch { /* noop */ }
 
     this.hfPairA = null;
@@ -1175,12 +1075,9 @@ export class ConversationOrchestrator {
     log.info('[orch/hf] disabled');
   }
 
-  /**
-   * Pause hands-free without tearing down the session — used when the device
-   * loses connectivity. Stops the mic and disarms VAD; keeps `hfEnabled=true`
-   * so the UI still reflects HF mode (with a "paused — offline" microcopy).
-   * Safe to call when already paused or when HF is not active.
-   */
+  /** Pause hands-free without tearing the session down — used when the device
+   *  goes offline. Stops the mic and disarms VAD, but keeps `hfEnabled` so the
+   *  UI stays in HF mode with its "paused — offline" microcopy. */
   async pauseHandsFree(): Promise<void> {
     if (!this.hfEnabled || this.hfPaused) return;
     log.info('[orch/hf] pausing — network offline');
@@ -1194,10 +1091,7 @@ export class ConversationOrchestrator {
     try { await this.deps.audioCapture.stopStreaming(); } catch { /* noop */ }
   }
 
-  /**
-   * Resume hands-free after a pause — restarts audio capture with the same
-   * dual routing and re-arms VAD. Safe to call when not paused.
-   */
+  /** Resume after a pause — same dual routing, VAD re-armed. */
   async resumeHandsFree(): Promise<void> {
     if (!this.hfEnabled || !this.hfPaused) return;
     log.info('[orch/hf] resuming — network online');
@@ -1221,25 +1115,23 @@ export class ConversationOrchestrator {
   // ── HF internal state machine ─────────────────────────────────────────────
 
   /**
-   * Dual-path HF capture callback. While the phone is speaking (and during
-   * cooldown) the mic is hearing the phone's own TTS — that audio must NOT
-   * reach the Voxtral session, or the accumulator grows an echo prefix the
-   * router later detects as the other language (a feedback-loop ingredient).
+   * Dual-path HF capture. While the phone speaks (and through the cooldown) the
+   * mic hears the phone's own TTS, and that audio must not reach the Voxtral
+   * session — the accumulator would grow an echo prefix the router later reads
+   * as the other language, which is half a feedback loop.
    *
-   * This gate is the whole defence, not a belt beside a brace. Hardware echo
-   * cancellation was always too device-dependent to lean on, and the capture
-   * path now uses VOICE_RECOGNITION, which does not offer any — so nothing
-   * downstream of here removes the phone's own voice if this lets it through.
+   * This gate is the whole defence: the capture path uses VOICE_RECOGNITION,
+   * which offers no echo cancellation, so nothing downstream removes the
+   * phone's own voice if this lets it through.
    */
   private readonly hfOnAudio = (base64Pcm: string): void => {
-    // One question decides both consumers: is this the room talking, or the
-    // phone hearing itself? Only the room may reach the transcriber, and only
-    // the room may drive the seam wave.
+    // One question decides both consumers: the room talking, or the phone
+    // hearing itself? Only the room may reach the transcriber or the wave.
     const fromTheRoom = this.hfState !== 'hf-speaking' && this.hfState !== 'hf-cooldown';
-    // Decoded once for both consumers, and they get different audio: the
-    // transcriber gets it levelled, the detector and the meter get it raw.
-    // The VAD's thresholds are calibrated against the room, and normalising
-    // underneath them would move the one detector that must not drift.
+    // Decoded once, but they get different audio: the transcriber levelled, the
+    // detector and meter raw. VAD thresholds are calibrated against the room,
+    // and normalising underneath them would move the one measurement that must
+    // not drift.
     const pcm = decodePcm16(base64Pcm);
     if (fromTheRoom) {
       const levelled = this.agc.process(pcm);
@@ -1258,16 +1150,27 @@ export class ConversationOrchestrator {
     return levelled === pcm ? base64Pcm : encodePcm16(levelled);
   }
 
-  /**
-   * Abandon whatever is being said. One call, because there is one thing to
-   * abandon — everything an utterance set in motion is reachable from it, so
-   * disabling, pausing and reconnecting no longer keep their own lists of
-   * fields to remember to clear.
-   */
+  /** Abandon whatever is being said. One call, because everything an utterance
+   *  set in motion is reachable from it — disabling, pausing and reconnecting
+   *  keep no lists of fields to clear. */
   private endHfUtterance(): void {
     this.hfUtterance?.end();
     this.hfUtterance?.cancelRun();
     this.hfUtterance = null;
+  }
+
+  /**
+   * Nothing to route — back to listening, with the session's accumulator
+   * scrubbed first.
+   *
+   * Audio keeps arriving while a turn is decided, and that accumulator is not
+   * per-utterance: orphaned words left in it become the PREFIX of whatever the
+   * next person says. The speaker sees one turn do nothing and the next carry
+   * the wreckage of it, routed by text that is half somebody else's.
+   */
+  private discardUtterance(): void {
+    this.deps.voxtral.resetUtterance?.();
+    this.setHfState('hf-idle');
   }
 
   /** The utterance being spoken right now, if this is still its turn to speak.
@@ -1293,14 +1196,10 @@ export class ConversationOrchestrator {
     this.setHfState('hf-capturing');
   }
 
-  /**
-   * Send the translation now, on the transcript we already have, without
-   * waiting for the turn to be certain. See TranslationRun.
-   *
-   * Routing here may lean on weak evidence, unlike the endpoint shortcut: this
-   * decision is reversible. If the utterance turns out to travel the other way,
-   * or to say something else, the result is discarded unread.
-   */
+  /** Send the translation on the transcript we already have, without waiting
+   *  for the turn to be certain. Routing here may lean on weak evidence,
+   *  unlike the endpoint shortcut, because this decision is reversible: an
+   *  utterance that turns out otherwise discards the result unread. */
   private startTranslation(
     u: Utterance,
     text: string,
@@ -1356,33 +1255,34 @@ export class ConversationOrchestrator {
 
   /**
    * The transcript, if it is safe to act on without the server's final: long
-   * enough to be a sentence, no longer growing, and unambiguous about which
-   * direction it should travel.
-   *
-   * That last condition is not fussiness. Skipping the final also skips the
-   * audio language tag that comes with it, so the shortcut only exists where
-   * the text alone decides the routing outright. Anything the classifier is
-   * merely leaning towards goes the slow way and keeps its second opinion.
+   * enough to be a sentence, no longer growing, and unambiguous about its
+   * direction. That last condition is not fussiness — skipping the final also
+   * skips the audio language tag, so the shortcut only exists where the text
+   * alone decides outright. Anything the classifier merely leans towards goes
+   * the slow way and keeps its second opinion.
    */
   private inspect(u: Utterance, now: number): { text: string | null; blocked: FastPathBlock } {
+    const unclear = { text: null, blocked: 'routing-unclear' } as const;
     const text = u.text();
     if (text.length < FAST_PATH_MIN_CHARS) return { text: null, blocked: 'no-transcript' };
     if (!u.settled(now)) return { text: null, blocked: 'still-arriving' };
-    const pairA = this.hfPairA;
-    const pairB = this.hfPairB;
-    if (!pairA || !pairB) return { text: null, blocked: 'routing-unclear' };
-    const a = primarySubtag(pairA);
-    const b = primarySubtag(pairB);
-    if (a === b) return { text: null, blocked: 'routing-unclear' };
-    const vote = classifyPairText(text, a, b);
-    if (!vote) return { text: null, blocked: 'routing-unclear' };
-    if (
-      vote.strength !== 'strong' &&
-      this.hfUntaggedStreak < UNTAGGED_UTTERANCES_TO_TRUST_TEXT
-    ) {
-      return { text: null, blocked: 'routing-unclear' };
-    }
+
+    const pair = this.pairSubtags();
+    if (!pair) return unclear;
+    const vote = classifyPairText(text, pair.a, pair.b);
+    if (!vote) return unclear;
+    const strictly = this.hfUntaggedStreak < UNTAGGED_UTTERANCES_TO_TRUST_TEXT;
+    if (vote.strength !== 'strong' && strictly) return unclear;
     return { text, blocked: 'none' };
+  }
+
+  /** The configured pair as primary subtags, or null when it is unset or both
+   *  halves speak the same language — neither routes anything. */
+  private pairSubtags(): { a: string; b: string } | null {
+    if (!this.hfPairA || !this.hfPairB) return null;
+    const a = primarySubtag(this.hfPairA);
+    const b = primarySubtag(this.hfPairB);
+    return a === b ? null : { a, b };
   }
 
   /**
@@ -1400,23 +1300,17 @@ export class ConversationOrchestrator {
   /**
    * The pause hint's answer: close the segment, then read what it says.
    *
-   * The close used to go out the instant the hint fired, which put a segment
-   * boundary in the middle of whatever the server was still emitting. Two
-   * things happen at that boundary, and both cost words. The flush ends the
-   * segment, so the next one starts with no memory of the sentence it is
-   * continuing — and Voxtral is an LLM-based recogniser, so the words already
-   * transcribed are exactly what it leans on when the audio is ambiguous,
-   * which is what fast, reduced, run-together speech IS. And if the 280 ms of
-   * silence was not a pause between words but a stop closure inside one, the
-   * boundary lands mid-word: neither half is a word, and both halves get
-   * written as something that is.
+   * Closing the instant the hint fires would put a segment boundary inside
+   * whatever the server is still emitting, and both halves of that cost words.
+   * The next segment starts with no memory of the sentence it continues, and
+   * Voxtral is an LLM recogniser that leans on exactly those words when the
+   * audio is ambiguous — which is what fast run-together speech IS. And if the
+   * silence was a stop closure rather than a pause between words, the boundary
+   * lands mid-word and both halves get written as something that is a word.
    *
-   * Waiting for the transcript to stop growing removes both. It costs nothing
-   * on the case the early close was built for — a short utterance streams no
-   * deltas at all, so the check fires immediately — and up to
-   * PARTIAL_SETTLED_MS on the case where words are still arriving, which is
-   * precisely the case where cutting is a bad idea. Speech resuming cancels
-   * it, so a breath now costs no boundary at all rather than one per breath.
+   * Waiting for the transcript to settle removes both, and costs nothing in the
+   * case the early close was built for: a short utterance streams no deltas, so
+   * the check fires immediately.
    */
   private closePause(u: Utterance): void {
     if (u.pauseHintAt === null || !this.current(u)) return;
@@ -1430,23 +1324,18 @@ export class ConversationOrchestrator {
   /**
    * Ask for the transcript instead of waiting to be offered it.
    *
-   * For a short utterance — which is most of a real conversation — Voxtral
-   * streams no delta at all: every word arrives in the final, and the final is
-   * only requested once the hangover concedes. So the words exist nowhere until
-   * ~850 ms after the speaker stopped, and every shortcut declines for want of
-   * a transcript. That is measured, not theorised: `no-transcript` on every
-   * short turn, while long ones took the fast path fine.
+   * For a short utterance — most of a real conversation — Voxtral streams no
+   * delta at all: every word arrives in the final, which is only requested once
+   * the hangover concedes. The words exist nowhere until ~850 ms after the
+   * speaker stopped, so every shortcut declined for want of a transcript
+   * (measured: `no-transcript` on every short turn).
    *
-   * Closing the segment at the pause hint moves the whole round trip off the
-   * critical path — it runs *during* the silence rather than after it. Both
-   * paths gain: an utterance that closes a sentence can end early on punctuated
-   * evidence, and one that does not still finds its transcript already in hand
-   * when the hangover expires.
-   *
-   * The round trip is also the safety margin. The answer lands ~230 ms later,
-   * around 500 ms of observed silence, and a speaker who was only drawing
-   * breath has resumed by then — which cancels everything this armed. Closing
-   * the segment early does not split the turn either: words spoken after it
+   * Closing at the pause hint runs that round trip *during* the silence instead
+   * of after it. An utterance that closes a sentence can then end early on
+   * punctuated evidence, and one that does not still has its transcript in hand
+   * when the hangover expires. The trip is its own safety margin: the answer
+   * lands ~230 ms in, by which point a speaker who was only drawing breath has
+   * resumed and cancelled everything this armed. Words spoken after the close
    * stream into a fresh segment and are joined back on.
    */
   private closeSegment(u: Utterance): SegmentClose | null {
@@ -1503,15 +1392,12 @@ export class ConversationOrchestrator {
   }
 
   /**
-   * Everything the pause hint armed, answered in one place: start the
-   * translation if there is enough to guess on, and end the turn if the
-   * transcript says the speaker is finished.
-   *
-   * Called whenever the evidence changes — the settle timer firing, a segment
-   * answering — because the earliest moment we know what was said is not a
-   * time that can be predicted. Voxtral buffers TARGET_STREAMING_DELAY_MS of
-   * audio, so at 400 ms of silence the words just spoken are still in flight;
-   * measured on device, that is exactly why every shortcut used to decline.
+   * Everything the pause hint armed, answered in one place: translate if there
+   * is enough to guess on, and end the turn if the transcript says the speaker
+   * is finished. Called whenever the evidence changes (settle timer, segment
+   * answering), because the earliest moment we know what was said cannot be
+   * predicted — Voxtral buffers audio, so at 400 ms of silence the words just
+   * spoken are still in flight.
    */
   private evaluateEndpoint(u: Utterance): void {
     const pausedAt = u.pauseHintAt;
@@ -1531,17 +1417,14 @@ export class ConversationOrchestrator {
   }
 
   /**
-   * The utterance is over — take the turn.
+   * The utterance is over — take the turn. Reached two ways that differ by one
+   * argument: the transcript closed a sentence during the pause hint
+   * ('punctuation'), or the hangover conceded ('silence').
    *
-   * Reached two ways, and the difference between them is one argument: the
-   * transcript closed a sentence during the pause hint ('punctuation'), or the
-   * hangover conceded ('silence'). Everything after that is the same work, so
-   * it is written once.
-   *
-   * There is one decision here: use the transcript in hand, or wait for the
-   * server's. `inspect` answers it, and the answer only ever comes out "wait"
-   * when the words are missing or still arriving — in which case the round trip
-   * is what the speaker is waiting for and there is nothing to save.
+   * One decision here: use the transcript in hand, or wait for the server's.
+   * `inspect` answers it, and only ever says "wait" when the words are missing
+   * or still arriving — when the round trip is what the speaker is waiting for
+   * and there is nothing to save.
    */
   private async takeTurn(
     u: Utterance,
@@ -1601,26 +1484,12 @@ export class ConversationOrchestrator {
     if (!this.hfEnabled) return;
 
     const trimmed = u.text().trim();
-    if (trimmed.length === 0) {
-      // Scrub before going back to listening. The segment was closed, but audio
-      // keeps reaching the session while this runs — the tail of a sentence the
-      // endpoint cut short — and the accumulator is not per-utterance. Left
-      // alone it becomes the PREFIX of whatever the next person says, which is
-      // "I spoke, nothing happened, I spoke again and it translated both at
-      // once": the speaker sees one failure and then a second turn carrying the
-      // wreckage of the first, routed by text that is half somebody else's.
-      // Orphaned words are worth less than a clean next turn.
-      this.deps.voxtral.resetUtterance?.();
-      this.setHfState('hf-idle');
-      return;
-    }
+    if (trimmed.length === 0) return this.discardUtterance();
 
-    // Route by detected language.
     const routing = this.routeUtterance(language ?? null, trimmed);
     const pairA = this.hfPairA;
     const pairB = this.hfPairB;
     if (!routing) {
-      // Mismatched/discarded — emit compact telemetry if we have pair context.
       if (pairA && pairB) {
         log.info(
           `[hf_turn] ${JSON.stringify({
@@ -1628,15 +1497,11 @@ export class ConversationOrchestrator {
             routedLanguage: language ?? null,
             configuredPair: [pairA, pairB],
             routingResult: 'mismatched',
-            utteranceWordCount: trimmed.split(/\s+/).filter(Boolean).length,
+            utteranceWordCount: wordCount(trimmed),
           })}`,
         );
       }
-      // Same reasoning as the empty transcript above: this text belongs to no
-      // turn, so it must not survive into the next one.
-      this.deps.voxtral.resetUtterance?.();
-      this.setHfState('hf-idle');
-      return;
+      return this.discardUtterance();
     }
 
     const { speakerId, sourceLang, targetLang, kind: routingKind } = routing;
@@ -1662,24 +1527,20 @@ export class ConversationOrchestrator {
     if (this.hfEnabled) {
       store.setHfActiveSpeaker(null);
       this.setHfState('hf-cooldown');
-      // A conversation alternates, so the voice the next turn needs is almost
-      // always the one we did NOT just speak. Select it now, in the cooldown,
-      // where nobody is waiting for it — guess wrong and the next turn pays a
-      // switch it would have paid anyway.
+      // Conversations alternate, so the next turn almost always needs the voice
+      // we did NOT just speak. Selecting it in the cooldown costs nobody
+      // anything, and a wrong guess only pays a switch it owed anyway.
       //
-      // Selecting, not warming. The first version of this called prewarm(),
-      // whose silent primer is a real synth-and-play cycle; measured on
-      // device it left that primer in the native queue ahead of the next
-      // reply and roughly tripled its queue-to-audio time. Warming between
-      // turns costs more than it saves.
+      // Selecting, not warming: prewarm's silent primer is a real
+      // synth-and-play cycle, and on device it sat in the native queue ahead of
+      // the next reply and roughly tripled its queue-to-audio time.
       const nextVoice = otherOfPair(targetLang, pairA, pairB);
       if (nextVoice) this.deps.tts.presetVoice(nextVoice);
       await new Promise<void>((r) => setTimeout(r, HF_COOLDOWN_MS));
       if (this.hfEnabled && !this.hfPaused) {
-        // Scrub whatever leaked past the capture gate (chunks in flight when
-        // the state flipped) before listening for the next speaker.
-        this.deps.voxtral.resetUtterance?.();
-        this.setHfState('hf-idle');
+        // Scrub what leaked past the capture gate — chunks in flight when the
+        // state flipped — before listening for the next speaker.
+        this.discardUtterance();
         this.deps.vad?.setActive(true);
       } else if (this.hfEnabled) {
         this.setHfState('hf-idle');
@@ -1687,69 +1548,50 @@ export class ConversationOrchestrator {
     }
   }
 
-  private routeUtterance(
-    detectedLang: string | null,
-    text: string,
-  ): {
-    speakerId: PersonId;
-    sourceLang: string;
-    targetLang: string;
-    kind: HfRoutingKind;
-  } | null {
+  private routeUtterance(detectedLang: string | null, text: string): Routing | null {
     const pairA = this.hfPairA;
     const pairB = this.hfPairB;
     if (!pairA || !pairB) return null;
 
-    const store = this.store.getState();
+    const toward = (side: 'a' | 'b', kind: HfRoutingKind): Routing =>
+      side === 'a'
+        ? { speakerId: 'person_a', sourceLang: pairA, targetLang: pairB, kind }
+        : { speakerId: 'person_b', sourceLang: pairB, targetLang: pairA, kind };
 
-    // Compare BCP-47 primary subtags so "es-MX" matches "es" symmetrically
-    // and a regional pair like (es, es-MX) doesn't always route to A.
-    const a = primarySubtag(pairA);
-    const b = primarySubtag(pairB);
-
-    if (a !== b) {
+    const pair = this.pairSubtags();
+    if (pair) {
       const dl = detectedLang ? primarySubtag(detectedLang) : null;
-      const audioVote: 'a' | 'b' | null = dl === a ? 'a' : dl === b ? 'b' : null;
+      const audioVote: 'a' | 'b' | null = dl === pair.a ? 'a' : dl === pair.b ? 'b' : null;
 
-      // The transcript is stronger routing evidence than the audio tag: it is
-      // the very text about to be translated, so ITS language decides which
-      // direction produces a real translation. The audio tag misfires often
-      // enough (Spanish tagged en, Catalan for Spanish, or missing entirely)
-      // that trusting it alone made HF "translate" Spanish into Spanish and
-      // parrot the speaker. Strong text evidence overrides a contradicting
-      // tag; weak evidence only fills in when the tag abstained — and both
-      // beat blind speaker alternation.
-      const textVote = classifyPairText(text, a, b);
+      // The transcript outranks the audio tag: it is the very text about to be
+      // translated, so ITS language decides which direction produces a real
+      // translation. The tag misfires often enough — Spanish tagged en, Catalan
+      // for Spanish, missing altogether — that trusting it alone made HF
+      // "translate" Spanish into Spanish and parrot the speaker. Strong text
+      // overrides a contradicting tag; weak text only fills in for a tag that
+      // abstained; both beat blind alternation.
+      const textVote = classifyPairText(text, pair.a, pair.b);
       const textSide =
         textVote && (textVote.strength === 'strong' || audioVote === null)
           ? textVote.side
           : null;
       const side = textSide ?? audioVote;
 
-      if (side) {
-        const kind: HfRoutingKind = textSide
-          ? audioVote && audioVote !== textSide
-            ? 'text-override'
-            : 'text'
-          : 'matched';
-        if (kind === 'text-override') {
-          log.warn(
-            `[orch/hf] transcript overrides audio tag lang=${detectedLang} → ${side === 'a' ? a : b} text="${text.slice(0, 30)}"`,
-          );
-        }
-        return side === 'a'
-          ? { speakerId: 'person_a', sourceLang: pairA, targetLang: pairB, kind }
-          : { speakerId: 'person_b', sourceLang: pairB, targetLang: pairA, kind };
+      if (side !== null) {
+        if (textSide === null) return toward(side, 'matched');
+        if (audioVote === null || audioVote === textSide) return toward(side, 'text');
+        log.warn(
+          `[orch/hf] transcript overrides audio tag lang=${detectedLang} → ${side === 'a' ? pair.a : pair.b} text="${text.slice(0, 30)}"`,
+        );
+        return toward(side, 'text-override');
       }
 
       if (detectedLang) {
-        // Audio says a language outside the pair AND the transcript claims
-        // neither side — discard with visual feedback on the side whose turn
-        // it likely was (alternate from last routed).
+        // Outside the pair, and the transcript claims neither side. Discard it,
+        // flashing the half whose turn it most likely was.
         log.info(`[orch/hf] unrouted utterance lang=${detectedLang} text="${text.slice(0, 30)}"`);
-        const lastDone = [...store.turns].reverse().find(t => t.stage === 'done');
-        const flashSide: PersonId = lastDone?.speakerId === 'person_a' ? 'person_b' : 'person_a';
-        store.setHfUnroutedSpeaker(flashSide);
+        const store = this.store.getState();
+        store.setHfUnroutedSpeaker(otherPerson(this.lastSpeaker() ?? 'person_b'));
         setTimeout(() => {
           if (this.hfEnabled) store.setHfUnroutedSpeaker(null);
         }, 600);
@@ -1757,24 +1599,24 @@ export class ConversationOrchestrator {
       }
     }
 
-    // No usable evidence (or ambiguous same-subtag pair) — alternate from
-    // last routed turn. First turn defaults to person_a.
-    const lastDone = [...store.turns].reverse().find(t => t.stage === 'done');
-    if (lastDone?.speakerId === 'person_a') {
-      return { speakerId: 'person_b', sourceLang: pairB, targetLang: pairA, kind: 'fallback' };
-    }
-    return { speakerId: 'person_a', sourceLang: pairA, targetLang: pairB, kind: 'fallback' };
+    // No usable evidence (or both halves speak the same language) — alternate
+    // from the last routed turn; the first turn goes to person_a.
+    return toward(this.lastSpeaker() === 'person_a' ? 'b' : 'a', 'fallback');
   }
 
-  /**
-   * Whether the direction was decided WITHOUT reading the transcript.
-   *
-   * 'text' and 'text-override' read the very words about to be translated, and
-   * are trusted. The other two are not evidence about this utterance: 'matched'
-   * takes the audio tag's word for it, and that tag is the thing that has been
-   * observed calling Spanish English; 'fallback' had nothing at all and
-   * alternated. Those are the directions worth checking.
-   */
+  /** Who spoke the last completed turn, if anyone has yet. */
+  private lastSpeaker(): PersonId | null {
+    const turns = this.store.getState().turns;
+    for (let i = turns.length - 1; i >= 0; i--) {
+      if (turns[i].stage === 'done') return turns[i].speakerId;
+    }
+    return null;
+  }
+
+  /** Whether the direction was decided WITHOUT reading the transcript. 'text'
+   *  and 'text-override' read the very words about to be translated and are
+   *  trusted; 'matched' took the word of the tag observed calling Spanish
+   *  English, and 'fallback' just alternated. Those two are worth checking. */
   private directionWasGuessed(kind: HfRoutingKind): boolean {
     return kind === 'fallback' || kind === 'matched';
   }
@@ -1783,42 +1625,35 @@ export class ConversationOrchestrator {
    * Ask the translation whether the direction was right, before anyone sees or
    * hears it.
    *
-   * A guessed direction fails in one specific, humiliating way: asked to
-   * translate a language into itself, the model returns the sentence unchanged
-   * and the app reads the speaker their own words back. It is the failure the
-   * routing rewrite was built to prevent, and it survives in exactly the case
+   * A guessed direction fails in one humiliating way: asked to translate a
+   * language into itself, the model returns the sentence unchanged and the app
+   * reads the speaker their own words back. It survives in exactly the case
    * routing has no evidence for — a short utterance the lexicon cannot place,
    * on a device where the audio tag never arrives. "Genial." came back
    * "Genial."
    *
-   * So the guess is run first and read before it is shown. If it returned its
-   * own input, the other direction is tried; whichever produced a real
-   * translation is the one the turn uses. If BOTH come back unchanged the word
-   * genuinely survives translation ("Madrid", "hotel", "OK") and the original
-   * stands — two requests is the cap, and only on a direction nobody had
-   * evidence for.
+   * So the guess is read before it is shown. If it returned its own input the
+   * other direction is tried, and whichever produced a real translation wins.
+   * If BOTH come back unchanged the word genuinely survives translation
+   * ("Madrid", "OK") and the original stands. Two requests is the cap, and only
+   * on a direction nobody had evidence for.
    *
-   * The cost is that these turns do not stream to the screen while they run.
-   * That is affordable precisely because it is the ambiguous ones that get
-   * here: a transcript the lexicon cannot place is a handful of words, and its
-   * translation arrives whole.
+   * The cost is that these turns don't stream to the screen while they run —
+   * affordable because it is only the ambiguous ones that get here, and a
+   * transcript the lexicon cannot place is a handful of words.
    */
   private async confirmDirection(
     u: Utterance,
     guess: TranslationRun,
     sourceText: string,
-    dir: { speakerId: PersonId; sourceLang: string; targetLang: string },
-  ): Promise<{
-    run: TranslationRun;
-    dir: { speakerId: PersonId; sourceLang: string; targetLang: string };
-    flipped: boolean;
-  } | null> {
+    dir: Direction,
+  ): Promise<{ run: TranslationRun; dir: Direction; flipped: boolean } | null> {
     await guess.settled();
     if (!this.hfEnabled || u.run !== guess) return null;
     if (!guess.returnedItsInput(sourceText)) return { run: guess, dir, flipped: false };
 
-    const other: typeof dir = {
-      speakerId: dir.speakerId === 'person_a' ? 'person_b' : 'person_a',
+    const other: Direction = {
+      speakerId: otherPerson(dir.speakerId),
       sourceLang: dir.targetLang,
       targetLang: dir.sourceLang,
     };
@@ -1916,7 +1751,7 @@ export class ConversationOrchestrator {
     const abort = run.abort;
     this.hfTurnAbort = abort;
     this.hfSkipRequested = false;
-    const listenerId: PersonId = speakerId === 'person_a' ? 'person_b' : 'person_a';
+    const listenerId = otherPerson(speakerId);
     const ttsPromises: Promise<void>[] = [];
     let firstTokenAt: number | null = null;
     let requestOpenAt: number | null = null;
@@ -2039,15 +1874,8 @@ export class ConversationOrchestrator {
     log.info(`[hf_turn] ${JSON.stringify(payload)}`);
   }
 
-  /**
-   * Streaming HF partials → the transient `hfLive` store field (never a
-   * turn: turns don't exist until the utterance is flushed and routed).
-   * The side is the text classifier's live guess so the words appear on the
-   * SPEAKER's own half; a guess is sticky for the rest of the utterance so
-   * the caption doesn't hop across the seam mid-sentence. Until there is
-   * enough text to call a side, nothing renders — a caption on the wrong
-   * half is worse than a beat of silence.
-   */
+  /** Streaming HF partials → the transient `hfLive` field, never a turn: turns
+   *  don't exist until the utterance is flushed and routed. */
   private handleHfPartial(text: string): void {
     const u = this.hfUtterance;
     if (!u || u.ended || !this.hfEnabled || this.hfPaused) return;
@@ -2068,30 +1896,31 @@ export class ConversationOrchestrator {
     this.writeHfLive(u);
   }
 
-  /** Put the utterance so far on the speaker's own half — including any
-   *  segment already closed, or the caption would jump backwards to just the
-   *  words spoken since. */
+  /**
+   * Put the utterance so far on the speaker's own half — including segments
+   * already closed, or the caption would jump backwards to just the words
+   * spoken since.
+   *
+   * The side is the classifier's live guess, sticky for the rest of the
+   * utterance so the caption doesn't hop across the seam mid-sentence. Until
+   * there is enough text to call one, nothing renders: a caption on the wrong
+   * half is worse than a beat of silence.
+   */
   private writeHfLive(u: Utterance): void {
     const text = u.text();
     if (text.length === 0) return;
-    if (u.side === null && this.hfPairA && this.hfPairB) {
-      const a = primarySubtag(this.hfPairA);
-      const b = primarySubtag(this.hfPairB);
-      if (a !== b) {
-        const vote = classifyPairText(text, a, b);
-        if (vote) u.side = vote.side === 'a' ? 'person_a' : 'person_b';
-      }
+    const pair = u.side === null ? this.pairSubtags() : null;
+    if (pair) {
+      const vote = classifyPairText(text, pair.a, pair.b);
+      if (vote) u.side = vote.side === 'a' ? 'person_a' : 'person_b';
     }
     this.store.getState().setHfLive({ side: u.side, text });
   }
 
-  /**
-   * Cut the in-flight HF turn short — the reader tapped the streaming
-   * translation. Stops TTS, aborts the translation stream, and lets the
-   * turn end quietly as 'done' with whatever text already arrived; the
-   * machine then proceeds to cooldown and listens again. This is the door
-   * out of a long readback nobody needs spoken to the end.
-   */
+  /** Cut the in-flight HF turn short — the reader tapped the streaming
+   *  translation. The turn ends quietly as 'done' with whatever text arrived,
+   *  then cooldown and listening resume: the door out of a long readback
+   *  nobody needs spoken to the end. */
   skipHfTurn(): void {
     if (!this.hfEnabled) return;
     if (this.hfState !== 'hf-routing' && this.hfState !== 'hf-speaking') return;
@@ -2124,22 +1953,14 @@ export class ConversationOrchestrator {
     if (!this.hfEnabled) return;
 
     try {
-      await this.deps.voxtral.start(
-        {
-          apiKey: cfg.apiKey,
-          model: cfg.sttModel ?? DEFAULT_STT_MODEL,
-          sessionMode: true,
-          targetStreamingDelayMs: cfg.sttStreamingDelayMs,
+      await this.deps.voxtral.start(this.sttOptions(cfg, true), {
+        onPartial: (text) => this.handleHfPartial(text),
+        onFinal: () => {},
+        onError: (err) => {
+          log.error('[orch/hf] reconnect failed, disabling HF', err);
+          void this.disableHandsFree();
         },
-        {
-          onPartial: (text) => this.handleHfPartial(text),
-          onFinal: () => {},
-          onError: (err) => {
-            log.error('[orch/hf] reconnect failed, disabling HF', err);
-            void this.disableHandsFree();
-          },
-        },
-      );
+      });
       // Re-arm VAD only after the new session is open.
       this.deps.vad?.setActive(true);
       log.info('[orch/hf] reconnected');
@@ -2152,17 +1973,14 @@ export class ConversationOrchestrator {
   // ── VAD audio routing ─────────────────────────────────────────────────────
 
   /**
-   * Drain one capture chunk into the VAD as 512-sample frames.
+   * Drain one capture chunk into the VAD as 512-sample frames — RAW samples,
+   * before SpeechAgc, since the detector's thresholds are calibrated against
+   * the room.
    *
-   * These are the RAW samples, before SpeechAgc — the detector's thresholds
-   * are calibrated against the room, and a normaliser underneath them would
-   * silently re-scale the one measurement the app cannot afford to have drift.
-   *
-   * `fromTheRoom` also gates the audio-level meter: the same frames that feed
-   * turn detection carry the loudness that drives the seam wave, so the level
-   * is published here rather than in a second pass over the chunk. Frame
-   * cadence IS meter cadence — 32 ms, ~31 updates/s, which is what makes the
-   * wave track a voice instead of lagging behind it.
+   * `fromTheRoom` also gates the level meter: the frames that feed turn
+   * detection carry the loudness that drives the seam wave, so it is published
+   * here rather than in a second pass. Frame cadence IS meter cadence — 32 ms,
+   * ~31 updates/s — which is what makes the wave track a voice.
    */
   private feedAudioToVad(incoming: Int16Array, fromTheRoom: boolean): void {
     if (!this.deps.vad || !this.hfEnabled || this.hfPaused) return;
@@ -2173,8 +1991,7 @@ export class ConversationOrchestrator {
       log.info('[orch/hf] audio→vad: first chunk received');
     }
 
-    // Append to frame buffer and drain 512-sample frames. Cap the buffer
-    // at MAX_VAD_BUFFER samples so a wedged inferencer can't OOM the heap.
+    // Capped so a wedged inferencer that stops draining can't grow the heap.
     const merged = new Int16Array(this.vadBuffer.length + incoming.length);
     merged.set(this.vadBuffer);
     merged.set(incoming, this.vadBuffer.length);
@@ -2232,16 +2049,12 @@ export class ConversationOrchestrator {
     }
 
     // A transcript in the wrong writing system is not a bad guess at what was
-    // said — it is evidence the transcriber heard something that was not the
-    // sentence. Speaking it anyway costs more than staying quiet: the text
-    // goes to the translator labelled as a language it is not, comes back as
-    // whatever that produces, and is then read aloud to a listener who has no
-    // way to tell a mistranscription from the speaker actually saying it.
-    //
-    // The speaker, on the other hand, is right there and holding the button.
-    // "I didn't catch that" is both true and immediately actionable, which is
-    // the whole reason this lands on the same path as an empty transcript
-    // rather than inventing a failure of its own.
+    // said — it is evidence the transcriber heard something else entirely.
+    // Translating it anyway sends text labelled as a language it is not, and
+    // reads the result to a listener with no way to tell a mistranscription
+    // from the speaker actually saying it. The speaker, meanwhile, is right
+    // there holding the button: "I didn't catch that" is true and actionable,
+    // which is why this joins the empty-transcript path.
     if (!writtenInScriptOf(trimmed, primarySubtag(args.sourceLang))) {
       log.warn(
         `[orch] transcript is not written in ${args.sourceLang} — dropping it ` +
@@ -2259,7 +2072,7 @@ export class ConversationOrchestrator {
     const abort = new AbortController();
     this.translationAbort = abort;
 
-    const listenerId: PersonId = args.speakerId === 'person_a' ? 'person_b' : 'person_a';
+    const listenerId = otherPerson(args.speakerId);
     let translationFailed = false;
     let lastDeltaWriteAt = 0;
 
@@ -2374,4 +2187,13 @@ export class ConversationOrchestrator {
 function primarySubtag(lang: string): string {
   const idx = lang.indexOf('-');
   return (idx === -1 ? lang : lang.slice(0, idx)).toLowerCase();
+}
+
+/** The other half of the conversation. */
+function otherPerson(id: PersonId): PersonId {
+  return id === 'person_a' ? 'person_b' : 'person_a';
+}
+
+function wordCount(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length;
 }
