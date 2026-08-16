@@ -7,7 +7,14 @@ jest.mock('react-native', () => ({
   NativeModules: {},
 }));
 
-import { VoxtralRealtimeClient, TARGET_STREAMING_DELAY_MS, type WebSocketLike, type WebSocketFactory } from '../VoxtralRealtimeClient';
+import {
+  VoxtralRealtimeClient,
+  TARGET_STREAMING_DELAY_MS,
+  STREAMING_DELAY_ACCURATE_MS,
+  STREAMING_DELAY_FAST_MS,
+  type WebSocketLike,
+  type WebSocketFactory,
+} from '../VoxtralRealtimeClient';
 
 // ── Fake WebSocket ────────────────────────────────────────────────────────────
 
@@ -126,7 +133,10 @@ describe('VoxtralRealtimeClient', () => {
     expect(sessionUpdate?.session.target_streaming_delay_ms).toBe(TARGET_STREAMING_DELAY_MS);
   });
 
-  it('does NOT include target_streaming_delay_ms in PTT mode', async () => {
+  // Push-to-talk used to leave the delay to the server default, which meant
+  // the two modes transcribed under conditions that differed by an unknown
+  // amount and neither was written down. Both are explicit now.
+  it('includes target_streaming_delay_ms in PTT mode too', async () => {
     const fake = createFakeWs();
     const svc = new VoxtralRealtimeClient(fake.factory);
     const rec = recording();
@@ -135,7 +145,28 @@ describe('VoxtralRealtimeClient', () => {
 
     const sent = fake.ws.sent.map(s => JSON.parse(s));
     const sessionUpdate = sent.find(m => m.type === 'session.update');
-    expect(sessionUpdate?.session.target_streaming_delay_ms).toBeUndefined();
+    expect(sessionUpdate?.session.target_streaming_delay_ms).toBe(
+      STREAMING_DELAY_ACCURATE_MS,
+    );
+  });
+
+  it('defaults to the accurate delay and honours an explicit one', async () => {
+    expect(TARGET_STREAMING_DELAY_MS).toBe(STREAMING_DELAY_ACCURATE_MS);
+
+    const fake = createFakeWs();
+    const svc = new VoxtralRealtimeClient(fake.factory);
+    const rec = recording();
+
+    await handshake(fake, svc, rec, {
+      sessionMode: true,
+      targetStreamingDelayMs: STREAMING_DELAY_FAST_MS,
+    });
+
+    const sent = fake.ws.sent.map(s => JSON.parse(s));
+    const sessionUpdate = sent.find(m => m.type === 'session.update');
+    expect(sessionUpdate?.session.target_streaming_delay_ms).toBe(
+      STREAMING_DELAY_FAST_MS,
+    );
   });
 
   it('queues audio fed before session.created and drains on ready', async () => {

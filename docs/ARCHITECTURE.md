@@ -10,9 +10,16 @@ Every turn runs the same streaming pipeline; no stage waits for the previous one
 PTT held ──► AudioCaptureService (PCM 16kHz mono, base64 frames)
                     │
                     ▼
-              VoxtralRealtimeClient (WebSocket)
+              SpeechAgc (slow level normalisation, speech-gated)
+                    │        └─ the VAD and the meter branch off ABOVE this,
+                    │           on the raw samples
+                    ▼
+              VoxtralRealtimeClient (WebSocket, 480 ms right context)
                     │  transcription.text.delta  → live partial
                     │  transcription.done        → final
+                    ▼
+              nameRepair (phonetic glossary — Sisi → Cycy)
+                    │
                     ▼
               MistralTranslator (POST /v1/chat/completions, SSE)
                     │  sentence-boundary chunking (regex, min 15 chars)
@@ -79,7 +86,11 @@ The starting point was ~2560 ms. The fast path is what an ordinary sentence took
 
 - **The transcript is asked for, not waited for.** The first version of the hint could only read what Voxtral had volunteered — and for a short utterance Voxtral volunteers nothing: no delta is ever streamed, every word arrives in the final, and the final is only requested once the hangover concedes. So the words existed nowhere until ~850 ms after the speaker stopped, every shortcut declined as `no-transcript`, and the turns that paid the *worst* latency were the short ones a conversation is mostly made of. Long sentences took the fast path fine, which is exactly why three rounds of measuring on long sentences never saw it.
 
-  The segment is now closed at the pause hint, so that round trip runs *during* the silence instead of after it. Both endings gain: an utterance whose answer closes a sentence ends on punctuated evidence without the hangover, and one that doesn't still finds its transcript already in hand when the hangover expires. The round trip is also the safety margin — the answer lands around 500 ms of observed silence, and a speaker who was only drawing breath has resumed by then, which cancels everything the hint armed. Closing early never costs the rest of the sentence either: words spoken after it stream into a fresh segment and are stitched back on. Closing while a close is outstanding joins it rather than opening a second, so the ending and the guess share one answer.
+  The segment is now closed at the pause hint — **once the transcript has stopped growing** — so that round trip runs *during* the silence instead of after it. Both endings gain: an utterance whose answer closes a sentence ends on punctuated evidence without the hangover, and one that doesn't still finds its transcript already in hand when the hangover expires. The round trip is also the safety margin — the answer lands around 500 ms of observed silence, and a speaker who was only drawing breath has resumed by then, which cancels everything the hint armed. Closing early never costs the rest of the sentence either: words spoken after it stream into a fresh segment and are stitched back on. Closing while a close is outstanding joins it rather than opening a second, so the ending and the guess share one answer.
+
+- **Closing a segment costs words, and for one release nobody had counted them.** The flush ends the segment, so everything after it is recognised with no memory of the sentence it continues — and Voxtral is an LLM-based recogniser, so the words already transcribed are precisely what it leans on when the audio is ambiguous. Which is what fast conversational speech *is*: reduced, coarticulated, consonants swallowed, thin acoustic evidence per word. And 280 ms of quiet is not necessarily a gap between words. Inside one — a stop closure, a hesitation — the cut lands mid-word, and neither half is a word any more, so both get written as something that is. A speaker who takes breaths mid-sentence was paying that twice a sentence.
+
+  The close is therefore armed by the pause hint and *sent* by the same settle check that guards the fast path: no flush while deltas are still arriving. It costs nothing on the case the early close exists for (a short utterance streams no deltas at all, so the check fires immediately) and up to 140 ms on the case where cutting was a bad idea anyway. A speaker who resumes before it fires now costs no boundary at all, rather than one per breath.
 
   **A pause hint is not once per utterance.** A speaker who takes a breath mid-sentence pauses more than once, and each pause is a fresh chance to have the words in hand — the short tail after the breath is exactly the case with no streamed deltas at all. The close in flight is what suppresses a second one, and it stops being in flight the moment it answers; the resumed speaker's next pause opens its own. That distinction used to live in three unrelated fields cleared by hand in the resume handler, one of which was missed, so the hint fired once per utterance and never again — silently, since the fallback is just the slower path that always worked.
 
@@ -107,11 +118,31 @@ The starting point was ~2560 ms. The fast path is what an ordinary sentence took
 
   The cost is that a guessed turn does not stream to the screen while it is checked. That is affordable precisely because it is the ambiguous ones that get there: a transcript the lexicon cannot place is a handful of words, and its translation arrives whole.
 
-- **The measurement starts where the person starts waiting.** The `[hf_turn]` log line breaks the whole chain into segments that add up, measured from the last speech frame (not from when the hangover conceded) to the `tts-start` event (not to when a chunk was queued). `speechEndToAudio` is the number; everything else in the line explains it. `requestToOpen` / `openToFirstToken` split the request's own cost into getting answered (connection, queue, prefill) and the model writing — two very different fixes, indistinguishable from one number. `fastPathBlock` says why a shortcut declined, because a shortcut that silently never fires looks exactly like one that does — and it is what showed that the first two rounds of work had never once executed. `earlyClose` / `earlyCloseMs` report the pause-hint round trip, which ran inside `endpointDelay` and so is reported rather than summed. `requestToOpen` is now measured from the request's own start whether it flew early or not, so the instrument no longer goes dark on exactly the path that works. Tuning any of the constants above without reading this line first is guessing, and guessing has already cost one round here.
+- **The measurement starts where the person starts waiting.** The `[hf_turn]` log line breaks the whole chain into segments that add up, measured from the last speech frame (not from when the hangover conceded) to the `tts-start` event (not to when a chunk was queued). `speechEndToAudio` is the number; everything else in the line explains it. `requestToOpen` / `openToFirstToken` split the request's own cost into getting answered (connection, queue, prefill) and the model writing — two very different fixes, indistinguishable from one number. `fastPathBlock` says why a shortcut declined, because a shortcut that silently never fires looks exactly like one that does — and it is what showed that the first two rounds of work had never once executed. `earlyClose` / `earlyCloseMs` report the pause-hint round trip, which ran inside `endpointDelay` and so is reported rather than summed. `requestToOpen` is now measured from the request's own start whether it flew early or not, so the instrument no longer goes dark on exactly the path that works. `micDbfs` / `agcGainDb` report what the microphone actually delivered and what was done about it — a conversation that transcribes badly at -50 dBFS is a placement problem, not a model problem, and there was no way to tell before. `nameRepairs` lists every rewrite, because a repair that fires on ordinary speech has to be visible somewhere to be caught. Tuning any of the constants above without reading this line first is guessing, and guessing has already cost one round here.
+
+## Getting the words right
+
+Latency had three rounds of on-device measurement, broken down per link. Accuracy had none — and that asymmetry is itself the story of this section, because every decision below had been made in the direction that measurement could see.
+
+- **480 ms of right context, not 320.** `target_streaming_delay_ms` is how much of the *following* audio Voxtral has before it commits to a word. Mistral's figure is that at 480 ms the realtime model matches their offline batch model (within 1-2 WER points on long- and short-form English); below that the curve turns down. This app shipped 320 for one release, bought with a comment calling the accuracy cost "marginal" — a number nobody had measured, spent to buy 160 ms that had been measured to the millisecond. 480 is the default now, with the 320 available in Settings for anyone who wants the time back. Push-to-talk sends the parameter too; it used to leave it to the server default, so the two modes transcribed under conditions that differed by an unknown amount.
+
+- **The names are repaired, because the socket cannot be told about them.** Proper nouns carry no language-model support, so they are what an ASR gets wrong most — and Voxtral does not usually *mishear* them, it writes what it heard using ordinary orthography: "Cycy" comes back "Sisi", "Gonzalo" comes back "Gonsalo". Mistral does expose vocabulary biasing (`context_bias`, up to 100 terms) and a language hint, but only on the HTTP transcription endpoint, which wants a finished file; the realtime session accepts `audio_format` and `target_streaming_delay_ms` and rejects everything else as `extra_forbidden`. So the fix lives downstream: a phonetic key (`src/services/stt/nameRepair.ts`) maps spellings of the same sounds onto one another, and the transcript is rewritten towards a glossary of the people in the conversation.
+
+  It matches *exactly* or not at all. Edit distance would catch more — "Alexandre" for "Alejandro" — and would also turn "Alejandra" into "Alejandro" and "el ala" into "el Ale". A repair that fires on ordinary speech poisons every turn, while a missed name is only the status quo, so the near misses go to the translator instead, which has the sentence in view. The same asymmetry curates the built-in name lists: any name that is also an ordinary word in a language it might be paired with is left out ("Rosa", "Mark", "Tomás" against Spanish "tú tomas", "Leon" against "león"), and the sentences that caught each one are in the test file.
+
+  Repair happens on the way *in*, at the Utterance, not on the way out. Four things read the transcript — the live caption, the router, the speculative translation and the turn — and a translation sent on "Sisi" cannot be adopted by a turn that decided the words were "Cycy", so a repair applied late would throw away the head start on exactly the utterances the glossary exists for.
+
+- **The translator is an interpreter, not a proofreader.** It is told that its input comes from an ASR under a few hundred milliseconds of lookahead, and that when a word is obviously a recognition error and the intended word is clear from context, the job is to translate what the speaker plainly meant. That licence needs a limit and evidence, and it has both: never invent facts, names or numbers, and translate literally when the meaning genuinely is not recoverable — judged against the last three exchanges, which are passed as context precisely so "obvious" has something to be obvious against. The glossary of names goes in the same prompt. Context is fenced as hard as the transcript: it is previous speech, so it carries the same injection surface, and it is marked never to be translated again or obeyed.
+
+- **The microphone is levelled, and the level is logged.** Moving to `VOICE_RECOGNITION` removed the platform's gain control along with the noise suppressor that was eating quiet speech, which left the level at whatever a phone flat on a table gets from 40-60 cm away. `SpeechAgc` puts a slow, speech-gated normaliser in front of Voxtral only — the VAD and the seam wave keep the raw samples, because their thresholds are calibrated against the room and a meter with automatic gain is not a meter. It adapts only on frames loud enough to be speech (a gain that chases silence pumps), rises over ~1.2 s and falls fast, and caps each chunk's gain at whatever keeps that chunk's own peak inside full scale, so it cannot repeat the clipping that made the old source unusable.
+
+  Being honest about it: digital gain does not improve signal-to-noise ratio — it lifts the noise by exactly as much as the speech. It puts the samples in the range the recogniser expects, which is worth having and is not a fix for a bad room. It is the one item here whose benefit is unproven, and `micDbfs`/`agcGainDb` in `[hf_turn]` plus `--agc on|off` in the bench are how to settle it rather than argue about it.
+
+- **`scripts/voxtral-wer-bench.mjs` is the point of all of the above.** It replays real recordings through the real socket at wallclock speed and scores the transcripts against references, across delays, levelling and endpointing modes (`end` / `pause` — what the app did — / `settled` — what it does now). Every claim in this section is either a measurement Mistral published or a mechanism; the numbers for *this* app, in *this* room, come from there. Tuning any constant above without running it is guessing, and guessing is what this section is a record of.
 
 ## Key design decisions
 
-1. **Cloud STT + cloud translation, OS-native TTS.** Voxtral handles 30+ languages with quality far above a phone-bundled whisper-small, at a fraction of the install footprint. TTS is OS-native — zero install, voices already on the device. The only on-device model is Silero VAD (2.3 MB ONNX in the APK), so hands-free turn detection never sends audio anywhere until someone is actually speaking.
+1. **Cloud STT + cloud translation, OS-native TTS.** Voxtral handles the app's language list with quality far above a phone-bundled whisper-small, at a fraction of the install footprint — though not evenly: the realtime model is trained and evaluated on thirteen languages (en, es, fr, de, it, pt, nl, ru, ar, hi, zh, ja, ko), and the other nineteen the UI supports transcribe worse than that. The surface, the routing and the translation are built for all of them; the transcript is where the difference lands. TTS is OS-native — zero install, voices already on the device. The only on-device model is Silero VAD (2.3 MB ONNX in the APK), so hands-free turn detection never sends audio anywhere until someone is actually speaking.
 
 2. **Streaming end to end.** Voxtral WS streams partials; Mistral SSE streams translation tokens; TTS queues sentences as they boundary-fire. There is no "wait until done" anywhere in the path.
 
@@ -158,15 +189,16 @@ The hard barrier for non-technical users isn't the conversation — it's the API
 
 ```
 src/
-├── app/            # Language metadata, shared types
+├── app/            # Language metadata, shared types, name glossary
 ├── i18n/           # Per-half surface strings, 32 languages
 ├── store/          # Zustand: conversation, settings (persisted), network
 ├── services/
 │   ├── pipeline/   # ConversationOrchestrator — both state machines, DI wiring
 │   ├── stt/        # VoxtralRealtimeClient — WebSocket + frame protocol
+│   │               # nameRepair — phonetic glossary repair
 │   ├── translation/# MistralTranslator — SSE streaming + sentence chunks
 │   ├── tts/        # react-native-tts wrapper
-│   ├── audio/      # PCM capture
+│   ├── audio/      # PCM capture, base64 codec, level normalisation
 │   ├── vad/        # Silero VAD over onnxruntime
 │   ├── network/    # Connectivity monitor + Mistral reachability probe
 │   ├── auth/       # Key validation (GET /v1/models)

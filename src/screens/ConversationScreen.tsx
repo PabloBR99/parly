@@ -9,6 +9,10 @@ import { useConversationStore } from '../store/conversationStore';
 import { useNetworkStore } from '../store/networkStore';
 import { getOrchestrator } from '../services/pipeline/orchestrator';
 import { validateMistralApiKey } from '../services/auth/validateApiKey';
+import {
+  STREAMING_DELAY_ACCURATE_MS,
+  STREAMING_DELAY_FAST_MS,
+} from '../services/stt/VoxtralRealtimeClient';
 import type { PersonId } from '../app/types';
 import type { RootStackParamList } from '../navigation/types';
 import { HANDS_FREE_ENABLED } from '../app/featureFlags';
@@ -46,6 +50,8 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   const keyStatus = useSettingsStore(s => s.keyStatus);
   const setKeyStatus = useSettingsStore(s => s.setKeyStatus);
   const translationModel = useSettingsStore(s => s.translationModel);
+  const transcriptionMode = useSettingsStore(s => s.transcriptionMode);
+  const people = useSettingsStore(s => s.people);
   const hfDiscovered = useSettingsStore(s => s.hfDiscovered);
   const setHfDiscovered = useSettingsStore(s => s.setHfDiscovered);
   const turns = useConversationStore(s => s.turns);
@@ -67,13 +73,21 @@ export function ConversationScreen({ navigation }: Props): React.JSX.Element {
   // a real network request, so it's debounced and gated on a validated key —
   // typing a 64-char key must not fire dozens of doomed completions.
   useEffect(() => {
-    getOrchestrator().configure({ apiKey, translationModel });
+    getOrchestrator().configure({
+      apiKey,
+      translationModel,
+      sttStreamingDelayMs:
+        transcriptionMode === 'fast'
+          ? STREAMING_DELAY_FAST_MS
+          : STREAMING_DELAY_ACCURATE_MS,
+      people,
+    });
     if (!apiKey || keyStatus !== 'valid') return;
     const timer = setTimeout(() => {
       void getOrchestrator().prewarm().catch(() => {});
     }, PREWARM_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [apiKey, translationModel, keyStatus]);
+  }, [apiKey, translationModel, transcriptionMode, people, keyStatus]);
 
   // A key that was pasted but never verified gets checked silently in the
   // background: garbage flips to 'invalid' (banner + disabled discs) instead

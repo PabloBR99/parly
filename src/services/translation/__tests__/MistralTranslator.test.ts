@@ -295,6 +295,75 @@ describe('MistralTranslator.translateStream', () => {
     expect(body.temperature).toBe(0);
   });
 
+  it('carries the interpreter framing: repair obvious recognition errors', async () => {
+    const fetcher = mockFetcherOk([sseDone]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const t = new MistralTranslator(fetcher as any);
+    await t.translateStream({
+      apiKey: 'sk-key',
+      sourceText: 'nos vemos en la plaza',
+      sourceLang: 'es',
+      targetLang: 'en',
+      onSentence: () => {},
+      onDone: () => {},
+      onError: () => {},
+    });
+    const system = JSON.parse(fetcher.postStream.mock.calls[0][0].body)
+      .messages[0].content as string;
+    // What the transcript IS, so the model stops treating it as gospel...
+    expect(system).toContain('automatic speech recognition');
+    expect(system).toContain('interpreter, not');
+    // ...and the limit on that licence, so it repairs rather than invents.
+    expect(system).toContain('never invent facts');
+  });
+
+  it('puts the names and the recent exchanges in front of the model', async () => {
+    const fetcher = mockFetcherOk([sseDone]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const t = new MistralTranslator(fetcher as any);
+    await t.translateStream({
+      apiKey: 'sk-key',
+      sourceText: '¿y Cycy?',
+      sourceLang: 'es',
+      targetLang: 'en',
+      context: {
+        names: ['Cycy', 'José Antonio'],
+        history: [{ source: 'Vamos a cenar', translation: "Let's have dinner" }],
+      },
+      onSentence: () => {},
+      onDone: () => {},
+      onError: () => {},
+    });
+    const system = JSON.parse(fetcher.postStream.mock.calls[0][0].body)
+      .messages[0].content as string;
+    expect(system).toContain('Cycy, José Antonio');
+    expect(system).toContain('Vamos a cenar');
+    expect(system).toContain("Let's have dinner");
+    // Context is context: it is not a second thing to translate, and it is
+    // previous speech, so it carries the same injection surface as the turn.
+    expect(system).toContain('never to be translated again');
+    expect(system).toContain('Translate ONLY the user message');
+  });
+
+  it('says nothing about names or history when there are none', async () => {
+    const fetcher = mockFetcherOk([sseDone]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const t = new MistralTranslator(fetcher as any);
+    await t.translateStream({
+      apiKey: 'sk-key',
+      sourceText: 'hola',
+      sourceLang: 'es',
+      targetLang: 'en',
+      onSentence: () => {},
+      onDone: () => {},
+      onError: () => {},
+    });
+    const system = JSON.parse(fetcher.postStream.mock.calls[0][0].body)
+      .messages[0].content as string;
+    expect(system).not.toContain('spelled like this');
+    expect(system).not.toContain('For context only');
+  });
+
   it('does not call onDone when an error occurs', async () => {
     const fetcher = mockFetcherError(500);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -57,8 +57,12 @@ import { useConversationStore } from '../../store/conversationStore';
 import type { HfActivity } from '../../store/conversationStore';
 import type { PersonId } from '../../app/types';
 import { frameRms, publishAudioFrame, resetAudioLevel } from '../audio/audioLevelBus';
+import { decodePcm16, encodePcm16 } from '../audio/pcm';
+import { SpeechAgc } from '../audio/SpeechAgc';
 import { log } from '../log/logStore';
 import type { SegmentClose } from '../stt/VoxtralRealtimeClient';
+import { buildNameIndex, repairNames, type NameIndex } from '../stt/nameRepair';
+import { commonNamesFor } from '../../app/names';
 import { classifyError } from './errors';
 import { classifyPairText, writtenInScriptOf } from './textLangId';
 import { probeNetworkNow } from '../network/monitor';
@@ -80,7 +84,12 @@ export interface AudioCapture {
 
 export interface VoxtralLike {
   start(
-    options: { apiKey: string; model?: string; sessionMode?: boolean },
+    options: {
+      apiKey: string;
+      model?: string;
+      sessionMode?: boolean;
+      targetStreamingDelayMs?: number;
+    },
     callbacks: {
       onPartial: (text: string) => void;
       onFinal: (text: string, language?: string) => void;
@@ -108,6 +117,12 @@ export interface TranslatorLike {
     targetLang: string;
     model?: string;
     signal?: AbortSignal;
+    /** What the interpreter knows besides this sentence — see
+     *  MistralTranslator's TranslationContext. */
+    context?: {
+      names?: readonly string[];
+      history?: readonly { source: string; translation: string }[];
+    };
     onFirstToken?: () => void;
     /** Response headers arrived — the request is answered, the model is
      *  about to write. Splits connection/queue cost from generation cost. */
@@ -189,6 +204,12 @@ export interface OrchestratorConfig {
   readonly apiKey: string;
   readonly translationModel: string;
   readonly sttModel?: string;
+  /** Right context Voxtral buffers before committing words. Omitted means the
+   *  client's own default (accurate). */
+  readonly sttStreamingDelayMs?: number;
+  /** The people in this conversation — repaired towards in the transcript and
+   *  given to the translator as a glossary. */
+  readonly people?: readonly string[];
 }
 
 interface OrchestratorDeps {
@@ -219,6 +240,9 @@ const FINAL_TIMEOUT_SLOPE = 0.25;
 const FINAL_EXTRA_TIMEOUT_CAP_MS = 7_000;
 /** Min interval between hfLive store writes from streaming partials. */
 const HF_PARTIAL_WRITE_THROTTLE_MS = 150;
+/** Exchanges handed to the translator as context. Enough to resolve what the
+ *  new sentence refers to; not so many that prefill grows for nothing. */
+const HISTORY_TURNS_AS_CONTEXT = 3;
 
 /**
  * How long the streaming transcript must go without growing before we treat
@@ -465,6 +489,11 @@ class Utterance {
   /** A segment close whose answer has not arrived yet. Non-null means one is
    *  already in the air, which is the only reason to not open another. */
   closing: SegmentClose | null = null;
+  /** Whether THIS pause has already closed a segment. Distinct from `closing`,
+   *  which clears the moment the answer lands: without this, a delta arriving
+   *  after the answer would re-arm the settle check and close a second time
+   *  inside the same silence. */
+  closedThisPause = false;
   /** Duration of the pause-hint round trip, for telemetry. */
   closingMs = -1;
   /** Whether any segment was closed before the utterance ended. */
@@ -478,6 +507,19 @@ class Utterance {
   pauseHintAt: number | null = null;
   private settleTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /**
+   * Names are put right on the way IN, not on the way out.
+   *
+   * The transcript is read by four different things — the live caption, the
+   * router, the speculative translation and the turn itself — and a repair
+   * applied at only some of them would make them disagree about what was said.
+   * The speculation is the sharp edge: a translation sent on "Sisi" cannot be
+   * adopted by a turn that decided the words were "Cycy", so the head start it
+   * bought would be thrown away on exactly the utterances the glossary exists
+   * for.
+   */
+  constructor(private readonly repair: (text: string) => string = (t) => t) {}
+
   /** Everything said so far: closed segments plus whatever has streamed since. */
   text(): string {
     return joinUtterance(this.head, this.tail);
@@ -485,7 +527,7 @@ class Utterance {
 
   /** A delta arrived for the open segment. */
   noteDelta(text: string, at: number): void {
-    this.tail = text;
+    this.tail = this.repair(text);
     this.tailAt = at;
   }
 
@@ -498,7 +540,7 @@ class Utterance {
 
   /** Fold in the transcript of a segment that has just closed. */
   absorbSegment(text: string, language: string | undefined): void {
-    const trimmed = text.trim();
+    const trimmed = this.repair(text).trim();
     if (trimmed.length > 0) {
       this.head = joinUtterance(this.head, trimmed);
       // The segment's transcript covers every delta it streamed; keeping both
@@ -541,6 +583,7 @@ class Utterance {
   /** Forget the pause hint and the check it armed. */
   private forgetPauseHint(): void {
     this.pauseHintAt = null;
+    this.closedThisPause = false;
     this.clearSettleTimer();
   }
 
@@ -654,6 +697,15 @@ export class ConversationOrchestrator {
   private hfPairB: string | null = null;  // language code for person_b
   private vadBuffer: Int16Array = new Int16Array(0);
   private hfFirstAudioLogged = false;
+  /** Level normalisation in front of the transcriber only — see SpeechAgc. */
+  private readonly agc = new SpeechAgc();
+  /** Name index, rebuilt only when the glossary or the pair changes. */
+  private nameIndex: NameIndex | null = null;
+  private nameIndexKey = '';
+  /** Names put right in the transcript since the last turn was dispatched,
+   *  for the telemetry line — a repair nobody can see is a repair nobody can
+   *  check. */
+  private repairsThisTurn: string[] = [];
   /** When the current PTT hold began — scales the final-transcript wait. */
   private pttRecordStartAt: number | null = null;
   private hfLastPartialWriteAt = 0;
@@ -714,6 +766,65 @@ export class ConversationOrchestrator {
   /** Update the API key / model. Safe to call between turns. */
   configure(config: OrchestratorConfig): void {
     this.config = config;
+  }
+
+  // ── Transcript repair and interpreter context ─────────────────────────────
+
+  /** The languages in play, as primary subtags. Hands-free knows its pair;
+   *  push-to-talk knows the turn it is in the middle of. */
+  private currentLangs(): readonly string[] {
+    const pair = this.hfPairA && this.hfPairB ? [this.hfPairA, this.hfPairB] : null;
+    const ptt = this.currentArgs
+      ? [this.currentArgs.sourceLang, this.currentArgs.targetLang]
+      : null;
+    const langs = pair ?? ptt ?? [];
+    return langs.map(primarySubtag);
+  }
+
+  /**
+   * Rewrite names to their glossary spelling. Cheap by construction (a
+   * phonetic-key lookup per word), so it can sit on the delta path where every
+   * reader of the transcript sees the same words — see Utterance's constructor.
+   */
+  private repairTranscript(text: string): string {
+    const people = this.config?.people ?? [];
+    const langs = this.currentLangs();
+    const key = `${people.join('|')}::${langs.join(',')}`;
+    if (this.nameIndex === null || key !== this.nameIndexKey) {
+      this.nameIndex = buildNameIndex(people, commonNamesFor(langs));
+      this.nameIndexKey = key;
+    }
+    const result = repairNames(text, this.nameIndex, langs);
+    for (const r of result.repairs) {
+      const note = `${r.from}→${r.to}`;
+      if (!this.repairsThisTurn.includes(note)) this.repairsThisTurn.push(note);
+    }
+    return result.text;
+  }
+
+  /**
+   * What the translator gets besides the sentence: who is in the room, and
+   * what has already been said.
+   *
+   * The history is what makes "pragmatic" possible rather than reckless. An
+   * interpreter asked to repair an obvious recognition error needs something
+   * to judge "obvious" against, and the previous exchange is that something —
+   * without it, the instruction to interpret rather than transcribe is an
+   * invitation to invent. Read at send time, so it never includes the turn
+   * being translated.
+   */
+  private translationContext(): {
+    names?: readonly string[];
+    history?: readonly { source: string; translation: string }[];
+  } | undefined {
+    const names = this.config?.people ?? [];
+    const history = this.store
+      .getState()
+      .turns.filter((t) => t.sourceText.length > 0 && t.translatedText.length > 0)
+      .slice(-HISTORY_TURNS_AS_CONTEXT)
+      .map((t) => ({ source: t.sourceText, translation: t.translatedText }));
+    if (names.length === 0 && history.length === 0) return undefined;
+    return { names, history };
   }
 
   /**
@@ -791,6 +902,7 @@ export class ConversationOrchestrator {
     this.activeTurnId = id;
     this.currentArgs = args;
     this.pttRecordStartAt = Date.now();
+    this.repairsThisTurn = [];
     this.ttsChunkPromises = [];
     this.turnCompletionPromise = new Promise<void>((resolve) => {
       this.resolveTurnCompletion = resolve;
@@ -799,8 +911,9 @@ export class ConversationOrchestrator {
     this.deps.tts.prewarm(args.targetLang);
 
     try {
+      this.agc.reset();
       this.deps.audioCapture.startStreaming((base64Pcm) => {
-        this.deps.voxtral.feedAudio(base64Pcm);
+        this.deps.voxtral.feedAudio(this.level(base64Pcm));
       });
     } catch (e) {
       this.failTurn(id, `Audio capture failed: ${stringifyError(e)}`);
@@ -809,7 +922,11 @@ export class ConversationOrchestrator {
 
     try {
       await this.deps.voxtral.start(
-        { apiKey: cfg.apiKey, model: cfg.sttModel ?? DEFAULT_STT_MODEL },
+        {
+          apiKey: cfg.apiKey,
+          model: cfg.sttModel ?? DEFAULT_STT_MODEL,
+          targetStreamingDelayMs: cfg.sttStreamingDelayMs,
+        },
         {
           onPartial: (text) => this.handlePartial(id, text),
           onFinal: (text) => this.handleFinal(id, text),
@@ -958,6 +1075,7 @@ export class ConversationOrchestrator {
     // 2. Start audio capture with dual routing. Stop first to guarantee a clean
     //    state — a failed PTT turn may have left streaming=true (failTurn path).
     try { await this.deps.audioCapture.stopStreaming(); } catch { /* noop */ }
+    this.agc.reset();
     this.deps.audioCapture.startStreaming(this.hfOnAudio);
 
     // 3. Open persistent Voxtral session.
@@ -966,6 +1084,7 @@ export class ConversationOrchestrator {
         apiKey: cfg.apiKey,
         model: cfg.sttModel ?? DEFAULT_STT_MODEL,
         sessionMode: true,
+        targetStreamingDelayMs: cfg.sttStreamingDelayMs,
       },
       {
         onPartial: (text) => this.handleHfPartial(text),
@@ -1082,6 +1201,7 @@ export class ConversationOrchestrator {
     if (!this.hfEnabled || !this.hfPaused) return;
     log.info('[orch/hf] resuming — network online');
     try {
+      this.agc.reset();
       this.deps.audioCapture.startStreaming(this.hfOnAudio);
     } catch (e) {
       log.error('[orch/hf] resume audio capture failed', e instanceof Error ? e : new Error(String(e)));
@@ -1115,11 +1235,27 @@ export class ConversationOrchestrator {
     // phone hearing itself? Only the room may reach the transcriber, and only
     // the room may drive the seam wave.
     const fromTheRoom = this.hfState !== 'hf-speaking' && this.hfState !== 'hf-cooldown';
+    // Decoded once for both consumers, and they get different audio: the
+    // transcriber gets it levelled, the detector and the meter get it raw.
+    // The VAD's thresholds are calibrated against the room, and normalising
+    // underneath them would move the one detector that must not drift.
+    const pcm = decodePcm16(base64Pcm);
     if (fromTheRoom) {
-      this.deps.voxtral.feedAudio(base64Pcm);
+      const levelled = this.agc.process(pcm);
+      this.deps.voxtral.feedAudio(
+        levelled === pcm ? base64Pcm : encodePcm16(levelled),
+      );
     }
-    this.feedAudioToVad(base64Pcm, fromTheRoom);
+    this.feedAudioToVad(pcm, fromTheRoom);
   };
+
+  /** Level one push-to-talk chunk. Same normalisation as hands-free, minus the
+   *  echo gate — a held button never overlaps playback. */
+  private level(base64Pcm: string): string {
+    const pcm = decodePcm16(base64Pcm);
+    const levelled = this.agc.process(pcm);
+    return levelled === pcm ? base64Pcm : encodePcm16(levelled);
+  }
 
   /**
    * Abandon whatever is being said. One call, because there is one thing to
@@ -1151,7 +1287,8 @@ export class ConversationOrchestrator {
     // A new object, not a reset: whatever the last utterance still has in the
     // air now answers to something nothing points at, and is dropped.
     this.endHfUtterance();
-    this.hfUtterance = new Utterance();
+    this.hfUtterance = new Utterance((text) => this.repairTranscript(text));
+    this.repairsThisTurn = [];
     this.setHfState('hf-capturing');
   }
 
@@ -1184,6 +1321,7 @@ export class ConversationOrchestrator {
         sourceLang,
         targetLang,
         model: cfg.translationModel,
+        context: this.translationContext(),
         onRequestOpen: () => run.noteOpen(Date.now()),
         onFirstToken: () => run.noteFirstToken(Date.now()),
         onDelta: (fullSoFar) => run.noteDelta(fullSoFar),
@@ -1255,8 +1393,37 @@ export class ConversationOrchestrator {
     const u = this.hfUtterance;
     if (!u || !this.current(u)) return;
     u.pauseHintAt = lastSpeechAt;
-    this.closeSegment(u);
-    u.armSettleCheck(() => this.evaluateEndpoint(u));
+    u.armSettleCheck(() => this.closePause(u));
+  }
+
+  /**
+   * The pause hint's answer: close the segment, then read what it says.
+   *
+   * The close used to go out the instant the hint fired, which put a segment
+   * boundary in the middle of whatever the server was still emitting. Two
+   * things happen at that boundary, and both cost words. The flush ends the
+   * segment, so the next one starts with no memory of the sentence it is
+   * continuing — and Voxtral is an LLM-based recogniser, so the words already
+   * transcribed are exactly what it leans on when the audio is ambiguous,
+   * which is what fast, reduced, run-together speech IS. And if the 280 ms of
+   * silence was not a pause between words but a stop closure inside one, the
+   * boundary lands mid-word: neither half is a word, and both halves get
+   * written as something that is.
+   *
+   * Waiting for the transcript to stop growing removes both. It costs nothing
+   * on the case the early close was built for — a short utterance streams no
+   * deltas at all, so the check fires immediately — and up to
+   * PARTIAL_SETTLED_MS on the case where words are still arriving, which is
+   * precisely the case where cutting is a bad idea. Speech resuming cancels
+   * it, so a breath now costs no boundary at all rather than one per breath.
+   */
+  private closePause(u: Utterance): void {
+    if (u.pauseHintAt === null || !this.current(u)) return;
+    if (!u.closedThisPause) {
+      u.closedThisPause = true;
+      this.closeSegment(u);
+    }
+    this.evaluateEndpoint(u);
   }
 
   /**
@@ -1859,6 +2026,14 @@ export class ConversationOrchestrator {
       configuredPair: telemetry.configuredPair,
       routingResult: telemetry.routingResult,
       utteranceWordCount: sourceText.split(/\s+/).filter(Boolean).length,
+      // What the microphone actually delivered, and what was done about it.
+      // A conversation that transcribes badly at -50 dBFS is a placement
+      // problem, not a model problem, and there was no way to tell before.
+      micDbfs: Math.round(this.agc.inputDbfs),
+      agcGainDb: Math.round(this.agc.currentGainDb * 10) / 10,
+      // Names put right on the way in. Empty is the normal case; a repair that
+      // fires on ordinary speech has to be visible somewhere to be caught.
+      nameRepairs: this.repairsThisTurn,
     };
     log.info(`[hf_turn] ${JSON.stringify(payload)}`);
   }
@@ -1885,8 +2060,8 @@ export class ConversationOrchestrator {
     // through a throttle, a sentence still arriving would look finished.
     u.noteDelta(trimmed, now);
     // The transcript just grew, so it has not settled after all — push the
-    // check back rather than acting on a half-delivered sentence.
-    u.armSettleCheck(() => this.evaluateEndpoint(u));
+    // check back rather than closing through a half-delivered sentence.
+    u.armSettleCheck(() => this.closePause(u));
     if (now - this.hfLastPartialWriteAt < HF_PARTIAL_WRITE_THROTTLE_MS) return;
     this.hfLastPartialWriteAt = now;
     this.writeHfLive(u);
@@ -1949,7 +2124,12 @@ export class ConversationOrchestrator {
 
     try {
       await this.deps.voxtral.start(
-        { apiKey: cfg.apiKey, model: cfg.sttModel ?? DEFAULT_STT_MODEL, sessionMode: true },
+        {
+          apiKey: cfg.apiKey,
+          model: cfg.sttModel ?? DEFAULT_STT_MODEL,
+          sessionMode: true,
+          targetStreamingDelayMs: cfg.sttStreamingDelayMs,
+        },
         {
           onPartial: (text) => this.handleHfPartial(text),
           onFinal: () => {},
@@ -1971,33 +2151,26 @@ export class ConversationOrchestrator {
   // ── VAD audio routing ─────────────────────────────────────────────────────
 
   /**
-   * Decode one capture chunk and drain it into the VAD as 512-sample frames.
+   * Drain one capture chunk into the VAD as 512-sample frames.
+   *
+   * These are the RAW samples, before SpeechAgc — the detector's thresholds
+   * are calibrated against the room, and a normaliser underneath them would
+   * silently re-scale the one measurement the app cannot afford to have drift.
    *
    * `fromTheRoom` also gates the audio-level meter: the same frames that feed
    * turn detection carry the loudness that drives the seam wave, so the level
-   * is published here rather than in a second decode pass. Frame cadence IS
-   * meter cadence — 32 ms, ~31 updates/s, which is what makes the wave track
-   * a voice instead of lagging behind it.
+   * is published here rather than in a second pass over the chunk. Frame
+   * cadence IS meter cadence — 32 ms, ~31 updates/s, which is what makes the
+   * wave track a voice instead of lagging behind it.
    */
-  private feedAudioToVad(base64Pcm: string, fromTheRoom: boolean): void {
+  private feedAudioToVad(incoming: Int16Array, fromTheRoom: boolean): void {
     if (!this.deps.vad || !this.hfEnabled || this.hfPaused) return;
+    if (incoming.length === 0) return;
 
     if (!this.hfFirstAudioLogged) {
       this.hfFirstAudioLogged = true;
       log.info('[orch/hf] audio→vad: first chunk received');
     }
-
-    // Decode base64 → bytes → Int16 PCM. Round byteLength down to the
-    // nearest even count so a malformed/truncated chunk doesn't throw
-    // RangeError when constructing the Int16Array.
-    const binaryStr = atob(base64Pcm);
-    const bytes = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) {
-      bytes[i] = binaryStr.charCodeAt(i);
-    }
-    const safeLen = bytes.byteLength & ~1;
-    if (safeLen === 0) return;
-    const incoming = new Int16Array(bytes.buffer, 0, safeLen / 2);
 
     // Append to frame buffer and drain 512-sample frames. Cap the buffer
     // at MAX_VAD_BUFFER samples so a wedged inferencer can't OOM the heap.
@@ -2029,12 +2202,14 @@ export class ConversationOrchestrator {
   private handlePartial(turnId: string, partial: string): void {
     if (turnId !== this.activeTurnId) return;
     const store = this.store.getState();
-    store.updateTurn(turnId, { sourceText: partial });
+    // Repaired here as well as in the final, so the speaker watching their own
+    // words appear never sees a name spelled one way and then another.
+    store.updateTurn(turnId, { sourceText: this.repairTranscript(partial) });
   }
 
   private handleFinal(turnId: string, finalText: string): void {
     if (turnId !== this.activeTurnId) return;
-    void this.dispatchTranslation(turnId, finalText).catch((e) => {
+    void this.dispatchTranslation(turnId, this.repairTranscript(finalText)).catch((e) => {
       this.failTurn(turnId, `Pipeline error: ${stringifyError(e)}`);
     });
   }
@@ -2094,6 +2269,7 @@ export class ConversationOrchestrator {
       sourceLang: args.sourceLang,
       targetLang: args.targetLang,
       model: cfg.translationModel,
+      context: this.translationContext(),
       onFirstToken: () => {
         this.deps.tts.prewarm(args.targetLang);
       },

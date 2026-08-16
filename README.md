@@ -29,11 +29,14 @@ Built on [Mistral](https://mistral.ai)'s realtime APIs — Voxtral for streaming
 - **Long turns welcome** — live partial transcripts while you speak, adaptive timeouts, and graceful salvage if the connection hiccups mid-monologue.
 - **Scrollable history** — each side can scroll back through the conversation in their own language, then jump back to live.
 - **Interruptible** — tap the translation while it's being spoken to skip the readback.
+- **Names spelled right** — proper nouns are what speech recognition gets wrong most, and the one thing a realtime socket cannot be biased towards. Parly keeps a glossary of the people in the conversation, repairs the transcript towards it phonetically, and hands it to the translator as well.
 - **Private by design** — no backend, no telemetry, no accounts. The only server the app ever talks to is `api.mistral.ai`, under your own key.
 
 ## Languages
 
 English, Spanish, French, German, Italian, Portuguese, Dutch, Russian, Ukrainian, Polish, Czech, Greek, Turkish, Arabic, Hebrew, Persian, Hindi, Bengali, Urdu, Chinese, Japanese, Korean, Vietnamese, Thai, Indonesian, Swedish, Norwegian, Danish, Finnish, Romanian, Hungarian and Swahili — any pair, in either direction.
+
+Transcription quality is not flat across that list. Voxtral's realtime model is trained and evaluated on thirteen: **English, Spanish, French, German, Italian, Portuguese, Dutch, Russian, Arabic, Hindi, Chinese, Japanese and Korean**. The rest still work — the surface, the routing and the translation are all built for them — but the transcript is where the difference shows.
 
 Spoken output uses the voices installed on the device; if the OS has no voice for a language, Parly shows the text and tells the listener rather than reading it with a wrong-language voice.
 
@@ -59,6 +62,8 @@ npm run android    # in a second terminal, with a device/emulator attached
 mic ──► Voxtral realtime (WebSocket) ──► Mistral chat (SSE) ──► OS text-to-speech
          streaming transcription          streaming translation     spoken per sentence
 ```
+
+Transcription is tuned for the word, not the millisecond: the recogniser gets 480 ms of right context before it commits (Mistral's own figure for where the realtime model matches their offline one), and the mid-utterance flush that shortens the wait is held until the transcript stops growing, so it can never cut through a word still being written. Settings → *Transcription* trades that back for ~160 ms if you want it.
 
 A strict half-duplex state machine drives each turn: the microphone and the speaker are never live at the same time, so the phone can't transcribe its own voice. In hands-free mode, on-device VAD detects when you stop talking (600 ms of silence) and dispatches the turn; while the phone speaks, the mic is gated and re-armed clean afterwards. Turn direction is decided from the transcript itself, not just the audio's language tag — which is what keeps same-language misdetections from echo-looping.
 

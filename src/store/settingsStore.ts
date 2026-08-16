@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import * as RNFS from '@dr.pogodin/react-native-fs';
+import { DEFAULT_PEOPLE } from '../app/names';
 
 /** Per-speaker config — language is the primary axis; displayName is UI cosmetic. */
 export interface PersonConfig {
@@ -29,12 +30,34 @@ export type TranslationModelId = (typeof TRANSLATION_MODELS)[number]['id'];
  */
 export type KeyStatus = 'none' | 'unvalidated' | 'valid' | 'invalid';
 
+/**
+ * How much right context Voxtral gets before it commits words.
+ *  - 'accurate' — 480 ms, where Mistral says the realtime model matches their
+ *                 offline one. The default: this app is used across a table by
+ *                 people who speak quickly, and a wrong word costs more than
+ *                 160 ms.
+ *  - 'fast'     — 320 ms. Every reply arrives ~160 ms sooner and ordinary
+ *                 sentences still transcribe fine; fast or slurred speech is
+ *                 where the difference shows up.
+ */
+export type TranscriptionMode = 'accurate' | 'fast';
+
+export const TRANSCRIPTION_MODES = [
+  { id: 'accurate', label: 'Accurate  ·  recommended' },
+  { id: 'fast', label: 'Fast  ·  ~160 ms sooner' },
+] as const satisfies ReadonlyArray<{ id: TranscriptionMode; label: string }>;
+
 interface SettingsState {
   readonly personA: PersonConfig;
   readonly personB: PersonConfig;
   readonly mistralApiKey: string;
   readonly keyStatus: KeyStatus;
   readonly translationModel: TranslationModelId;
+  readonly transcriptionMode: TranscriptionMode;
+  /** The people in this conversation, spelled the way they should appear.
+   *  Feeds both the phonetic repair of the transcript and the translator's
+   *  glossary — see src/app/names.ts. */
+  readonly people: readonly string[];
   readonly languagePairConfigured: boolean;
   /** Whether this user has ever engaged the hands-free control. Until true,
    *  the seam wave carries a labelled hint — an unlabelled 66×28 pill is
@@ -51,6 +74,8 @@ interface SettingsActions {
   hydrateMistralApiKey: (key: string) => void;
   setKeyStatus: (status: KeyStatus) => void;
   setTranslationModel: (model: TranslationModelId) => void;
+  setTranscriptionMode: (mode: TranscriptionMode) => void;
+  setPeople: (people: readonly string[]) => void;
   setLanguagePairConfigured: (v: boolean) => void;
   setHfDiscovered: (v: boolean) => void;
 }
@@ -61,6 +86,8 @@ const initialState: SettingsState = {
   mistralApiKey: '',
   keyStatus: 'none',
   translationModel: 'mistral-small-latest',
+  transcriptionMode: 'accurate',
+  people: DEFAULT_PEOPLE,
   languagePairConfigured: false,
   hfDiscovered: false,
 };
@@ -118,6 +145,10 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setTranslationModel: translationModel => set({ translationModel }),
 
+      setTranscriptionMode: transcriptionMode => set({ transcriptionMode }),
+
+      setPeople: people => set({ people }),
+
       setLanguagePairConfigured: languagePairConfigured =>
         set({ languagePairConfigured }),
 
@@ -132,6 +163,8 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         personB: state.personB,
         keyStatus: state.keyStatus,
         translationModel: state.translationModel,
+        transcriptionMode: state.transcriptionMode,
+        people: state.people,
         languagePairConfigured: state.languagePairConfigured,
         hfDiscovered: state.hfDiscovered,
       }),

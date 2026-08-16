@@ -54,11 +54,26 @@ const SAMPLE_RATE = 16_000;
 // 4 s, not 8: on a degraded network nobody is still holding the disc at
 // 8 seconds — fail fast into the speaker-side retry notice instead.
 const HANDSHAKE_TIMEOUT_MS = 4_000;
-// Server-side audio buffering before emitting a transcript (session/HF mode).
-// Voxtral docs cite 480 ms as the accuracy sweet-spot; 320 trims ~160 ms off
-// the flush→final tail for snappier hands-free turns, at a marginal accuracy
-// cost. Raise back toward 480 if transcripts degrade.
-export const TARGET_STREAMING_DELAY_MS = 320;
+// Server-side audio buffering before the model commits words — the parameter
+// the whole accuracy/latency trade-off runs through.
+//
+// It is right context. Voxtral decides each word with this much of the
+// following audio in hand, and Mistral's own figure is that at 480 ms the
+// realtime model matches their offline batch model (within 1-2 WER points on
+// long- and short-form English); below it the curve turns down. It does not
+// degrade evenly across speakers either: fast conversational speech is
+// *reduced* speech — coarticulated, elided, consonants swallowed — so its
+// acoustic evidence per word is thinner and it leans hardest on exactly the
+// context this parameter buys.
+//
+// This app ran at 320 for one release, bought with a comment calling the
+// accuracy cost "marginal" on no measurement at all, while the latency it
+// bought was measured to the millisecond. 480 is now the default and the
+// 320 is behind a Settings choice for anyone who wants the 160 ms back.
+// `scripts/voxtral-wer-bench.mjs` is how to decide between them with numbers.
+export const STREAMING_DELAY_ACCURATE_MS = 480;
+export const STREAMING_DELAY_FAST_MS = 320;
+export const TARGET_STREAMING_DELAY_MS = STREAMING_DELAY_ACCURATE_MS;
 
 export type StreamingState = 'idle' | 'connecting' | 'streaming' | 'ending' | 'closed';
 
@@ -87,6 +102,9 @@ export interface StreamingStartOptions {
   readonly model?: string;
   /** Keep the WS open across multiple utterances (hands-free mode). */
   readonly sessionMode?: boolean;
+  /** Right context the server buffers before committing words. Defaults to
+   *  STREAMING_DELAY_ACCURATE_MS — see that constant for what it costs. */
+  readonly targetStreamingDelayMs?: number;
 }
 
 /**
@@ -126,6 +144,7 @@ export class VoxtralRealtimeClient {
   private detectedLanguage: string | undefined;
   private sessionReady = false;
   private sessionMode = false;
+  private targetStreamingDelayMs = STREAMING_DELAY_ACCURATE_MS;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
   /** Captured so end()/cancel() can reject a pending start() during the
    *  'connecting' phase. Without this, an early abort calls cleanup() and
@@ -177,6 +196,8 @@ export class VoxtralRealtimeClient {
     this.detectedLanguage = undefined;
     this.sessionReady = false;
     this.sessionMode = options.sessionMode ?? false;
+    this.targetStreamingDelayMs =
+      options.targetStreamingDelayMs ?? STREAMING_DELAY_ACCURATE_MS;
     this.preSessionChunkQueue = [];
     this.flushOnReady = false;
 
@@ -191,7 +212,10 @@ export class VoxtralRealtimeClient {
     }
     const headers = { Authorization: `Bearer ${options.apiKey.trim()}` };
 
-    log.info(`[voxtral] connecting model=${model} sessionMode=${this.sessionMode}`);
+    log.info(
+      `[voxtral] connecting model=${model} sessionMode=${this.sessionMode} ` +
+        `delay=${this.targetStreamingDelayMs}ms`,
+    );
 
     let ws: WebSocketLike;
     try {
@@ -225,16 +249,21 @@ export class VoxtralRealtimeClient {
       ws.onopen = () => {
         if (gen !== this.generation) return;
         log.info('[voxtral] onopen — sending session.update');
-        // Voxtral's session schema only accepts audio_format (and optional
-        // target_streaming_delay_ms). Extra fields are rejected with Pydantic
-        // extra_forbidden, so we only include the delay in session mode where
-        // the lower latency matters most.
+        // Voxtral's session schema accepts audio_format and
+        // target_streaming_delay_ms, and nothing else — extra fields come back
+        // as a Pydantic extra_forbidden error. In particular there is no
+        // language hint and no vocabulary biasing on this socket; those exist
+        // only on the HTTP transcription endpoint, which wants a finished file.
+        // That is the reason names are repaired downstream (see nameRepair)
+        // rather than asked for here.
+        //
+        // The delay is sent in BOTH modes now. Push-to-talk used to leave it to
+        // the server default, which meant the two modes transcribed under
+        // different conditions and neither was written down anywhere.
         const session: Record<string, unknown> = {
           audio_format: { encoding: 'pcm_s16le', sample_rate: SAMPLE_RATE },
+          target_streaming_delay_ms: this.targetStreamingDelayMs,
         };
-        if (this.sessionMode) {
-          session.target_streaming_delay_ms = TARGET_STREAMING_DELAY_MS;
-        }
         try {
           ws.send(JSON.stringify({ type: 'session.update', session }));
         } catch (e) {

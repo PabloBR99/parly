@@ -2066,3 +2066,153 @@ describe('ConversationOrchestrator (a direction nobody had evidence for)', () =>
     expect(m.ttsCalls).toEqual([{ text: 'Good morning, how are you?', language: 'en' }]);
   });
 });
+
+// ── The pause hint no longer cuts through a sentence ─────────────────────────
+//
+// Closing the segment IS a cost, not just a round trip started early. The flush
+// ends the segment, so the words after it are recognised with no memory of the
+// ones before — and Voxtral leans on exactly that when the audio is ambiguous,
+// which is what quick, run-together speech is. And 280 ms of quiet is not
+// necessarily a gap between words; inside one, the cut lands mid-word and
+// neither half is a word any more.
+
+describe('ConversationOrchestrator (early close, gated)', () => {
+  function makeHf(people?: readonly string[]) {
+    const m = makeMocks();
+    const o = new ConversationOrchestrator(m);
+    o.configure({ apiKey: 'sk-test', translationModel: 'mistral-small-latest', people });
+    m.translator.translateStream.mockImplementation(async (args) => {
+      args.onFirstToken?.();
+      args.onSentence('translated');
+      args.onDone('translated');
+    });
+    return { m, o };
+  }
+
+  const after = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+  it('waits for the transcript to stop growing before closing the segment', async () => {
+    const { m, o } = makeHf();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    // A delta landed just now — mid-clause, so the turn will not end here.
+    m.fireVoxtralPartial('Buenos días, quería preguntarte');
+    m.fireVadPause();
+    await after(20);
+
+    // Nothing sent yet: the server is still emitting for audio it already has,
+    // and a flush now would cut through it.
+    expect(m.voxtral.closeSegment).not.toHaveBeenCalled();
+
+    await after(200);
+    expect(m.voxtral.closeSegment).toHaveBeenCalledTimes(1);
+  });
+
+  it('costs no segment boundary at all when the speaker was drawing breath', async () => {
+    const { m, o } = makeHf();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVoxtralPartial('Buenos días, quería preguntarte');
+    m.fireVadPause();
+    m.fireVadResume();
+    await after(250);
+
+    expect(m.voxtral.closeSegment).not.toHaveBeenCalled();
+  });
+
+  it('still closes immediately when nothing has streamed at all', async () => {
+    // The case the early close was built for: a short utterance streams no
+    // delta, so the words exist nowhere until the round trip runs. Gating on a
+    // transcript that never grew costs nothing, and must not cost anything.
+    const { m, o } = makeHf();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVadPause();
+    await after(20);
+
+    expect(m.voxtral.closeSegment).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets each new pause open its own close', async () => {
+    const { m, o } = makeHf();
+    await o.enableHandsFree('es', 'en');
+
+    m.fireVadStart();
+    m.fireVoxtralPartial('Buenos días, quería preguntarte');
+    m.fireVadPause();
+    await after(200);
+    expect(m.voxtral.closeSegment).toHaveBeenCalledTimes(1);
+
+    // The answer lands, the speaker carries on, and pauses again.
+    m.resolveFlush('Buenos días, quería preguntarte', 'es');
+    m.fireVadResume();
+    await after(20);
+    m.fireVoxtralDelta(' una cosa sobre el hotel');
+    m.fireVadPause();
+    await after(200);
+
+    expect(m.voxtral.closeSegment).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── Names, and what the interpreter is told ──────────────────────────────────
+
+describe('ConversationOrchestrator (names and context)', () => {
+  function makeHf(people: readonly string[]) {
+    const m = makeMocks();
+    const o = new ConversationOrchestrator(m);
+    o.configure({ apiKey: 'sk-test', translationModel: 'mistral-small-latest', people });
+    m.translator.translateStream.mockImplementation(async (args) => {
+      args.onFirstToken?.();
+      args.onSentence('translated');
+      args.onDone('translated');
+    });
+    return { m, o };
+  }
+
+  const settle = () => new Promise<void>(r => setTimeout(r, 200));
+  /** Long enough for the turn AND the 250 ms cooldown behind it, so the next
+   *  speech_start is not swallowed by a state machine still putting the last
+   *  turn away. */
+  const turnDone = () => new Promise<void>(r => setTimeout(r, 400));
+
+  /** One utterance, ending on silence, taken from the settled transcript. */
+  async function say(m: ReturnType<typeof makeMocks>, text: string) {
+    m.fireVadStart();
+    m.fireVoxtralPartial(text);
+    await settle();
+    m.fireVadEnd();
+    await turnDone();
+  }
+
+  it('repairs the name before anything reads the transcript', async () => {
+    const { m, o } = makeHf(['Cycy']);
+    await o.enableHandsFree('es', 'en');
+
+    await say(m, 'Buenos días, ¿qué tal está Sisi?');
+
+    const turn = useConversationStore.getState().turns.at(-1);
+    expect(turn?.sourceText).toBe('Buenos días, ¿qué tal está Cycy?');
+    const sent = m.translator.translateStream.mock.calls.map(c => c[0].sourceText);
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent.every(t => !t.includes('Sisi'))).toBe(true);
+  });
+
+  it('hands the translator the names and the exchange before this one', async () => {
+    const { m, o } = makeHf(['Cycy']);
+    await o.enableHandsFree('es', 'en');
+
+    await say(m, 'Buenos días, ¿qué tal estás?');
+    await say(m, 'Muy bien, gracias, ¿y tú qué tal?');
+
+    const last = m.translator.translateStream.mock.calls.at(-1)![0];
+    expect(last.context?.names).toEqual(['Cycy']);
+    expect(last.context?.history?.at(-1)).toEqual({
+      source: 'Buenos días, ¿qué tal estás?',
+      translation: 'translated',
+    });
+  });
+});

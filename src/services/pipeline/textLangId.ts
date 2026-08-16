@@ -418,6 +418,40 @@ function lexScore(lowerText: string, tokens: readonly string[], lang: string): n
 }
 
 /**
+ * Whether `token` is a high-frequency function word in any of `langs`.
+ *
+ * The profiles above exist to route a turn, but they are also the only list in
+ * the app of "words an ordinary sentence is made of" — which is exactly what
+ * the name repair needs to leave alone. Reusing them means a word that helps
+ * decide the language can never simultaneously be read as somebody's name.
+ *
+ * `langs` are primary subtags; unknown ones contribute nothing.
+ */
+export function isFunctionWord(token: string, langs: readonly string[]): boolean {
+  if (token.length === 0 || langs.length === 0) return false;
+  const lower = token.toLowerCase().replace(/’/g, "'");
+  for (const lang of langs) {
+    const set = functionWordSet(lang);
+    if (set === null) continue;
+    if (set.has(lower)) return true;
+    const apos = lower.indexOf("'");
+    if (apos > 0 && set.has(lower.slice(0, apos))) return true;
+  }
+  return false;
+}
+
+const functionWordCache = new Map<string, ReadonlySet<string> | null>();
+
+function functionWordSet(lang: string): ReadonlySet<string> | null {
+  const cached = functionWordCache.get(lang);
+  if (cached !== undefined) return cached;
+  const words = STOPWORDS[lang];
+  const set = words ? new Set(words) : null;
+  functionWordCache.set(lang, set);
+  return set;
+}
+
+/**
  * Classify a transcript as pair language A or B, or abstain (null).
  * `langA`/`langB` must be primary subtags ("es", not "es-MX").
  */

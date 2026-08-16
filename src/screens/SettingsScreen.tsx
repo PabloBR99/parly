@@ -15,7 +15,12 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { TRANSLATION_MODELS, useSettingsStore } from '../store/settingsStore';
+import {
+  TRANSCRIPTION_MODES,
+  TRANSLATION_MODELS,
+  useSettingsStore,
+} from '../store/settingsStore';
+import { formatPeople, parsePeople } from '../app/names';
 import { useConversationStore } from '../store/conversationStore';
 import { validateMistralApiKey, type KeyValidation } from '../services/auth/validateApiKey';
 import { log } from '../services/log/logStore';
@@ -46,7 +51,24 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
   const setKeyStatus = useSettingsStore(s => s.setKeyStatus);
   const translationModel = useSettingsStore(s => s.translationModel);
   const setTranslationModel = useSettingsStore(s => s.setTranslationModel);
+  const transcriptionMode = useSettingsStore(s => s.transcriptionMode);
+  const setTranscriptionMode = useSettingsStore(s => s.setTranscriptionMode);
+  const people = useSettingsStore(s => s.people);
+  const setPeople = useSettingsStore(s => s.setPeople);
   const clearConversation = useConversationStore(s => s.clear);
+
+  // Committed on blur, not on every keystroke: each commit rebuilds the name
+  // index and re-configures the pipeline, and neither is anyone's business
+  // halfway through typing a name.
+  const [draftPeople, setDraftPeople] = useState(() => formatPeople(people));
+
+  // The settings store hydrates from disk asynchronously, so the first render
+  // of this screen can carry the seeded defaults rather than the saved list.
+  // Without this the field would show the wrong names and — worse — blurring
+  // it would commit them over the saved ones.
+  useEffect(() => {
+    setDraftPeople(formatPeople(people));
+  }, [people]);
 
   const [keyValidation, setKeyValidation] = useState<KeyValidation | null>(null);
   const [validating, setValidating] = useState(false);
@@ -374,6 +396,64 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
                 })}
               </Section>
 
+              <Section label="TRANSCRIPTION">
+                {TRANSCRIPTION_MODES.map(m => {
+                  const selected = m.id === transcriptionMode;
+                  return (
+                    <Pressable
+                      key={m.id}
+                      onPress={() => {
+                        haptics.tick();
+                        setTranscriptionMode(m.id);
+                      }}
+                      accessibilityRole="radio"
+                      accessibilityLabel={m.label}
+                      accessibilityState={{ selected }}
+                      style={({ pressed }) => [
+                        styles.modelRow,
+                        pressed && styles.modelRowPressed,
+                        selected && styles.modelRowSelected,
+                      ]}>
+                      <View
+                        style={[styles.modelRadio, selected && styles.modelRadioSelected]}
+                      />
+                      <Text variant="body" tone={selected ? 'fg' : 'fgMuted'}>
+                        {m.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+                <Text variant="serifSmall" tone="fgFaint" style={styles.hintLine}>
+                  Accurate gives the recogniser more of the sentence before it
+                  commits to a word. Fast answers sooner and slips more on quick
+                  speech.
+                </Text>
+              </Section>
+
+              <Section label="NAMES">
+                <Surface style={styles.editInputCard}>
+                  <TextInput
+                    value={draftPeople}
+                    onChangeText={setDraftPeople}
+                    onBlur={() => setPeople(parsePeople(draftPeople))}
+                    onSubmitEditing={() => setPeople(parsePeople(draftPeople))}
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                    spellCheck={false}
+                    multiline
+                    style={styles.editInput}
+                    placeholder="Ana, Bruno, José Antonio"
+                    placeholderTextColor={color.fgGhost}
+                    accessibilityLabel="Names used in this conversation"
+                  />
+                </Surface>
+                <Text variant="serifSmall" tone="fgFaint" style={styles.hintLine}>
+                  Who is in the conversation, spelled the way you want to see
+                  them. Names are what speech recognition gets wrong most, and
+                  this is what it corrects towards.
+                </Text>
+              </Section>
+
               <Section label="CONVERSATION">
                 <Button
                   label="Clear history"
@@ -402,6 +482,7 @@ export function SettingsScreen({ navigation }: Props): React.JSX.Element {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: color.bg },
+  hintLine: { marginTop: space.sm, lineHeight: 18 },
   flex: { flex: 1 },
   content: {
     paddingHorizontal: space.xl,
