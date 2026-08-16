@@ -1,42 +1,29 @@
 // SpeechAgc — a slow, speech-gated level normaliser in front of the transcriber.
 //
-// Why there is no gain control anywhere else:
-//   The capture path moved from VOICE_COMMUNICATION (source 7) to
-//   VOICE_RECOGNITION (source 6) because 7's processing was hurting the
-//   transcript — its noise suppressor deleted quiet speech and its AGC drove
-//   ordinary speech to full scale (maxAmp=1.000, measured on device). Source 6
-//   offers none of that, which was the point. The side effect is that the level
-//   reaching Voxtral is now whatever the room gives it, and the room is a phone
-//   lying flat on a table between two people: far-field, 40-60 cm, and a soft
-//   speaker can land 25 dB below a loud one.
+// Capture moved from VOICE_COMMUNICATION to VOICE_RECOGNITION because the
+// former's processing hurt the transcript (its suppressor deleted quiet speech,
+// its AGC drove ordinary speech to full scale). The latter offers neither, so
+// the level reaching Voxtral is whatever the room gives it — and the room is a
+// phone flat on a table between two people, where a soft speaker can land 25 dB
+// below a loud one.
 //
-// What this can and cannot do, stated plainly because it is easy to oversell:
-//   Digital gain does NOT improve signal-to-noise ratio — it lifts the noise by
-//   exactly as much as the speech. What it does is put the samples in the range
-//   the recogniser's front end expects, which matters when a talker is far
-//   enough below that range to lose resolution against its own noise floor. So
-//   this is worth having and is not a fix for a bad room. Whether it moves the
-//   word error rate on THIS pipeline is an open question with a way to answer
-//   it: `scripts/voxtral-wer-bench.mjs --agc on|off` runs both over the same
-//   audio. Until that has been run on real recordings, treat this as insurance,
-//   not as a result.
+// Not oversold: digital gain does NOT improve SNR, it lifts noise and speech
+// alike. It only puts the samples in the range the recogniser's front end
+// expects, which matters when a talker is far enough below it to lose
+// resolution. Whether it moves WER on this pipeline is open, and answerable —
+// `scripts/voxtral-wer-bench.mjs --agc on|off`. Until then, insurance.
 //
-// Three properties keep it from repeating source 7's mistakes:
-//   1. It only adapts on frames loud enough to be speech. A gain that chases
-//      silence blooms in a quiet room and then ducks the first word of the
-//      sentence that follows — the "pumping" that makes cheap AGC audible.
-//   2. It moves slowly upward (~1.2 s) and instantly downward on clipping. The
-//      damage from too much gain is unrecoverable (a clipped sample has lost
-//      its shape); the damage from too little is a quiet transcript.
-//   3. It never clips: the gain for a chunk is capped at whatever keeps that
-//      chunk's own peak inside full scale, so the limiter cannot be overrun.
+// Three properties keep it from repeating the old source's mistakes:
+//   1. It adapts only on speech-loud frames. Gain that chases silence blooms in
+//      a quiet room and ducks the first word after it — audible "pumping".
+//   2. Slow up (~1.2 s), fast down. Too much gain is unrecoverable (a clipped
+//      sample has lost its shape); too little is merely a quiet transcript.
+//   3. It never clips: per-chunk gain is capped to keep that chunk's own peak
+//      inside full scale, so the limiter cannot be overrun.
 //
-// It sits ONLY in front of Voxtral. The VAD keeps seeing raw samples, because
-// its thresholds (0.05 RMS to enter a turn, 40 % of that to sustain) are
-// calibrated against the room, and normalising underneath them would silently
-// re-scale the one detector the app cannot afford to have drift. The seam wave
-// keeps seeing raw samples for the same reason it always did: it is a meter of
-// the room, and a meter with automatic gain is not a meter.
+// It sits ONLY in front of Voxtral. The VAD and the seam wave keep raw samples:
+// their thresholds are calibrated against the room, and a meter with automatic
+// gain is not a meter.
 
 /** Where speech should sit, as RMS dBFS. Comfortably below the peaks a
  *  conversational voice throws (~12-15 dB above its own RMS), so a normalised
@@ -48,14 +35,10 @@ const MAX_GAIN_DB = 15;
 /** Floor on cut. Present for the loud near talker, not as a volume policy. */
 const MIN_GAIN_DB = -6;
 /** Below this a frame is room tone, a door, a chair — not a voice to level
- *  against. The gain holds wherever it was.
- *
- *  Set against levels measured on device, adjusted for the source change: the
- *  logged numbers (silence ~-70 dBFS, speech -35..-20, peaks -13) came from
- *  VOICE_COMMUNICATION with its gain control switched on, and VOICE_RECOGNITION
- *  has none, so everything sits lower. A floor that ignores a soft talker
- *  across a table is a floor that turns this off for exactly the person it is
- *  for. */
+ *  against, so the gain holds where it was. Set below the levels measured on
+ *  device (silence ~-70 dBFS, speech -35..-20) and then lower again, since
+ *  those came off the old source with its gain control on. A floor that ignores
+ *  a soft talker across a table turns this off for the person it is for. */
 const SPEECH_FLOOR_DBFS = -55;
 /** Time constants: slow up, fast down. See property 2 above. */
 const GAIN_UP_MS = 1_200;

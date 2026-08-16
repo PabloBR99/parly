@@ -6,20 +6,17 @@
 // "Gonzalo" comes back "Gonsalo", "Trini" comes back "Trinny". Every one of
 // those is a correct phonetic reading of the audio and a wrong word on screen.
 //
-// That failure mode is *deterministic*, which is why it is worth fixing here
-// rather than asking a model about it: two spellings of the same sounds map to
-// the same phonetic key, so the repair is a dictionary lookup with no latency
-// and no judgement.
+// That failure mode is *deterministic*, so it is worth fixing here rather than
+// asking a model: two spellings of the same sounds share a phonetic key, and
+// the repair is a dictionary lookup with no latency and no judgement.
 //
-// Which is also the limit. This repairs same-sound / different-spelling and
-// nothing else. A name genuinely misheard — "Alejandro" heard as "Alexandre",
-// "Trini" heard as "sí ni" — has a different key and is left alone. Edit
-// distance would catch some of those and would also turn "Alejandra" into
-// "Alejandro" and "el ala" into "el Ale", which is a worse app: a repair that
-// fires on ordinary speech destroys trust in every turn, while a missed name is
-// the status quo. The near misses are handed to the translator instead
-// (see MistralTranslator's glossary block), which has the sentence in view and
-// can decide what a table of keys cannot.
+// Which is also the limit — same-sound/different-spelling and nothing else. A
+// name genuinely misheard ("Alejandro" as "Alexandre") has a different key and
+// is left alone. Edit distance would catch some of those and would also turn
+// "Alejandra" into "Alejandro" and "el ala" into "el Ale": a repair that fires
+// on ordinary speech destroys trust in every turn, while a missed name is the
+// status quo. The near misses go to the translator instead, which has the
+// sentence in view and can decide what a table of keys cannot.
 //
 // Guards, in the order they apply:
 //   · a token that is a function word in either language of the pair is never

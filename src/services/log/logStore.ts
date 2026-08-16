@@ -1,33 +1,20 @@
 // In-app crash-resilient log store.
 //
-// Why this exists:
-//   - Release-signed APKs don't show the React Native red box.
-//   - This user can't run adb/logcat from a non-dev environment.
-//   - Native or JS crashes therefore present as a silent app close, with
-//     no diagnostic surface.
+// A release-signed APK shows no red box and this user cannot run logcat, so a
+// crash presents as a silent app close with no diagnostic surface. Hence: a
+// bounded in-memory ring buffer for live subscribers, persisted to one JSON
+// file through a Promise chain (serialised so concurrent writes can't corrupt
+// it, fire-and-forget so the JS thread never blocks). Startup loads the
+// previous session's file and appends a session marker, so a crashed session's
+// trail is there on the next launch — the entire point. `console.*` and
+// `ErrorUtils.setGlobalHandler` are hijacked so everything lands here.
 //
-// Strategy:
-//   - Keep a bounded in-memory ring buffer (subscribers see live updates).
-//   - Persist every write to a single JSON file on disk via react-native-fs.
-//     Writes are serialized through a Promise chain so concurrent log calls
-//     don't corrupt the file. Each write is fire-and-forget from the caller's
-//     perspective; the JS thread never blocks.
-//   - On app start we load the previous session's file, then append a clear
-//     "session start" marker. If the previous session crashed, its trail is
-//     visible on the next launch — that's the entire point.
-//   - We hijack `console.log/warn/error` and `ErrorUtils.setGlobalHandler`
-//     so any code (theirs, ours, third-party) ends up in the buffer
-//     automatically.
-//
-// Caveat: a hard native crash (SIGSEGV) takes the process down with no
-// warning, so the last few queued writes never flush. Nothing in JS can catch
-// that — the only defence is logging *before* risky operations, so the most
-// recent entry names what was about to happen rather than what happened.
-//
-// A *fatal JS* error used to look identical, for a much more fixable reason:
-// its log entry was written asynchronously while handing the error on killed
-// the process synchronously, so the entry describing the crash died with it.
-// The global handler now waits for that write before handing off.
+// A hard native crash still takes the last queued writes with it, and nothing
+// in JS can catch that: the defence is logging BEFORE risky operations, so the
+// last entry names what was about to happen. A fatal JS error used to look the
+// same for a fixable reason — its entry was written asynchronously while
+// handing the error on killed the process synchronously — so the global
+// handler now waits for that write before handing off.
 
 import * as RNFS from '@dr.pogodin/react-native-fs';
 import type { ErrorUtils as ReactNativeErrorUtils } from 'react-native';

@@ -20,21 +20,18 @@
 //     would cost tokens on every single turn to help with a name the speakers
 //     probably never say.
 //
-// The curation rule for COMMON_NAMES, which matters more than its length:
-// a name that is also an ordinary word in any language it might be paired with
-// is left out. "Rosa", "Clara", "Alba", "Pilar", "Marina", "Rocío", "Ángel",
-// "Salvador", "Marcos", "Mark", "Rose", "Grace", "Will", "Frank", "Sean",
-// "Claire", "Olivier", "Chiara", "Marco" — every one of them would turn an
-// ordinary sentence into a name, and a repair that fires on ordinary speech is
-// far worse than a name left misspelled. When in doubt, the name is out.
+// The curation rule for COMMON_NAMES matters more than its length: a name that
+// is also an ordinary word in any language it might be PAIRED with is left out.
+// "Rosa", "Clara", "Marina", "Ángel", "Mark", "Grace", "Will", "Claire",
+// "Marco" — each would turn an ordinary sentence into a name, and a repair that
+// fires on ordinary speech is far worse than a name left misspelled.
 //
-// It bites ACROSS languages too, not just inside one, because the pair decides
-// which lists are loaded together: "Thomas" and "Tomás" both had to go (Spanish
-// "tú tomas"), and so did "Lisa" ("lisa"), "Leon" and "Lea"/"Léa" ("león",
-// "que lea"), "Mia" ("mía"), "Jean" (denim), "Pierre" (stone) and "Salvatore"
-// (saviour). Every one of those sentences is in nameRepair's test file, so the
-// next person to add a name to these lists finds out from a failing test
-// rather than from a conversation.
+// It bites across languages, since the pair decides which lists load together:
+// "Thomas"/"Tomás" (Spanish "tú tomas"), "Lisa" ("lisa"), "Leon" and "Lea"
+// ("león", "que lea"), "Mia" ("mía"), "Jean" (denim), "Pierre" (stone). Every
+// one of those sentences is in nameRepair's test file, so the next person to add
+// a name finds out from a failing test rather than from a conversation. When in
+// doubt, the name is out.
 
 /**
  * The people in this conversation. Seeded with the names the app's owner asked

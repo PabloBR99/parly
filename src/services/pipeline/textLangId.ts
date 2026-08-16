@@ -1,17 +1,14 @@
 // textLangId — decides which of the TWO configured pair languages a
 // transcript is written in, from the text alone.
 //
-// Why this exists: hands-free routing originally trusted Voxtral's
-// `transcription.language` audio tag exclusively. That tag sometimes misfires
-// (Spanish tagged as English, Catalan for Spanish) or is simply absent — and
-// a wrong tag inverts the translation direction, so the app "translates"
-// Spanish into Spanish and parrots the speaker. The transcript itself is the
-// strongest evidence available: it IS the text about to be translated, so its
-// language decides which direction produces a real translation.
+// Hands-free routing once trusted Voxtral's `transcription.language` tag
+// alone. That tag misfires (Spanish tagged English, Catalan for Spanish) or is
+// absent, and a wrong tag inverts the direction — the app "translates" Spanish
+// into Spanish and parrots the speaker. The transcript is stronger evidence: it
+// IS the text about to be translated.
 //
-// This is deliberately NOT open-set language identification. The pair is
-// known, so the problem collapses to a binary choice, which two cheap signals
-// solve almost entirely:
+// This is deliberately NOT open-set language identification. The pair is known,
+// so the problem collapses to a binary choice, and two cheap signals solve it:
 //
 //   1. Script. Most pairs differ in writing system (Latin vs Cyrillic vs
 //      Arabic vs Han vs …) — character ranges decide instantly.
@@ -97,28 +94,22 @@ const MIN_SCRIPTED_CHARS = 4;
 /**
  * Could this transcript be the language the speaker chose?
  *
- * Not language identification — a much smaller question, asked only where the
- * expected language is already known: is this even written in an alphabet that
- * language uses? Push-to-talk knows exactly which language the speaker
- * selected, so a transcript that comes back in Han characters for a French
- * turn is not a bad guess to be translated anyway. It is the transcriber
- * having heard something that was not the sentence, and the only honest
- * output is nothing.
+ * A much smaller question than identification, asked where the expected
+ * language is already known: is this even written in an alphabet that language
+ * uses? Push-to-talk knows what the speaker selected, so Han characters coming
+ * back for a French turn are not a bad guess to translate anyway — they are the
+ * transcriber having heard something that was not the sentence.
  *
- * Deliberately one-sided and deliberately blunt. It answers *no* only for a
- * clear script mismatch and abstains (true) everywhere else, because the cost
- * of the two mistakes is nowhere near symmetric: a wrong rejection loses a
- * sentence the speaker has to repeat, while a wrong acceptance sends the
- * translator text in a language it was not told about and speaks the result
- * aloud to someone who then has to work out what happened.
+ * One-sided and blunt on purpose: *no* only for a clear script mismatch,
+ * abstaining everywhere else, because the mistakes do not cost the same. A
+ * wrong rejection loses a sentence the speaker repeats; a wrong acceptance
+ * speaks mistranslated text to someone who must work out what happened.
  *
- * What it therefore does NOT catch: French returned as Spanish, or any other
- * confusion inside one writing system. That needs the lexical machinery below,
- * which is built for choosing between two known languages and is not reliable
- * enough one-sided — most short utterances score nothing at all, and a
- * classifier that abstains on "Bonjour" would reject half of what anybody
- * says. Script is the part that can be decided from a single character, and it
- * is the part the flagrant failures live in.
+ * So it does not catch French returned as Spanish, or any confusion inside one
+ * writing system. That needs the lexical machinery below, which is not reliable
+ * one-sided — most short utterances score nothing, and a classifier that
+ * abstains on "Bonjour" would reject half of what anybody says. Script is what
+ * a single character can decide, and where the flagrant failures live.
  *
  * `lang` must be a primary subtag ("fr", not "fr-CA").
  */

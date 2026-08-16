@@ -1,35 +1,29 @@
 // audioLevelBus — the one-way pipe from the live microphone to the UI's meters.
 //
-// Why a bus and not the conversation store:
-//   A level update lands once per VAD frame — 512 samples @ 16 kHz, so every
-//   32 ms, ~31×/s. Pushing that through Zustand would re-render the entire
-//   two-sided surface (both halves, every turn, every notice) thirty-one times
-//   a second in order to move seven 2 px bars. Here the orchestrator publishes
-//   and the seam wave subscribes, writing the value straight into a Reanimated
-//   shared value: one UI-thread write, zero React renders.
+// A bus and not the conversation store, because a level update lands ~31×/s
+// (once per 32 ms VAD frame) and pushing that through Zustand would re-render
+// both halves, every turn and every notice thirty-one times a second to move
+// seven 2 px bars. Here the orchestrator publishes and the seam wave subscribes
+// straight into a Reanimated shared value: one UI-thread write, zero renders.
 //
-// What is published is a *perceptual* 0..1, never a raw amplitude:
-//   frame RMS → dBFS → normalised against a fixed window → envelope follower.
-// Loudness is logarithmic; a linear RMS meter spends its whole life pinned
-// near zero and then jumps, which is exactly what makes cheap visualisers look
-// fake. The envelope follower (fast attack, slow release) is what makes it
-// feel like a needle instead of a strobe.
+// What is published is a *perceptual* 0..1, never a raw amplitude: frame RMS →
+// dBFS → normalised against a fixed window → envelope follower. Loudness is
+// logarithmic, so a linear meter sits pinned near zero and then jumps, which is
+// what makes cheap visualisers look fake; the follower (fast attack, slow
+// release) is what makes it a needle rather than a strobe.
 
 /** Audio covered by one VAD frame (512 samples @ 16 kHz). */
 export const FRAME_MS = 32;
 
-// The normalisation window. Fixed, not auto-ranging — an adaptive gain stage
-// here would "pump": a quiet room would slowly bloom to full scale and make
-// silence look like speech. That is a property of what this drives (a meter a
-// person is watching), not of what feeds it, which is why the reasoning
-// survived the capture path moving off VOICE_COMMUNICATION's AGC to the
-// unprocessed VOICE_RECOGNITION source.
+// The normalisation window. Fixed, not auto-ranging: adaptive gain here would
+// "pump", blooming a quiet room to full scale until silence looks like speech.
+// That is a property of what this drives — a meter a person is watching — so it
+// held when capture moved to the unprocessed VOICE_RECOGNITION source.
 //
-// Values come from the levels logged on-device: silence sits near -70 dBFS,
-// ordinary speech frames land in the -35..-20 range, peaks touch -13. Those
-// were measured under the old source, so without its gain control the needle
-// may simply sit lower — cosmetic, and worth re-reading off a device log
-// before anyone moves these two numbers to chase it.
+// Values come from levels logged on device (silence ~-70 dBFS, speech -35..-20,
+// peaks -13) under the old source, so without its gain control the needle may
+// simply sit lower. Cosmetic, and worth re-reading off a device log before
+// anyone moves these two numbers to chase it.
 export const LEVEL_FLOOR_DBFS = -60;
 export const LEVEL_CEIL_DBFS = -18;
 

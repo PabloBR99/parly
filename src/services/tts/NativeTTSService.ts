@@ -2,21 +2,14 @@
 // pre-resolution, and a "speculative warmup" hook used to load the engine
 // before the first real sentence arrives.
 //
-// Why the per-utterance ID matching?
-//   `react-native-tts` fires `tts-finish` for ANY utterance, not just the
-//   one the caller awaited. If we naively resolve on the first finish event
-//   after speak(), back-to-back chunked emits would all resolve on the first
-//   chunk's finish — completely wrong. We resolve only when the matching
-//   utteranceId fires.
+// Utterance IDs are matched because `tts-finish` fires for ANY utterance, so
+// resolving on the first one after speak() would resolve every queued chunk on
+// the first chunk's finish.
 //
-// Why two timeouts (playback + enqueue)?
-//   The naive single-timer-from-speak() approach fired prematurely on long
-//   messages: a 50-word sentence at slow rate plays >25 s, and chunks N+1,
-//   N+2 sit in the native queue while chunk N plays — their timer is
-//   already counting before they ever start. The fix is to arm the per-
-//   chunk cap on `tts-start` (so it measures actual playback) and keep a
-//   generous enqueue fallback for the case where `tts-start` never fires
-//   (engine stalled before producing any audio for this chunk).
+// Two timeouts, because one timer started at speak() fires prematurely: chunks
+// N+1 and N+2 sit in the native queue while N plays, counting down before they
+// begin. So the playback cap is armed on `tts-start` (measuring real playback)
+// and a generous enqueue fallback covers a `tts-start` that never comes.
 
 import Tts from 'react-native-tts';
 import { errorMessage } from '../../app/errors';
@@ -86,14 +79,11 @@ class NativeTTSService {
   /** Tail of the voice-switch queue — see `serial()`. */
   private lane: Promise<unknown> = Promise.resolve();
 
-  /**
-   * Run voice-switching work one at a time. `prewarm` and `speakChunk` both
-   * mutate the engine's active voice and both cache the result in
-   * `currentLang`. Interleaved, the slower one can land last and leave
-   * `currentLang` naming a voice the engine no longer has — after which the
-   * next chunk in that language takes the "already applied" shortcut and gets
-   * read in another language's phonemes. Serialising makes the cache honest.
-   */
+  /** Run voice-switching work one at a time. `prewarm` and `speakChunk` both
+   *  mutate the engine's voice and cache it in `currentLang`; interleaved, the
+   *  slower can land last and leave that cache naming a voice the engine no
+   *  longer has — after which the next chunk takes the "already applied"
+   *  shortcut and is read in another language's phonemes. */
   private serial<T>(work: () => Promise<T>): Promise<T> {
     const run = this.lane.then(work, work);
     this.lane = run.then(
@@ -177,18 +167,15 @@ class NativeTTSService {
   }
 
   /**
-   * Select the voice for `language` without speaking anything.
+   * Select the voice for `language` without speaking anything — the half of
+   * `prewarm` that is safe to do between turns.
    *
-   * The full `prewarm` below queues a silent primer, which is a real
-   * synth-and-play cycle in the native engine — fine before a conversation
-   * starts, ruinous between turns: measured on device, priming during the
-   * cooldown roughly tripled the queue-to-audio time of the next sentence,
-   * because the primer was still ahead of it in the native queue.
-   *
-   * This does only the half that is safe to do early. `speakChunk` awaits the
-   * voice switch before it can enqueue anything, so having it already applied
-   * takes that switch off the front of the reply — with nothing left sitting
-   * in the queue behind it.
+   * Its silent primer is a real synth-and-play cycle: measured on device,
+   * priming during the cooldown roughly tripled the next sentence's
+   * queue-to-audio time, because the primer was still ahead of it in the native
+   * queue. This leaves nothing in the queue, while still taking the voice
+   * switch off the front of the reply — `speakChunk` awaits it before it can
+   * enqueue anything.
    */
   presetVoice(language: string): void {
     void this.serial(async () => {
@@ -197,15 +184,11 @@ class NativeTTSService {
     });
   }
 
-  /**
-   * Speculative warmup — load the voice engine for `language` so the first
-   * real sentence's TTS first-audio-frame latency drops by ~100-300 ms on
-   * Android. Speaks a single space character (inaudible) and does not await.
-   *
-   * Safe to call often: the silent primer is only actually spoken when the
-   * voice changed or went cold (WARM_TTL_MS). A primer queued behind a voice
-   * that is already hot delays the real sentence instead of helping it.
-   */
+  /** Speculative warmup — loads the engine for `language` so the first real
+   *  sentence saves ~100-300 ms on Android, by speaking an inaudible space.
+   *  Safe to call often: the primer is only spoken when the voice changed or
+   *  went cold, since one queued behind a hot voice delays the real sentence
+   *  instead of helping it. */
   prewarm(language: string): void {
     void this.serial(async () => {
       if (!this.initialized) await this.init();
@@ -225,16 +208,10 @@ class NativeTTSService {
     });
   }
 
-  /**
-   * Speak `text` in `language`. Resolves when this specific utterance
-   * finishes (tts-finish with the matching utteranceId), is cancelled, or
-   * errors. Multiple consecutive calls queue in order — react-native-tts
-   * native engine handles the queuing.
-   *
-   * `onStart` fires when the engine begins playing THIS chunk — the moment
-   * the listener actually hears something, which is the only end point a
-   * latency measurement may honestly use.
-   */
+  /** Speak `text` in `language`, resolving when THIS utterance finishes, is
+   *  cancelled, or errors; consecutive calls queue in the native engine.
+   *  `onStart` fires when this chunk becomes audible — the only end point a
+   *  latency measurement may honestly use. */
   async speakChunk(
     text: string,
     language: string,
