@@ -5,7 +5,9 @@
   "scripts": {
     "android": "react-native run-android",
     "ios": "react-native run-ios",
-    "lint": "eslint .",
+    "lint": "eslint . && oxlint",
+    "lint:anti-slop": "oxlint",
+    "typecheck": "tsc --noEmit",
     "start": "react-native start",
     "test": "jest",
     "bench:wer": "node scripts/voxtral-wer-bench.mjs"

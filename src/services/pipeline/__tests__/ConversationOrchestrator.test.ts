@@ -1,8 +1,3 @@
-jest.mock('react-native', () => ({
-  Platform: { OS: 'android' },
-  NativeModules: {},
-}));
-
 import {
   ConversationOrchestrator,
   type AudioCapture,
@@ -38,6 +33,13 @@ interface VoxtralCallbacks {
 
 type FlushResolver = (result: { text: string; language?: string }) => void;
 
+/** The fake Voxtral client. `closeSegment` is optional on VoxtralLike because
+ *  push-to-talk clients do not have one; this harness always supplies it, so
+ *  the hands-free tests can read what it was called with. */
+type MockVoxtral = jest.Mocked<VoxtralLike> & {
+  closeSegment: jest.MockedFunction<NonNullable<VoxtralLike['closeSegment']>>;
+};
+
 function makeMocks() {
   const audioCapture: jest.Mocked<AudioCapture> = {
     hasPermission: jest.fn().mockResolvedValue(true),
@@ -55,7 +57,7 @@ function makeMocks() {
   let accumulated = '';
   let accumulatedLang: string | undefined;
 
-  const voxtral: jest.Mocked<VoxtralLike> = {
+  const voxtral: MockVoxtral = {
     start: jest.fn().mockImplementation(async (_opts, cbs: VoxtralCallbacks) => {
       voxtralCallbacks = cbs;
     }),
@@ -908,7 +910,7 @@ describe('ConversationOrchestrator (hands-free)', () => {
     m.resolveFlush('hola', 'es');
     await new Promise<void>(r => setTimeout(r, 50));
 
-    const timeoutArg = (m.voxtral.closeSegment as jest.Mock).mock.calls[0][0] as number;
+    const timeoutArg = m.voxtral.closeSegment.mock.calls[0][0];
     expect(timeoutArg).toBeGreaterThanOrEqual(3_000);
     expect(timeoutArg).toBeLessThanOrEqual(10_000);
   });
@@ -958,7 +960,7 @@ describe('ConversationOrchestrator (hands-free)', () => {
     });
 
     await enableHf(m, o);
-    const onData = m.audioCapture.startStreaming.mock.calls[0][0] as (b64: string) => void;
+    const onData = m.audioCapture.startStreaming.mock.calls[0][0];
 
     m.fireVadStart();
     m.fireVadEnd();
@@ -984,7 +986,7 @@ describe('ConversationOrchestrator (hands-free)', () => {
   it('drives the audio level meter from live mic frames, and stops at silence', async () => {
     const { m, o } = makeHfOrchestrator();
     await enableHf(m, o);
-    const onData = m.audioCapture.startStreaming.mock.calls[0][0] as (b64: string) => void;
+    const onData = m.audioCapture.startStreaming.mock.calls[0][0];
 
     expect(getAudioLevel()).toBe(0);
 
@@ -1009,7 +1011,7 @@ describe('ConversationOrchestrator (hands-free)', () => {
     });
 
     await enableHf(m, o);
-    const onData = m.audioCapture.startStreaming.mock.calls[0][0] as (b64: string) => void;
+    const onData = m.audioCapture.startStreaming.mock.calls[0][0];
 
     // A real utterance lights the meter up.
     for (let i = 0; i < 10; i++) onData(pcmFrame(0.3));
@@ -1038,7 +1040,7 @@ describe('ConversationOrchestrator (hands-free)', () => {
   it('pauseHandsFree and disableHandsFree leave the meter at rest', async () => {
     const { m, o } = makeHfOrchestrator();
     await enableHf(m, o);
-    const onData = m.audioCapture.startStreaming.mock.calls[0][0] as (b64: string) => void;
+    const onData = m.audioCapture.startStreaming.mock.calls[0][0];
 
     for (let i = 0; i < 10; i++) onData(pcmFrame(0.3));
     await o.pauseHandsFree();

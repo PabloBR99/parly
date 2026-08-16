@@ -39,5 +39,27 @@
     "anti-slop/no-unsafe-dictionary-type": "error",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error"
-  }
+  },
+  "overrides": [
+    {
+      // The remaining module mocks are all native modules — there is no JS
+      // implementation of Reanimated's worklets, the keychain, the TTS engine,
+      // the ONNX runtime or PermissionsAndroid to inject under Jest, so a mock
+      // at the module boundary is the only thing there is to run against. The
+      // rule stays on everywhere else, including the rest of these suites, so
+      // mocking one of our own modules is still an error: every service that
+      // could take its dependency as a parameter already does (the WebSocket
+      // factory, the streaming fetcher, the ONNX session factory, App's
+      // reachability probe).
+      "files": [
+        "jest.setup.js",
+        "src/services/audio/__tests__/AudioCaptureService.test.ts",
+        "src/services/log/__tests__/logStore.test.ts",
+        "src/services/vad/__tests__/SileroVadService.test.ts"
+      ],
+      "rules": {
+        "anti-slop/no-module-mocking": "off"
+      }
+    }
+  ]
 }

@@ -8,17 +8,19 @@
  * question costs a whole completed translation before the real one begins.
  */
 
-jest.mock('react-native', () => ({
-  Platform: { OS: 'android' },
-  NativeModules: {},
-}));
-
 import { MistralTranslator } from '../MistralTranslator';
+import { swappableGlobals as globals } from '../../../testing/globals';
+
+/** A fake XMLHttpRequest installed as the global, and a count of how many
+ *  times the code under test reached for one. */
+interface XhrStub {
+  constructed(): number;
+}
 
 const sseChunk = (text: string) =>
   `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`;
 
-function stubXhr(): { constructed: () => number } {
+function stubXhr(): XhrStub {
   let count = 0;
   class FakeXhr {
     onreadystatechange: (() => void) | null = null;
@@ -37,19 +39,19 @@ function stubXhr(): { constructed: () => number } {
     }
     abort(): void {}
   }
-  (global as Record<string, unknown>).XMLHttpRequest = FakeXhr as unknown;
+  globals.XMLHttpRequest = FakeXhr;
   return { constructed: () => count };
 }
 
 const encoder = new TextEncoder();
 
 describe('defaultFetcher fallback discipline', () => {
-  const originalFetch = global.fetch;
-  const originalXhr = (global as Record<string, unknown>).XMLHttpRequest;
+  const originalFetch = globals.fetch;
+  const originalXhr = globals.XMLHttpRequest;
 
   afterEach(() => {
-    global.fetch = originalFetch;
-    (global as Record<string, unknown>).XMLHttpRequest = originalXhr;
+    globals.fetch = originalFetch;
+    globals.XMLHttpRequest = originalXhr;
   });
 
   it('does NOT retry via XHR when the stream dies after bytes arrived', async () => {
@@ -60,11 +62,12 @@ describe('defaultFetcher fallback discipline', () => {
         value: encoder.encode(sseChunk('This is a long enough first sentence for emission. ')),
       })
       .mockRejectedValueOnce(new Error('connection reset mid-stream'));
-    global.fetch = jest.fn().mockResolvedValue({
+    globals.fetch = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
       body: { getReader: () => ({ read }) },
-    }) as unknown as typeof fetch;
+    }
+    );
 
     const t = new MistralTranslator();
     const sentences: string[] = [];
@@ -90,9 +93,9 @@ describe('defaultFetcher fallback discipline', () => {
 
   it('DOES fall back to XHR when fetch fails before any bytes', async () => {
     const xhr = stubXhr();
-    global.fetch = jest.fn().mockRejectedValue(
+    globals.fetch = jest.fn().mockRejectedValue(
       new TypeError('Network request failed'),
-    ) as unknown as typeof fetch;
+    );
 
     const t = new MistralTranslator();
     const errors: Error[] = [];
@@ -116,7 +119,8 @@ describe('defaultFetcher fallback discipline', () => {
   it('still surfaces aborts as cancellation, not as an XHR retry', async () => {
     const xhr = stubXhr();
     const abortErr = new DOMException('aborted', 'AbortError');
-    global.fetch = jest.fn().mockRejectedValue(abortErr) as unknown as typeof fetch;
+    globals.fetch = jest.fn().mockRejectedValue(abortErr
+    );
 
     const t = new MistralTranslator();
     const errors: Error[] = [];
@@ -137,14 +141,14 @@ describe('defaultFetcher fallback discipline', () => {
 });
 
 describe('defaultFetcher transport choice', () => {
-  const originalFetch = global.fetch;
-  const originalXhr = (global as Record<string, unknown>).XMLHttpRequest;
-  const originalResponse = (global as Record<string, unknown>).Response;
+  const originalFetch = globals.fetch;
+  const originalXhr = globals.XMLHttpRequest;
+  const originalResponse = globals.Response;
 
   afterEach(() => {
-    global.fetch = originalFetch;
-    (global as Record<string, unknown>).XMLHttpRequest = originalXhr;
-    (global as Record<string, unknown>).Response = originalResponse;
+    globals.fetch = originalFetch;
+    globals.XMLHttpRequest = originalXhr;
+    globals.Response = originalResponse;
     jest.resetModules();
   });
 
@@ -153,9 +157,9 @@ describe('defaultFetcher transport choice', () => {
     // React Native's Response (whatwg-fetch) has no `body` at all. Asking it
     // anyway means one complete request, discarded, ahead of the real one.
     class BodylessResponse {}
-    (global as Record<string, unknown>).Response = BodylessResponse as unknown;
+    globals.Response = BodylessResponse;
     const fetchSpy = jest.fn();
-    global.fetch = fetchSpy as unknown as typeof fetch;
+    globals.fetch = fetchSpy;
 
     jest.resetModules();
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -187,7 +191,7 @@ describe('defaultFetcher transport choice', () => {
       status: 200,
       body: { getReader: () => ({ read }) },
     });
-    global.fetch = fetchSpy as unknown as typeof fetch;
+    globals.fetch = fetchSpy;
 
     jest.resetModules();
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -220,24 +224,24 @@ describe('defaultFetcher transport choice', () => {
 // of a turn.
 
 describe('defaultFetcher cancellation on a runtime without DOMException', () => {
-  const originalFetch = global.fetch;
-  const originalXhr = (global as Record<string, unknown>).XMLHttpRequest;
-  const originalResponse = (global as Record<string, unknown>).Response;
-  const originalDOMException = (global as Record<string, unknown>).DOMException;
+  const originalFetch = globals.fetch;
+  const originalXhr = globals.XMLHttpRequest;
+  const originalResponse = globals.Response;
+  const originalDOMException = globals.DOMException;
 
   afterEach(() => {
-    global.fetch = originalFetch;
-    (global as Record<string, unknown>).XMLHttpRequest = originalXhr;
-    (global as Record<string, unknown>).Response = originalResponse;
-    (global as Record<string, unknown>).DOMException = originalDOMException;
+    globals.fetch = originalFetch;
+    globals.XMLHttpRequest = originalXhr;
+    globals.Response = originalResponse;
+    globals.DOMException = originalDOMException;
     jest.resetModules();
   });
 
   it('aborts cleanly and reports cancellation, with no DOMException in reach', async () => {
     // The runtime the app actually ships on: XHR transport, no DOMException.
     class BodylessResponse {}
-    (global as Record<string, unknown>).Response = BodylessResponse as unknown;
-    delete (global as Record<string, unknown>).DOMException;
+    globals.Response = BodylessResponse;
+    delete globals.DOMException;
 
     let aborted = false;
     class PendingXhr {
@@ -251,7 +255,7 @@ describe('defaultFetcher cancellation on a runtime without DOMException', () => 
       send(): void { /* never completes — only the abort ends this */ }
       abort(): void { aborted = true; }
     }
-    (global as Record<string, unknown>).XMLHttpRequest = PendingXhr as unknown;
+    globals.XMLHttpRequest = PendingXhr;
 
     jest.resetModules();
     // eslint-disable-next-line @typescript-eslint/no-require-imports

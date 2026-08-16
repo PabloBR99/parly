@@ -29,13 +29,6 @@ if (!apiKey) {
   process.exit(1);
 }
 
-// Generate 1 s of silence (16-bit signed LE @ 16 kHz).
-function silencePcm(durationSeconds = 1) {
-  const samples = SAMPLE_RATE * durationSeconds;
-  const buf = Buffer.alloc(samples * 2, 0);
-  return buf.toString('base64');
-}
-
 // Generate synthetic "ah-ah-ah" — three formant-modulated bursts that
 // approximate a vowel sequence so the transcriber sees voice-like energy.
 // Formants approximate Spanish "a" (700, 1220, 2600 Hz).

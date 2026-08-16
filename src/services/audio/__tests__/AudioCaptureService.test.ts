@@ -58,7 +58,7 @@ describe('AudioCaptureService capture format', () => {
   });
 
   it('configures the native recorder once, not once per turn', async () => {
-    (AudioRecord.stop as jest.Mock).mockResolvedValue('/mock/file.wav');
+    jest.mocked(AudioRecord.stop).mockResolvedValue('/mock/file.wav');
     const svc = new AudioCaptureService();
 
     svc.startStreaming(() => {});
@@ -83,7 +83,7 @@ describe('AudioCaptureService streaming interleave', () => {
 
   function trackSubscriptions(): Array<{ remove: jest.Mock }> {
     const subs: Array<{ remove: jest.Mock }> = [];
-    (AudioRecord.on as jest.Mock).mockImplementation(() => {
+    jest.mocked(AudioRecord.on).mockImplementation(() => {
       const sub = { remove: jest.fn() };
       subs.push(sub);
       return sub;
@@ -94,7 +94,7 @@ describe('AudioCaptureService streaming interleave', () => {
   it('startStreaming during an in-flight stop keeps the NEW listener alive', async () => {
     const subs = trackSubscriptions();
     let resolveStop!: (path: string) => void;
-    (AudioRecord.stop as jest.Mock).mockImplementation(
+    jest.mocked(AudioRecord.stop).mockImplementation(
       () => new Promise<string>(r => { resolveStop = r; }),
     );
 
@@ -121,7 +121,7 @@ describe('AudioCaptureService streaming interleave', () => {
   it('normal stop removes the listener only after the native stop resolves (trailing chunk)', async () => {
     const subs = trackSubscriptions();
     let resolveStop!: (path: string) => void;
-    (AudioRecord.stop as jest.Mock).mockImplementation(
+    jest.mocked(AudioRecord.stop).mockImplementation(
       () => new Promise<string>(r => { resolveStop = r; }),
     );
 
@@ -141,7 +141,7 @@ describe('AudioCaptureService streaming interleave', () => {
 
   it('stopStreaming is idempotent', async () => {
     trackSubscriptions();
-    (AudioRecord.stop as jest.Mock).mockResolvedValue('/mock/file.wav');
+    jest.mocked(AudioRecord.stop).mockResolvedValue('/mock/file.wav');
     const svc = new AudioCaptureService();
     svc.startStreaming(() => {});
     await svc.stopStreaming();

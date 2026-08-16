@@ -263,15 +263,27 @@ export function flushSentences(
 /** Generic streaming POST that yields response-body bytes. */
 type ChunkSink = (textChunk: string) => void;
 
-interface StreamingFetcher {
-  postStream(args: {
-    url: string;
-    headers: Record<string, string>;
-    body: string;
-    signal?: AbortSignal;
-    onChunk: ChunkSink;
-    onOpen?: () => void;
-  }): Promise<{ ok: boolean; status: number; errorBody?: string }>;
+/** One streaming POST, as the translator asks for it. */
+export interface StreamPostRequest {
+  url: string;
+  headers: Record<string, string>;
+  body: string;
+  signal?: AbortSignal;
+  onChunk: ChunkSink;
+  onOpen?: () => void;
+}
+
+/** How that POST ended. `errorBody` is only read when `ok` is false. */
+export interface StreamPostResult {
+  ok: boolean;
+  status: number;
+  errorBody?: string;
+}
+
+/** The transport the translator runs on. Exported so a test can substitute a
+ *  real implementation of it rather than a shape cast into place. */
+export interface StreamingFetcher {
+  postStream(request: StreamPostRequest): Promise<StreamPostResult>;
 }
 
 /**

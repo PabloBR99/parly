@@ -32,7 +32,8 @@ function renderWith(registry: Registry): ReactTestRenderer.ReactTestRenderer {
       </FadeEdges>,
     );
   });
-  return tree as ReactTestRenderer.ReactTestRenderer;
+  if (tree === undefined) throw new Error('act() returned without rendering FadeEdges');
+  return tree;
 }
 
 afterEach(() => {

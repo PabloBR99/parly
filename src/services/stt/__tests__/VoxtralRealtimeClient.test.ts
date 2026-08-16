@@ -2,11 +2,6 @@
  * VoxtralRealtimeClient tests — WebSocket fully mocked via factory injection.
  */
 
-jest.mock('react-native', () => ({
-  Platform: { OS: 'android' },
-  NativeModules: {},
-}));
-
 import {
   VoxtralRealtimeClient,
   TARGET_STREAMING_DELAY_MS,

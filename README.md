@@ -83,12 +83,23 @@ The full picture — state machines, echo gating, latency decisions, the UI desi
 ## Development
 
 ```bash
-npm test           # Jest — 241 tests
-npm run lint       # ESLint
-npx tsc --noEmit   # typecheck
+npm test             # Jest — 298 tests
+npm run lint         # ESLint, then Oxlint + anti-slop
+npm run typecheck    # tsc --noEmit
 ```
 
 CI builds a release APK and publishes a `dev-<sha>` prerelease on every push to `main`.
+
+### anti-slop
+
+Lint runs [anti-slop](https://github.com/dmmulroy/anti-slop) — opinionated Oxlint rules that reject low-evidence typing — with all fifteen rules at `error`. The plugin is vendored at `tools/oxlint/anti-slop/`, as it is meant to be; `.oxlintrc.json` is where it is configured.
+
+What it enforces, in short: values crossing an I/O boundary get decoded there, once, into a named type — not carried around as `unknown` and re-inspected with `typeof` wherever they happen to be used. Two modules exist for that:
+
+- **`src/app/json.ts`** — `JsonValue`, `JsonObject`, and the guards over them. Every runtime `typeof` in the app lives here, which is why `no-runtime-typeof` runs with `allowInTypeGuards`.
+- **`src/app/errors.ts`** — `toError` / `errorMessage` / `isAbortError`, for the one thing a `catch` block never knows the type of.
+
+Two rules are relaxed, both narrowly and both in `.oxlintrc.json` with the reasoning next to them: `allowInTypeGuards` above, and `no-module-mocking` off for the four files that mock native modules — there is no JS implementation of Reanimated, the keychain, the TTS engine or the ONNX runtime to inject under Jest. It stays on everywhere else, so mocking one of *our* modules is still an error: services take their dependencies as parameters instead (the WebSocket factory, the streaming fetcher, the ONNX session factory, `App`'s reachability probe).
 
 ## Troubleshooting
 

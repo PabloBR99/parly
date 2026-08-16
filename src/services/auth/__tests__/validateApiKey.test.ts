@@ -8,6 +8,7 @@
  */
 
 import { isSendableKey, validateMistralApiKey } from '../validateApiKey';
+import { swappableGlobals as globals } from '../../../testing/globals';
 
 // What was actually in the key field: a few kilobytes of it, newlines
 // throughout, and em dashes and arrows that are not ASCII at all.
@@ -67,12 +68,12 @@ describe('isSendableKey — what may become an Authorization header', () => {
 });
 
 describe('validateMistralApiKey — malformed never reaches the network', () => {
-  const realFetch = global.fetch;
-  afterEach(() => { global.fetch = realFetch; });
+  const realFetch = globals.fetch;
+  afterEach(() => { globals.fetch = realFetch; });
 
   it('reports malformed without sending anything at all', async () => {
     const fetchMock = jest.fn();
-    global.fetch = fetchMock as unknown as typeof fetch;
+    globals.fetch = fetchMock;
 
     await expect(validateMistralApiKey(PASTED_LOG)).resolves.toEqual({ status: 'malformed' });
 
@@ -81,7 +82,7 @@ describe('validateMistralApiKey — malformed never reaches the network', () => 
   });
 
   it('still tells a rejected key apart from an unusable one', async () => {
-    global.fetch = jest.fn().mockResolvedValue({ status: 401 }) as unknown as typeof fetch;
+    globals.fetch = jest.fn().mockResolvedValue({ status: 401 });
 
     // Well-formed and refused by the server is a different problem with a
     // different fix — that key exists, it just does not work any more.

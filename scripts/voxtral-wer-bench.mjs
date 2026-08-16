@@ -244,7 +244,7 @@ function pauseOffsets(pcm) {
 function normalize(text) {
   return text
     .toLowerCase()
-    .replace(/[.,!?;:¿¡"“”'’()\[\]…—–-]/g, ' ')
+    .replace(/[.,!?;:¿¡"“”'’()[\]…—–-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -256,8 +256,8 @@ function words(text) {
 
 /** Levenshtein over words: substitutions + insertions + deletions. */
 function editDistance(a, b) {
-  let prev = new Array(b.length + 1);
-  let curr = new Array(b.length + 1);
+  let prev = Array.from({ length: b.length + 1 });
+  let curr = Array.from({ length: b.length + 1 });
   for (let j = 0; j <= b.length; j++) prev[j] = j;
   for (let i = 1; i <= a.length; i++) {
     curr[0] = i;

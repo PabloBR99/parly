@@ -15,6 +15,7 @@ import { createMistralProbe } from './services/network/mistralProbe';
 import { loadMistralApiKey, saveMistralApiKey } from './services/storage/secureStorage';
 import { initLogStore, log } from './services/log/logStore';
 import { useSettingsStore } from './store/settingsStore';
+import type { ProbeFn } from './services/network/NetworkMonitor';
 import type { RootStackParamList } from './navigation/types';
 import { color } from './ui';
 
@@ -28,7 +29,14 @@ const KEYCHAIN_SAVE_DEBOUNCE_MS = 500;
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
-export default function App(): React.JSX.Element {
+interface AppProps {
+  /** The reachability probe the network monitor runs. Defaults to the real one
+   *  against api.mistral.ai; a test that must not touch the network hands in
+   *  its own rather than replacing the module underneath. */
+  readonly probe?: ProbeFn;
+}
+
+export default function App({ probe }: AppProps = {}): React.JSX.Element {
   const languagePairConfigured = useSettingsStore(s => s.languagePairConfigured);
   // Settings persist to disk asynchronously; hold navigation until the
   // rehydrate lands so a returning user opens on Conversation, not on an
@@ -66,7 +74,7 @@ export default function App(): React.JSX.Element {
       });
     });
 
-    const networkMonitor = initNetworkMonitor({ probe: createMistralProbe() });
+    const networkMonitor = initNetworkMonitor({ probe: probe ?? createMistralProbe() });
     networkMonitor.start();
 
     return () => {
@@ -74,7 +82,7 @@ export default function App(): React.JSX.Element {
       unsubscribeApiKey?.();
       if (saveTimer) clearTimeout(saveTimer);
     };
-  }, []);
+  }, [probe]);
 
   if (!hydrated) {
     return <View style={splashStyle} />;

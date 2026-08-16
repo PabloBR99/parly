@@ -2,20 +2,21 @@
  * createMistralProbe unit tests — fetch mocked.
  */
 
-jest.mock('react-native', () => ({
-  Platform: { OS: 'android' },
-  NativeModules: {},
-}));
-
 import { createMistralProbe } from '../mistralProbe';
 import { useSettingsStore } from '../../../store/settingsStore';
+import { swappableGlobals as globals } from '../../../testing/globals';
 
-function mockFetch(impl: (url: string, init: RequestInit) => Promise<{ status: number }>) {
-  const spy = jest.fn(async (url, init) => {
-    const { status } = await impl(url as string, init as RequestInit);
-    return { status } as Response;
-  });
-  (global as { fetch: typeof fetch }).fetch = spy as unknown as typeof fetch;
+/** What createMistralProbe puts on the wire. The probe reads nothing else off
+ *  the response than a status, which is the whole reachability question. */
+interface ProbeRequest {
+  readonly method: string;
+  readonly headers?: Record<string, string>;
+  readonly signal?: AbortSignal;
+}
+
+function mockFetch(impl: (url: string, init: ProbeRequest) => Promise<{ status: number }>) {
+  const spy = jest.fn((url: string, init: ProbeRequest) => impl(url, init));
+  globals.fetch = spy;
   return spy;
 }
 
@@ -33,7 +34,7 @@ describe('createMistralProbe', () => {
     const ok = await probe(3000);
 
     expect(ok).toBe(true);
-    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    const [url, init] = spy.mock.calls[0];
     expect(url).toBe('https://api.mistral.ai/');
     expect(init.method).toBe('HEAD');
     // No auth header expected without a key
@@ -48,10 +49,10 @@ describe('createMistralProbe', () => {
     const ok = await probe(3000);
 
     expect(ok).toBe(true);
-    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    const [url, init] = spy.mock.calls[0];
     expect(url).toBe('https://api.mistral.ai/v1/models');
     expect(init.method).toBe('GET');
-    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer sk-abc');
+    expect(init.headers?.Authorization).toBe('Bearer sk-abc');
   });
 
   it('treats 401 as reachable (true) — lets the STT adapter surface auth errors', async () => {

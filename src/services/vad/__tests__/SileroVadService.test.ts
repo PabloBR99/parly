@@ -2,12 +2,17 @@
  * SileroVadService tests — ONNX runtime and RNFS fully mocked.
  */
 
+// The asset-copy path this suite exercises is Android's: on iOS the model
+// ships inside the bundle and there is nothing to copy. Jest runs the real
+// react-native, which reports iOS, so the platform is stubbed here.
 jest.mock('react-native', () => ({
   Platform: { OS: 'android' },
   NativeModules: {},
 }));
 
-// Mock ONNX Runtime and RNFS via require() since the service uses require().
+// ONNX Runtime and RNFS are native modules with no JS implementation to run
+// under Jest, and the service reaches them through require() — so they are
+// mocked at the module boundary rather than injected.
 jest.mock('onnxruntime-react-native', () => ({
   InferenceSession: {
     create: jest.fn(),
@@ -60,12 +65,12 @@ import { SileroVadService, VAD_FRAME_SAMPLES, type OrtSession, type OrtTensor } 
 function makeOrtSession(speechProbSequence: number[]): OrtSession {
   let callIndex = 0;
   return {
-    run: jest.fn().mockImplementation(async () => {
+    run: jest.fn(async (): Promise<Record<string, OrtTensor>> => {
       const prob = speechProbSequence[callIndex] ?? 0;
       callIndex++;
       return {
-        output: { data: new Float32Array([prob]) } as OrtTensor,
-        stateN: { data: new Float32Array(256) } as OrtTensor,
+        output: { data: new Float32Array([prob]) },
+        stateN: { data: new Float32Array(256) },
       };
     }),
   };

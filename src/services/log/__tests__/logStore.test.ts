@@ -15,7 +15,10 @@ jest.mock('@dr.pogodin/react-native-fs', () => ({
   unlink: jest.fn().mockResolvedValue(undefined),
 }), { virtual: true });
 
-type Handler = (e: Error, isFatal: boolean) => void;
+import { swappableGlobals as globals } from '../../../testing/globals';
+
+/** RN's global error handler, whose `isFatal` is optional on its contract. */
+type Handler = (e: Error, isFatal?: boolean) => void;
 
 interface Harness {
   readonly order: string[];
@@ -35,9 +38,9 @@ async function boot(): Promise<Harness> {
   });
 
   let captured: Handler = () => {};
-  (globalThis as Record<string, unknown>).ErrorUtils = {
+  globals.ErrorUtils = {
     setGlobalHandler: (h: Handler) => { captured = h; },
-    getGlobalHandler: () => (_e: Error, _f: boolean) => { order.push('handoff'); },
+    getGlobalHandler: () => () => { order.push('handoff'); },
   };
 
   const { initLogStore } = require('../logStore');
@@ -47,7 +50,7 @@ async function boot(): Promise<Harness> {
 }
 
 afterEach(() => {
-  delete (globalThis as Record<string, unknown>).ErrorUtils;
+  delete globals.ErrorUtils;
 });
 
 describe('logStore — a fatal error leaves a trail', () => {
