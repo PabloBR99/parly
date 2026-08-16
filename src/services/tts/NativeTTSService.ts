@@ -47,12 +47,6 @@ interface CachedVoice {
   readonly language: string;
 }
 
-/** Every `tts-*` event names its utterance — see the header on why that id is
- *  the only way to tell whose finish event just fired. */
-interface TtsUtteranceEvent {
-  readonly utteranceId: string | number;
-}
-
 /** What `Tts.addEventListener` hands back. Detaching through the subscription
  *  is the only option left: RN dropped `NativeEventEmitter.removeListener`, so
  *  the library's own `removeEventListener` — which calls it — throws. */
@@ -295,7 +289,7 @@ class NativeTTSService {
       // preceding chunks playing first.
       const enqueueTimer = setTimeout(() => finish('skipped'), ENQUEUE_TIMEOUT_MS);
 
-      const matches = (ev: TtsUtteranceEvent): boolean =>
+      const matches = (ev: { utteranceId: string | number }): boolean =>
         ev.utteranceId === utteranceId || ev.utteranceId === String(utteranceId);
 
       startSub = addTtsListener('tts-start', (ev) => {

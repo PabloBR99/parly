@@ -20,15 +20,7 @@ interface FakeWs extends WebSocketLike {
   fire(event: 'open' | 'message' | 'error' | 'close', payload?: SocketFrame): void;
 }
 
-/** A fake socket plus the factory that hands it out, and what that factory saw. */
-interface FakeSocketHarness {
-  readonly ws: FakeWs;
-  readonly factory: WebSocketFactory;
-  readonly capturedHeaders: Record<string, string> | null;
-  readonly capturedUrl: string | null;
-}
-
-function createFakeWs(): FakeSocketHarness {
+function createFakeWs() {
   let capturedHeaders: Record<string, string> | null = null;
   let capturedUrl: string | null = null;
 

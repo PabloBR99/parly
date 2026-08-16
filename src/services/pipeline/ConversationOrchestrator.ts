@@ -275,13 +275,6 @@ type HfEndpoint = 'silence' | 'punctuation';
  *  that silently never fires looks exactly like a shortcut that does. */
 type FastPathBlock = 'none' | 'no-transcript' | 'still-arriving' | 'routing-unclear';
 
-/** The answer to "can this turn skip the server's final?" — the transcript to
- *  run with, or `null` plus the reason it has to wait. */
-interface FastPathVerdict {
-  readonly text: string | null;
-  readonly blocked: FastPathBlock;
-}
-
 /**
  * Cap on translation requests started speculatively per utterance. Each one
  * that misses is a wasted call against the user's own API key and rate limit,
@@ -1371,7 +1364,7 @@ export class ConversationOrchestrator {
    * the text alone decides the routing outright. Anything the classifier is
    * merely leaning towards goes the slow way and keeps its second opinion.
    */
-  private inspect(u: Utterance, now: number): FastPathVerdict {
+  private inspect(u: Utterance, now: number): { text: string | null; blocked: FastPathBlock } {
     const text = u.text();
     if (text.length < FAST_PATH_MIN_CHARS) return { text: null, blocked: 'no-transcript' };
     if (!u.settled(now)) return { text: null, blocked: 'still-arriving' };

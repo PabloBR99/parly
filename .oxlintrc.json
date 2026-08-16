@@ -23,15 +23,22 @@
   "rules": {
     "anti-slop/no-chained-type-assertions": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
-    "anti-slop/no-known-value-widening": "error",
+    // Off. It fired on inline return types like `{ text: string | null; blocked:
+    // FastPathBlock }` — a shape used once, at the function that returns it.
+    // Hoisting those to named interfaces is a line of indirection per callee
+    // and nothing else. It did catch real widening on annotated dictionaries;
+    // those are fixed (see the `satisfies` in SeamControl and Text).
+    "anti-slop/no-known-value-widening": "off",
     "anti-slop/no-module-mocking": "error",
     "anti-slop/no-object-parameters": "error",
     "anti-slop/no-reflect-apply": "error",
     "anti-slop/no-reflect-get": "error",
-    // Ad-hoc `typeof` in business logic stays an error. The exception is the
-    // handful of named type guards in src/app/json.ts, which are the boundary
-    // decoders this rule exists to push work into.
-    "anti-slop/no-runtime-typeof": ["error", { "allowInTypeGuards": true }],
+    // Off. Its advice — decode at the boundary — is worth following, and
+    // src/app/json.ts is where that happens. But the rule cannot tell a
+    // boundary decoder from business logic, so switching it on only bought
+    // wrapper guards around single `typeof` expressions and one `Object(v) === v`
+    // written to dodge it. Worse code, same behaviour.
+    "anti-slop/no-runtime-typeof": "off",
     "anti-slop/no-shape-in-symbol-names": "error",
     "anti-slop/no-unknown-parameters": "error",
     "anti-slop/no-unknown-returns": "error",

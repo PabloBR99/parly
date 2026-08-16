@@ -97,12 +97,8 @@ type ServerEvent =
   | { readonly kind: 'done'; readonly text: string | undefined }
   | { readonly kind: 'error'; readonly message: string };
 
-function isTextFrame(frame: SocketFrame): frame is string {
-  return typeof frame === 'string';
-}
-
 function decodeServerEvent(data: SocketFrame): ServerEvent | null {
-  if (!isTextFrame(data)) return null;
+  if (typeof data !== 'string') return null;
   const frame = parseJson(data);
   if (!isJsonObject(frame)) return null;
 
@@ -125,16 +121,6 @@ function decodeServerEvent(data: SocketFrame): ServerEvent | null {
     default:
       return null;
   }
-}
-
-/** The whole `session.update` payload Voxtral accepts — its schema is closed,
- *  so this is the protocol, not a convenience. See the onopen handler. */
-interface SessionUpdate {
-  readonly audio_format: {
-    readonly encoding: 'pcm_s16le';
-    readonly sample_rate: number;
-  };
-  readonly target_streaming_delay_ms: number;
 }
 
 function decodeErrorMessage(error: JsonValue | undefined): string {
@@ -212,19 +198,12 @@ export type WebSocketFactory = (
   headers: Record<string, string>,
 ) => WebSocketLike;
 
-/** RN's constructor takes a third options argument the DOM lib's does not —
- *  see the header note on why headers work here and not in a browser. */
-type ReactNativeWebSocketConstructor = new (
-  url: string,
-  protocols: string | string[] | undefined,
-  options: { readonly headers: Record<string, string> },
-) => WebSocketLike;
-
 const defaultWsFactory: WebSocketFactory = (url, headers) => {
-  // SAFETY: the runtime object is RN's, not the DOM's, so the extended
-  // signature above is the one that actually applies.
-  const ReactNativeWebSocket = WebSocket as ReactNativeWebSocketConstructor;
-  return new ReactNativeWebSocket(url, undefined, { headers });
+  // SAFETY: RN's WebSocket takes a third options argument; lib.dom's
+  // declaration predates it. The runtime object is RN's, so its signature is
+  // the real one — see the header note on why headers work here.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return new (WebSocket as any)(url, undefined, { headers }) as WebSocketLike;
 };
 
 export class VoxtralRealtimeClient {
@@ -354,7 +333,7 @@ export class VoxtralRealtimeClient {
         const session = {
           audio_format: { encoding: 'pcm_s16le', sample_rate: SAMPLE_RATE },
           target_streaming_delay_ms: this.targetStreamingDelayMs,
-        } satisfies SessionUpdate;
+        };
         try {
           ws.send(JSON.stringify({ type: 'session.update', session }));
         } catch (e) {

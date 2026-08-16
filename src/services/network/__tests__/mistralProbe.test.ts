@@ -4,7 +4,7 @@
 
 import { createMistralProbe } from '../mistralProbe';
 import { useSettingsStore } from '../../../store/settingsStore';
-import { swappableGlobals as globals } from '../../../testing/globals';
+import { globals } from '../../../testing/globals';
 
 /** What createMistralProbe puts on the wire. The probe reads nothing else off
  *  the response than a status, which is the whole reachability question. */

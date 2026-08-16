@@ -129,15 +129,12 @@ export interface OrtTensor {
 }
 export type OrtSessionFactory = (modelPath: string) => Promise<OrtSession>;
 
-/** The model's inputs are float samples and the int64 sample rate. */
-type OrtTensorData = Float32Array | BigInt64Array | Int32Array;
-
 // onnxruntime-react-native and the constant sample-rate buffer are resolved
 // once and cached at module scope. The inference path runs ≈31×/s; re-running
 // require() and re-allocating the sr tensor on every frame is pure waste in the
 // hottest loop in the app. Lazy so Jest can mock the module before first use.
 type OrtModule = {
-  Tensor: new (type: string, data: OrtTensorData, dims: number[]) => OrtTensor;
+  Tensor: new (type: string, data: OrtTensor['data'], dims: number[]) => OrtTensor;
 };
 let ortModule: OrtModule | null = null;
 function getOrt(): OrtModule {

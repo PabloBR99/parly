@@ -15,7 +15,7 @@ jest.mock('@dr.pogodin/react-native-fs', () => ({
   unlink: jest.fn().mockResolvedValue(undefined),
 }), { virtual: true });
 
-import { swappableGlobals as globals } from '../../../testing/globals';
+import { globals } from '../../../testing/globals';
 
 /** RN's global error handler, whose `isFatal` is optional on its contract. */
 type Handler = (e: Error, isFatal?: boolean) => void;

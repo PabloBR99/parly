@@ -8,7 +8,7 @@
  */
 
 import { isSendableKey, validateMistralApiKey } from '../validateApiKey';
-import { swappableGlobals as globals } from '../../../testing/globals';
+import { globals } from '../../../testing/globals';
 
 // What was actually in the key field: a few kilobytes of it, newlines
 // throughout, and em dashes and arrows that are not ASCII at all.

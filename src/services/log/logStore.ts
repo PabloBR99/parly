@@ -180,9 +180,7 @@ function describeArgs(values: readonly unknown[]): string {
       if (value === undefined) return 'undefined';
       if (value === null) return 'null';
       if (value instanceof Error) return `${value.name}: ${value.message}`;
-      // Objects render as JSON, primitives through String(). `Object(v) === v`
-      // splits them, and unlike `typeof` it does not call null an object.
-      if (Object(value) === value) {
+      if (typeof value === 'object') {
         try {
           return JSON.stringify(value);
         } catch {

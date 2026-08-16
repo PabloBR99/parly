@@ -6,7 +6,7 @@ import {
   type StreamPostRequest,
   type StreamPostResult,
 } from '../MistralTranslator';
-import { swappableGlobals as globals } from '../../../testing/globals';
+import { globals } from '../../../testing/globals';
 
 // ── parseSseEvent ────────────────────────────────────────────────────────────
 

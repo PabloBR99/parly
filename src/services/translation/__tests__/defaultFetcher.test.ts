@@ -9,18 +9,12 @@
  */
 
 import { MistralTranslator } from '../MistralTranslator';
-import { swappableGlobals as globals } from '../../../testing/globals';
-
-/** A fake XMLHttpRequest installed as the global, and a count of how many
- *  times the code under test reached for one. */
-interface XhrStub {
-  constructed(): number;
-}
+import { globals } from '../../../testing/globals';
 
 const sseChunk = (text: string) =>
   `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`;
 
-function stubXhr(): XhrStub {
+function stubXhr(): { constructed(): number } {
   let count = 0;
   class FakeXhr {
     onreadystatechange: (() => void) | null = null;
